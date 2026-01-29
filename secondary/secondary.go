@@ -1,0 +1,429 @@
+package secondary
+
+import (
+	"log"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/scott/dns/config"
+)
+
+// ZoneData holds the transferred records for a zone
+type ZoneData struct {
+	Zone      string
+	Records   []dns.RR
+	SOA       *dns.SOA
+	Serial    uint32
+	LastSync  time.Time
+	NextSync  time.Time
+	SyncError error
+}
+
+// Manager handles secondary zone management
+type Manager struct {
+	mu     sync.RWMutex
+	zones  map[string]*ZoneData
+	config []config.ParsedSecondaryZone
+	stop   chan struct{}
+	wg     sync.WaitGroup
+}
+
+// New creates a new secondary zone manager
+func New(cfg *config.ParsedConfig) *Manager {
+	m := &Manager{
+		zones:  make(map[string]*ZoneData),
+		config: cfg.SecondaryZones,
+		stop:   make(chan struct{}),
+	}
+	return m
+}
+
+// Start begins the initial zone transfers and refresh loops
+func (m *Manager) Start() {
+	for _, szCfg := range m.config {
+		// Initialize zone data
+		m.mu.Lock()
+		m.zones[szCfg.Zone] = &ZoneData{
+			Zone: szCfg.Zone,
+		}
+		m.mu.Unlock()
+
+		// Do initial transfer
+		m.transferZone(szCfg)
+
+		// Start refresh goroutine
+		m.wg.Add(1)
+		go m.refreshLoop(szCfg)
+	}
+}
+
+// Stop stops all refresh loops
+func (m *Manager) Stop() {
+	close(m.stop)
+	m.wg.Wait()
+}
+
+// UpdateConfig updates the secondary zone configuration
+func (m *Manager) UpdateConfig(cfg *config.ParsedConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// For now, just update the config - a full implementation would
+	// detect added/removed zones and update accordingly
+	m.config = cfg.SecondaryZones
+}
+
+// HasZone returns true if this zone is managed as a secondary
+func (m *Manager) HasZone(zone string) bool {
+	zone = dns.Fqdn(strings.ToLower(zone))
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.zones[zone]
+	return ok
+}
+
+// GetRecords returns records matching the query from a secondary zone
+func (m *Manager) GetRecords(name string, qtype uint16) []dns.RR {
+	name = dns.Fqdn(strings.ToLower(name))
+
+	// Find which zone this name belongs to
+	zoneName := m.findZone(name)
+	if zoneName == "" {
+		return nil
+	}
+
+	m.mu.RLock()
+	zd, ok := m.zones[zoneName]
+	m.mu.RUnlock()
+
+	if !ok || zd.Records == nil {
+		return nil
+	}
+
+	var result []dns.RR
+	for _, rr := range zd.Records {
+		if strings.EqualFold(rr.Header().Name, name) {
+			if qtype == dns.TypeANY || rr.Header().Rrtype == qtype {
+				result = append(result, rr)
+			}
+		}
+	}
+	return result
+}
+
+// GetSOA returns the SOA record for a secondary zone
+func (m *Manager) GetSOA(zone string) *dns.SOA {
+	zone = dns.Fqdn(strings.ToLower(zone))
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if zd, ok := m.zones[zone]; ok {
+		return zd.SOA
+	}
+	return nil
+}
+
+// GetAllRecords returns all records for a zone (for AXFR)
+func (m *Manager) GetAllRecords(zone string) []dns.RR {
+	zone = dns.Fqdn(strings.ToLower(zone))
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if zd, ok := m.zones[zone]; ok {
+		return zd.Records
+	}
+	return nil
+}
+
+// GetSerial returns the current serial for a zone
+func (m *Manager) GetSerial(zone string) uint32 {
+	zone = dns.Fqdn(strings.ToLower(zone))
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if zd, ok := m.zones[zone]; ok {
+		return zd.Serial
+	}
+	return 0
+}
+
+// GetZoneStatus returns status information about a secondary zone
+func (m *Manager) GetZoneStatus(zone string) (lastSync time.Time, nextSync time.Time, err error) {
+	zone = dns.Fqdn(strings.ToLower(zone))
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if zd, ok := m.zones[zone]; ok {
+		return zd.LastSync, zd.NextSync, zd.SyncError
+	}
+	return time.Time{}, time.Time{}, nil
+}
+
+// findZone finds the zone a name belongs to
+func (m *Manager) findZone(name string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for zoneName := range m.zones {
+		if name == zoneName || strings.HasSuffix(name, "."+zoneName) {
+			return zoneName
+		}
+	}
+	return ""
+}
+
+// refreshLoop periodically checks for zone updates
+func (m *Manager) refreshLoop(szCfg config.ParsedSecondaryZone) {
+	defer m.wg.Done()
+
+	for {
+		// Get current zone data
+		m.mu.RLock()
+		zd := m.zones[szCfg.Zone]
+		nextSync := zd.NextSync
+		m.mu.RUnlock()
+
+		// Wait until next sync or stop
+		waitDuration := time.Until(nextSync)
+		if waitDuration <= 0 {
+			// Already past due - check immediately
+			select {
+			case <-m.stop:
+				return
+			default:
+				m.checkAndRefresh(szCfg)
+				continue
+			}
+		}
+
+		select {
+		case <-m.stop:
+			return
+		case <-time.After(waitDuration):
+			// Check if zone has updated
+			m.checkAndRefresh(szCfg)
+		}
+	}
+}
+
+// checkAndRefresh checks the serial and does AXFR if needed
+func (m *Manager) checkAndRefresh(szCfg config.ParsedSecondaryZone) {
+	m.mu.RLock()
+	zd := m.zones[szCfg.Zone]
+	currentSerial := zd.Serial
+	m.mu.RUnlock()
+
+	// Query SOA to check serial
+	for _, primary := range szCfg.Primaries {
+		newSerial, err := m.querySOASerial(szCfg.Zone, primary, szCfg)
+		if err != nil {
+			log.Printf("Secondary: Failed to query SOA for %s from %s: %v", szCfg.Zone, primary, err)
+			continue
+		}
+
+		// Check if serial has increased (with wraparound handling)
+		if serialGreater(newSerial, currentSerial) {
+			log.Printf("Secondary: Zone %s serial changed %d -> %d, refreshing", szCfg.Zone, currentSerial, newSerial)
+			m.transferZone(szCfg)
+			return
+		}
+
+		// Update next sync time
+		m.updateNextSync(szCfg)
+		return
+	}
+
+	// All primaries failed - use retry interval
+	m.mu.Lock()
+	retryInterval := szCfg.RetryInterval
+	if retryInterval == 0 && zd.SOA != nil {
+		retryInterval = zd.SOA.Retry
+	}
+	if retryInterval == 0 {
+		retryInterval = 900 // 15 minutes default
+	}
+	zd.NextSync = time.Now().Add(time.Duration(retryInterval) * time.Second)
+	zd.SyncError = nil
+	m.mu.Unlock()
+}
+
+// transferZone performs an AXFR from the primary
+func (m *Manager) transferZone(szCfg config.ParsedSecondaryZone) {
+	zone := szCfg.Zone
+	log.Printf("Secondary: Starting zone transfer for %s", zone)
+
+	for _, primary := range szCfg.Primaries {
+		records, soa, err := m.doAXFR(zone, primary, szCfg)
+		if err != nil {
+			log.Printf("Secondary: AXFR failed for %s from %s: %v", zone, primary, err)
+			continue
+		}
+
+		// Success - store the records
+		m.mu.Lock()
+		zd := m.zones[zone]
+		zd.Records = records
+		zd.SOA = soa
+		if soa != nil {
+			zd.Serial = soa.Serial
+		}
+		zd.LastSync = time.Now()
+		zd.SyncError = nil
+
+		// Calculate next sync time
+		refreshInterval := szCfg.RefreshInterval
+		if refreshInterval == 0 && soa != nil {
+			refreshInterval = soa.Refresh
+		}
+		if refreshInterval == 0 {
+			refreshInterval = 3600 // 1 hour default
+		}
+		zd.NextSync = time.Now().Add(time.Duration(refreshInterval) * time.Second)
+		m.mu.Unlock()
+
+		log.Printf("Secondary: Zone %s transferred successfully (%d records, serial %d, next refresh in %ds)",
+			zone, len(records), soa.Serial, refreshInterval)
+		return
+	}
+
+	// All primaries failed
+	m.mu.Lock()
+	zd := m.zones[zone]
+	retryInterval := szCfg.RetryInterval
+	if retryInterval == 0 && zd.SOA != nil {
+		retryInterval = zd.SOA.Retry
+	}
+	if retryInterval == 0 {
+		retryInterval = 900
+	}
+	zd.NextSync = time.Now().Add(time.Duration(retryInterval) * time.Second)
+	m.mu.Unlock()
+}
+
+// doAXFR performs the actual zone transfer
+func (m *Manager) doAXFR(zone, server string, szCfg config.ParsedSecondaryZone) ([]dns.RR, *dns.SOA, error) {
+	t := new(dns.Transfer)
+	msg := new(dns.Msg)
+	msg.SetAxfr(zone)
+
+	// Add TSIG if configured
+	if szCfg.TSIGKeyName != "" {
+		algo := getTSIGAlgorithm(szCfg.TSIGAlgorithm)
+		msg.SetTsig(szCfg.TSIGKeyName, algo, 300, time.Now().Unix())
+		t.TsigSecret = map[string]string{szCfg.TSIGKeyName: szCfg.TSIGSecret}
+	}
+
+	// Perform the transfer
+	ch, err := t.In(msg, server)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var records []dns.RR
+	var soa *dns.SOA
+
+	for env := range ch {
+		if env.Error != nil {
+			return nil, nil, env.Error
+		}
+		for _, rr := range env.RR {
+			// Skip the trailing SOA (AXFR has SOA at start and end)
+			if s, ok := rr.(*dns.SOA); ok {
+				if soa == nil {
+					soa = s
+				}
+			} else {
+				records = append(records, rr)
+			}
+		}
+	}
+
+	return records, soa, nil
+}
+
+// querySOASerial queries just the SOA to check the serial
+func (m *Manager) querySOASerial(zone, server string, szCfg config.ParsedSecondaryZone) (uint32, error) {
+	c := new(dns.Client)
+	c.Timeout = 5 * time.Second
+
+	msg := new(dns.Msg)
+	msg.SetQuestion(zone, dns.TypeSOA)
+
+	// Add TSIG if configured
+	if szCfg.TSIGKeyName != "" {
+		algo := getTSIGAlgorithm(szCfg.TSIGAlgorithm)
+		msg.SetTsig(szCfg.TSIGKeyName, algo, 300, time.Now().Unix())
+		c.TsigSecret = map[string]string{szCfg.TSIGKeyName: szCfg.TSIGSecret}
+	}
+
+	resp, _, err := c.Exchange(msg, server)
+	if err != nil {
+		return 0, err
+	}
+
+	for _, rr := range resp.Answer {
+		if soa, ok := rr.(*dns.SOA); ok {
+			return soa.Serial, nil
+		}
+	}
+
+	return 0, nil
+}
+
+// updateNextSync updates the next sync time based on refresh interval
+func (m *Manager) updateNextSync(szCfg config.ParsedSecondaryZone) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	zd := m.zones[szCfg.Zone]
+	refreshInterval := szCfg.RefreshInterval
+	if refreshInterval == 0 && zd.SOA != nil {
+		refreshInterval = zd.SOA.Refresh
+	}
+	if refreshInterval == 0 {
+		refreshInterval = 3600
+	}
+	zd.NextSync = time.Now().Add(time.Duration(refreshInterval) * time.Second)
+}
+
+// HandleNotify handles incoming NOTIFY for a secondary zone
+func (m *Manager) HandleNotify(zone string) {
+	zone = dns.Fqdn(strings.ToLower(zone))
+
+	// Find the config for this zone
+	var szCfg *config.ParsedSecondaryZone
+	for i := range m.config {
+		if strings.EqualFold(m.config[i].Zone, zone) {
+			szCfg = &m.config[i]
+			break
+		}
+	}
+
+	if szCfg == nil {
+		return
+	}
+
+	log.Printf("Secondary: Received NOTIFY for %s, triggering refresh", zone)
+	go m.transferZone(*szCfg)
+}
+
+// serialGreater returns true if a > b with serial arithmetic (RFC 1982)
+func serialGreater(a, b uint32) bool {
+	if a == b {
+		return false
+	}
+	return (a < b && b-a > 0x7FFFFFFF) || (a > b && a-b < 0x7FFFFFFF)
+}
+
+func getTSIGAlgorithm(algo string) string {
+	switch strings.ToLower(algo) {
+	case "hmac-sha256":
+		return dns.HmacSHA256
+	case "hmac-sha512":
+		return dns.HmacSHA512
+	case "hmac-sha1":
+		return dns.HmacSHA1
+	case "hmac-md5":
+		return dns.HmacMD5
+	default:
+		return dns.HmacSHA256
+	}
+}

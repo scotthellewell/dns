@@ -1,0 +1,49 @@
+# Compiled binary
+dnsserver
+dns-server
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+coverage.html
+
+# Go workspace file
+go.work
+
+# IDE/Editor directories
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# DNSSEC keys (sensitive!)
+keys/
+*.key
+*.private
+Kexample.com.*
+K*.+*+*
+
+# Test/development configs with secrets
+config-*.json
+!config.example.json
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
