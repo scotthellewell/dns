@@ -16,12 +16,8 @@ services:
       # HTTPS Web UI
       - "8443:8443/tcp"
     volumes:
-      # Mount config directory
+      # Mount data directory (contains bbolt database with all config)
       - ./data:/app/data
-      # Mount cache directory
-      - dns-cache:/app/cache
-      # Mount keys directory
-      - ./keys:/app/keys
     environment:
       - TZ=UTC
     # Required for binding to port 53
@@ -42,6 +38,3 @@ networks:
     ipam:
       config:
         - subnet: 172.20.0.0/24
-
-volumes:
-  dns-cache:

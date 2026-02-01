@@ -73,17 +73,14 @@ go build -o dnsserver .
 ### Running
 
 ```bash
-# Run with web UI on port 8080
-./dnsserver -web :8080
-
-# Run with storage backend (recommended - uses bbolt database)
-./dnsserver -web :8080 -storage ./data/data.db
-
-# Run without web UI
+# Run with default data directory (./data)
 ./dnsserver
+
+# Run with custom data directory
+./dnsserver -data /path/to/data
 ```
 
-On first run, visit http://localhost:8080 to set up your admin account.
+On first run, visit http://localhost:8080 to set up your admin account. All configuration including zones, records, users, DNSSEC keys, and TLS certificates is stored in the bbolt database.
 
 ## Web UI
 
@@ -146,10 +143,12 @@ The server uses a bbolt database for persistent storage of all configuration:
 - Zones and records
 - Users and sessions
 - DNSSEC keys
+- TLS certificates (including ACME/Let's Encrypt)
+- ACME account keys
 - Audit logs
 - Settings
 
-The database file is stored at the path specified by `-storage` flag (default: `./data/data.db`).
+The database file is stored at `<data-dir>/data.db` (default: `./data/data.db`).
 
 ### Backup
 
@@ -217,6 +216,11 @@ cd web && npm run test:run
 ├── metrics/          # Prometheus metrics
 ├── querylog/         # Query logging
 ├── rrl/              # Response rate limiting
+├── sync/             # Multi-master cluster synchronization
+├── healthcheck/      # Health check endpoints
+├── zonefile/         # Zone file parsing
+├── e2e/              # End-to-end tests
+├── scripts/          # Deployment scripts
 └── web/              # Angular web administration UI
     ├── src/app/
     │   ├── dashboard/       # Server status dashboard
@@ -291,8 +295,7 @@ docker-compose logs -f
 
 | Container Path | Description |
 |----------------|-------------|
-| `/app/data` | Database file (data.db) |
-| `/app/keys` | DNSSEC keys and TLS certificates |
+| `/app/data` | Database file and all persistent data |
 
 ### Exposed Ports
 
@@ -379,7 +382,6 @@ The DNS server can be deployed as a container on MikroTik RouterOS 7 devices.
 # Create mount points
 /container mounts
 add name="dns-data" src="/container/dns-server/data" dst="/app/data"
-add name="dns-keys" src="/container/dns-server/keys" dst="/app/keys"
 
 # NAT rules for DNS
 /ip firewall nat
@@ -390,7 +392,7 @@ add chain=srcnat src-address=172.17.0.0/24 action=masquerade
 # Add container (after uploading the tar.gz)
 /container add file=dns-server-arm64.tar.gz interface=veth-dns \
     root-dir=/container/store/dns-server \
-    mounts=dns-data,dns-keys \
+    mounts=dns-data \
     start-on-boot=yes logging=yes
 
 # Start container
