@@ -1,0 +1,258 @@
+/* You can add global styles to this file, and also import other style files */
+@use '@angular/material' as mat;
+
+@include mat.core();
+
+// Using dark Material theme
+$theme: mat.define-theme((
+  color: (
+    theme-type: dark,
+    primary: mat.$blue-palette,
+  ),
+));
+
+html {
+  @include mat.all-component-themes($theme);
+  color-scheme: dark;
+}
+
+// Apply theme to CDK overlay (dialogs, menus, etc.)
+.cdk-overlay-container {
+  @include mat.all-component-colors($theme);
+  
+  // Force label colors in overlays
+  .mdc-floating-label,
+  .mat-mdc-floating-label,
+  .mdc-text-field__input::placeholder,
+  label {
+    color: #cbd5e1 !important;
+  }
+  
+  .mdc-text-field--focused .mdc-floating-label,
+  .mat-mdc-form-field.mat-focused .mat-mdc-floating-label {
+    color: #60a5fa !important;
+  }
+  
+  // Force input text colors
+  .mdc-text-field__input,
+  .mat-mdc-input-element,
+  input,
+  textarea {
+    color: #e2e8f0 !important;
+    caret-color: #60a5fa !important;
+  }
+  
+  // Force dialog background
+  .mat-mdc-dialog-surface {
+    background-color: #1e293b !important;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+body {
+  margin: 0;
+}
+
+// Material icons
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+// Toast styles - target the actual snackbar container inside the panel
+.toast-success .mdc-snackbar__surface {
+  background-color: #166534 !important;
+  color: #f0fdf4 !important;
+}
+.toast-success .mat-mdc-snack-bar-action {
+  color: #ffffff !important;
+}
+
+.toast-error .mdc-snackbar__surface {
+  background-color: #991b1b !important;
+  color: #fef2f2 !important;
+}
+.toast-error .mat-mdc-snack-bar-action {
+  color: #ffffff !important;
+}
+
+.toast-warning .mdc-snackbar__surface {
+  background-color: #92400e !important;
+  color: #fffbeb !important;
+}
+.toast-warning .mat-mdc-snack-bar-action {
+  color: #ffffff !important;
+}
+
+.toast-info .mdc-snackbar__surface {
+  background-color: #1e40af !important;
+  color: #eff6ff !important;
+}
+.toast-info .mat-mdc-snack-bar-action {
+  color: #ffffff !important;
+}
+
+// Ensure Material dialogs use dark theme
+.mat-mdc-dialog-container {
+  --mdc-dialog-container-color: #1e293b;
+  --mdc-dialog-subhead-color: #e2e8f0;
+  --mdc-dialog-supporting-text-color: #cbd5e1;
+}
+
+.mat-mdc-dialog-surface {
+  background-color: #1e293b !important;
+  color: #e2e8f0 !important;
+}
+
+.mat-mdc-dialog-title {
+  color: #e2e8f0 !important;
+}
+
+// Form fields - global dark theme fix
+.mat-mdc-form-field {
+  --mdc-filled-text-field-container-color: rgba(255, 255, 255, 0.05);
+  --mdc-outlined-text-field-container-color: transparent;
+  --mdc-outlined-text-field-outline-color: rgba(255, 255, 255, 0.3);
+  --mdc-outlined-text-field-hover-outline-color: rgba(255, 255, 255, 0.5);
+  --mdc-outlined-text-field-focus-outline-color: #60a5fa;
+  --mdc-outlined-text-field-label-text-color: #94a3b8;
+  --mdc-outlined-text-field-hover-label-text-color: #cbd5e1;
+  --mdc-outlined-text-field-focus-label-text-color: #60a5fa;
+  --mdc-outlined-text-field-input-text-color: #e2e8f0;
+  --mdc-outlined-text-field-caret-color: #60a5fa;
+  --mdc-outlined-text-field-disabled-label-text-color: rgba(255, 255, 255, 0.38);
+  --mdc-outlined-text-field-disabled-input-text-color: rgba(255, 255, 255, 0.38);
+  --mdc-outlined-text-field-disabled-outline-color: rgba(255, 255, 255, 0.12);
+  
+  // Floating label
+  --mat-form-field-floating-label-text-color: #94a3b8;
+  --mat-form-field-focus-floating-label-text-color: #60a5fa;
+  --mat-form-field-hover-floating-label-text-color: #cbd5e1;
+  
+  // Filled variant
+  --mdc-filled-text-field-label-text-color: #94a3b8;
+  --mdc-filled-text-field-hover-label-text-color: #cbd5e1;
+  --mdc-filled-text-field-focus-label-text-color: #60a5fa;
+  --mdc-filled-text-field-input-text-color: #e2e8f0;
+  --mdc-filled-text-field-caret-color: #60a5fa;
+  --mdc-filled-text-field-active-indicator-color: rgba(255, 255, 255, 0.3);
+  --mdc-filled-text-field-hover-active-indicator-color: rgba(255, 255, 255, 0.5);
+  --mdc-filled-text-field-focus-active-indicator-color: #60a5fa;
+}
+
+.mat-mdc-form-field .mdc-text-field--outlined .mdc-notched-outline__leading,
+.mat-mdc-form-field .mdc-text-field--outlined .mdc-notched-outline__notch,
+.mat-mdc-form-field .mdc-text-field--outlined .mdc-notched-outline__trailing {
+  border-color: rgba(255, 255, 255, 0.3) !important;
+}
+
+.mat-mdc-form-field .mdc-text-field--outlined:hover .mdc-notched-outline__leading,
+.mat-mdc-form-field .mdc-text-field--outlined:hover .mdc-notched-outline__notch,
+.mat-mdc-form-field .mdc-text-field--outlined:hover .mdc-notched-outline__trailing {
+  border-color: rgba(255, 255, 255, 0.5) !important;
+}
+
+.mat-mdc-form-field .mdc-text-field--focused .mdc-notched-outline__leading,
+.mat-mdc-form-field .mdc-text-field--focused .mdc-notched-outline__notch,
+.mat-mdc-form-field .mdc-text-field--focused .mdc-notched-outline__trailing {
+  border-color: #60a5fa !important;
+}
+
+// Input text color
+.mat-mdc-input-element {
+  color: #e2e8f0 !important;
+}
+
+// Floating label text
+.mat-mdc-floating-label {
+  color: #94a3b8 !important;
+}
+
+.mat-mdc-form-field.mat-focused .mat-mdc-floating-label {
+  color: #60a5fa !important;
+}
+
+// MDC floating label - target ALL label elements
+.mdc-floating-label {
+  color: #94a3b8 !important;
+}
+
+.mdc-floating-label--float-above {
+  color: #94a3b8 !important;
+}
+
+.mdc-text-field--focused .mdc-floating-label {
+  color: #60a5fa !important;
+}
+
+// Label inside the notched outline
+.mdc-notched-outline .mdc-floating-label {
+  color: #94a3b8 !important;
+}
+
+// Force ALL label elements in form fields
+.mat-mdc-form-field label {
+  color: #94a3b8 !important;
+}
+
+.mat-mdc-text-field-wrapper .mdc-floating-label {
+  color: #94a3b8 !important;
+}
+
+// Select dropdown
+.mat-mdc-select-value-text {
+  color: #e2e8f0 !important;
+}
+
+.mat-mdc-select-arrow {
+  color: #94a3b8 !important;
+}
+
+// Hint and error text
+.mat-mdc-form-field-hint {
+  color: #94a3b8 !important;
+}
+
+.mat-mdc-form-field-error {
+  color: #f87171 !important;
+}
+
+// Select panel (dropdown)
+.mat-mdc-select-panel {
+  background-color: #1e293b !important;
+}
+
+.mat-mdc-option {
+  color: #e2e8f0 !important;
+  
+  &:hover, &.mat-mdc-option-active {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+  }
+  
+  &.mdc-list-item--selected {
+    background-color: rgba(96, 165, 250, 0.2) !important;
+  }
+}
+
+// Custom dialog panel - removes Material's default padding/sizing
+.custom-dialog-panel {
+  .mat-mdc-dialog-container {
+    padding: 0 !important;
+  }
+  
+  .mat-mdc-dialog-surface {
+    background: transparent !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+}

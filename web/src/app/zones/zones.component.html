@@ -1,0 +1,256 @@
+<div class="zones-page">
+  <div class="page-header">
+    <h1>DNS Zones</h1>
+    <div class="header-actions">
+      <button class="btn btn-primary" (click)="openAddForm('forward')">+ Add Forward Zone</button>
+      <button class="btn btn-secondary" (click)="openAddForm('reverse')">+ Add Reverse Zone</button>
+    </div>
+  </div>
+
+  <!-- Forward Zones Section -->
+  <section class="zone-section">
+    <h2>Forward Zones</h2>
+    <div class="zones-table" *ngIf="forwardZones.length > 0">
+      <table>
+        <thead>
+          <tr>
+            <th>Zone Name</th>
+            <th>TTL</th>
+            <th>DNSSEC</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let zone of forwardZones">
+            <td><code>{{ zone.name }}</code></td>
+            <td>{{ zone.ttl }}s</td>
+            <td>
+              <span class="badge" [class.badge-success]="hasDnssec(zone.name)" [class.badge-muted]="!hasDnssec(zone.name)">
+                {{ hasDnssec(zone.name) ? 'Enabled' : 'Disabled' }}
+              </span>
+              <button *ngIf="hasDnssec(zone.name)" class="btn btn-xs btn-link" (click)="viewDsRecord(zone.name)" title="View DS Record">🔑</button>
+            </td>
+            <td class="actions">
+              <button class="btn btn-sm" (click)="openEditForm(zone)">Edit</button>
+              <button class="btn btn-sm btn-danger" (click)="deleteZone(zone)">Delete</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div *ngIf="forwardZones.length === 0" class="empty-state">
+      <p>No forward zones configured.</p>
+      <p>Add a forward zone (e.g., example.com) to manage DNS records.</p>
+    </div>
+  </section>
+
+  <!-- Reverse Zones Section -->
+  <section class="zone-section">
+    <h2>Reverse Zones</h2>
+    <div class="zones-table" *ngIf="reverseZones.length > 0">
+      <table>
+        <thead>
+          <tr>
+            <th>Zone Name</th>
+            <th>Subnet</th>
+            <th>Domain</th>
+            <th>Strip Prefix</th>
+            <th>TTL</th>
+            <th>DNSSEC</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let zone of reverseZones">
+            <td><code>{{ zone.name }}</code></td>
+            <td><code>{{ zone.subnet }}</code></td>
+            <td>{{ zone.domain }}</td>
+            <td>{{ zone.strip_prefix ? 'Yes' : 'No' }}</td>
+            <td>{{ zone.ttl }}s</td>
+            <td>
+              <span class="badge" [class.badge-success]="hasDnssec(zone.name)" [class.badge-muted]="!hasDnssec(zone.name)">
+                {{ hasDnssec(zone.name) ? 'Enabled' : 'Disabled' }}
+              </span>
+              <button *ngIf="hasDnssec(zone.name)" class="btn btn-xs btn-link" (click)="viewDsRecord(zone.name)" title="View DS Record">🔑</button>
+            </td>
+            <td class="actions">
+              <button class="btn btn-sm" (click)="openEditForm(zone)">Edit</button>
+              <button class="btn btn-sm btn-danger" (click)="deleteZone(zone)">Delete</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div *ngIf="reverseZones.length === 0" class="empty-state">
+      <p>No reverse DNS zones configured.</p>
+      <p>Add a reverse zone to enable automatic PTR record generation for IP addresses.</p>
+    </div>
+  </section>
+
+  <!-- Modal Form -->
+  <div class="modal-backdrop" *ngIf="showForm" (click)="closeForm()"></div>
+  <div class="modal" *ngIf="showForm">
+    <div class="modal-header">
+      <h2>{{ editingZone ? 'Edit Zone' : (formData.type === 'forward' ? 'Add Forward Zone' : 'Add Reverse Zone') }}</h2>
+      <button class="close-btn" (click)="closeForm()">×</button>
+    </div>
+    <div class="modal-body">
+      <!-- Common field: Zone Name (for forward zones) -->
+      <div class="form-group" *ngIf="formData.type === 'forward'">
+        <label for="name">Zone Name</label>
+        <input type="text" id="name" [(ngModel)]="formData.name" 
+               placeholder="e.g., example.com or home.local">
+        <small>The domain name for this zone</small>
+      </div>
+
+      <!-- Reverse zone specific fields -->
+      <ng-container *ngIf="formData.type === 'reverse'">
+        <div class="form-group">
+          <label for="subnet">Subnet (CIDR)</label>
+          <input type="text" id="subnet" [(ngModel)]="formData.subnet" 
+                 placeholder="e.g., 192.168.1.0/24 or 2001:db8::/32">
+          <small>IPv4 or IPv6 subnet in CIDR notation</small>
+        </div>
+
+        <div class="form-group">
+          <label for="domain">Domain</label>
+          <input type="text" id="domain" [(ngModel)]="formData.domain" 
+                 placeholder="e.g., ip4.example.com">
+          <small>Domain suffix for generated hostnames</small>
+        </div>
+
+        <div class="form-group checkbox">
+          <label>
+            <input type="checkbox" [(ngModel)]="formData.strip_prefix">
+            Strip subnet prefix from generated names
+          </label>
+          <small>For IPv6, removes the network prefix from hostnames</small>
+        </div>
+      </ng-container>
+
+      <div class="form-group">
+        <label for="ttl">TTL (seconds)</label>
+        <input type="number" id="ttl" [(ngModel)]="formData.ttl" min="60">
+      </div>
+
+      <!-- DNSSEC Section -->
+      <div class="dnssec-section">
+        <h3>DNSSEC</h3>
+        <div class="form-group checkbox">
+          <label>
+            <input type="checkbox" [(ngModel)]="dnssecEnabled">
+            Enable DNSSEC signing
+          </label>
+          <small>Sign DNS responses with DNSSEC for improved security</small>
+        </div>
+
+        <div *ngIf="dnssecEnabled">
+          <!-- KSK Rotation Advisory Warning -->
+          <div class="ksk-warning" *ngIf="currentDnssec?.ksk_rotation_due">
+            <span class="warning-icon">⚠️</span>
+            <div class="warning-content">
+              <strong>KSK Rotation Recommended</strong>
+              <p>Your Key Signing Key is over 1 year old. Consider rotating it for improved security. 
+                 Note: Rotating the KSK requires updating the DS record at your domain registrar.</p>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="algorithm">Algorithm</label>
+            <select id="algorithm" [(ngModel)]="dnssecAlgorithm" [disabled]="currentDnssec?.enabled === true">
+              <option *ngFor="let algo of algorithms" [value]="algo.value">{{ algo.label }}</option>
+            </select>
+            <small *ngIf="currentDnssec?.enabled">Algorithm cannot be changed after DNSSEC is enabled</small>
+          </div>
+
+          <!-- Show DS Record for existing DNSSEC zones -->
+          <div class="ds-record-section" *ngIf="currentDnssec?.ds_record">
+            <label>DS Record (add to your registrar)</label>
+            <div class="ds-record-box">
+              <code>{{ currentDnssec?.ds_record }}</code>
+              <button class="btn btn-sm" (click)="copyDsRecord()" title="Copy">📋</button>
+            </div>
+            <small>Key Tag: {{ currentDnssec?.ksk_key_tag }}</small>
+          </div>
+
+          <!-- Key Export/Import for Secondary Servers -->
+          <div class="key-management-section" *ngIf="currentDnssec?.enabled">
+            <label>Key Management</label>
+            <div class="key-buttons">
+              <button class="btn btn-sm" (click)="downloadKeys()" title="Download signing keys for secondary servers">
+                ⬇️ Download Keys
+              </button>
+              <button class="btn btn-sm" (click)="triggerKeyUpload()" title="Upload keys from primary server">
+                ⬆️ Upload Keys
+              </button>
+              <input #keyFileInput type="file" accept=".json" style="display: none" (change)="uploadKeys($event)">
+            </div>
+            <small>Export keys to share with secondary servers for signing dynamic records</small>
+
+            <!-- Key Sharing Token for Automatic Sync -->
+            <div class="key-token-section">
+              <label>Key Sharing Token</label>
+              <p class="token-description">Generate a token that secondary servers can use to automatically fetch DNSSEC keys.</p>
+              
+              <div *ngIf="!keyToken" class="token-actions">
+                <button class="btn btn-sm" (click)="generateKeyToken()">🔑 Generate Token</button>
+              </div>
+
+              <div *ngIf="keyToken" class="token-display">
+                <div class="token-box">
+                  <code>{{ showKeyToken ? keyToken : keyToken }}</code>
+                  <button *ngIf="showKeyToken" class="btn btn-sm" (click)="copyKeyToken()" title="Copy Token">📋</button>
+                </div>
+                <div *ngIf="showKeyToken" class="token-url">
+                  <small>Key Fetch URL:</small>
+                  <code class="url">{{ getKeyFetchUrl() }}</code>
+                  <button class="btn btn-sm" (click)="copyKeyFetchUrl()" title="Copy URL">📋</button>
+                </div>
+                <div class="token-actions">
+                  <button class="btn btn-sm btn-danger" (click)="revokeKeyToken()">Revoke Token</button>
+                  <button *ngIf="!showKeyToken" class="btn btn-sm" (click)="generateKeyToken()">Regenerate</button>
+                </div>
+                <small *ngIf="!showKeyToken">Token is masked. Regenerate to see the full token.</small>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" (click)="closeForm()" [disabled]="saving">Cancel</button>
+      <button class="btn btn-primary" (click)="saveZone()" [disabled]="saving">
+        {{ saving ? 'Saving...' : 'Save' }}
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- DS Record View Modal -->
+<div class="modal-backdrop" *ngIf="showDsRecord" (click)="closeDsModal()"></div>
+<div class="modal ds-modal" *ngIf="showDsRecord">
+  <div class="modal-header">
+    <h2>DS Record for {{ showDsRecord.zone }}</h2>
+    <button class="close-btn" (click)="closeDsModal()">×</button>
+  </div>
+  <div class="modal-body">
+    <p class="ds-intro">Add this DS record at your domain registrar to complete DNSSEC setup:</p>
+    <div class="ds-record-box">
+      <code>{{ showDsRecord.ds_record }}</code>
+      <button class="btn btn-sm" (click)="copyDsRecordFromModal()" title="Copy">📋 Copy</button>
+    </div>
+    <div class="ds-details">
+      <div class="detail-row">
+        <span class="label">Algorithm:</span>
+        <span class="value">{{ showDsRecord.algorithm }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="label">KSK Key Tag:</span>
+        <span class="value">{{ showDsRecord.ksk_key_tag }}</span>
+      </div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-primary" (click)="closeDsModal()">Close</button>
+  </div>
+</div>

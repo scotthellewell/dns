@@ -1,0 +1,72 @@
+<div class="login-container">
+  <mat-card class="login-card">
+    <mat-card-header>
+      <mat-card-title>
+        <mat-icon>dns</mat-icon>
+        DNS Server Admin
+      </mat-card-title>
+      <mat-card-subtitle>Sign in to continue</mat-card-subtitle>
+    </mat-card-header>
+
+    <mat-card-content>
+      <form (ngSubmit)="login()" class="login-form">
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Username</mat-label>
+          <input matInput [(ngModel)]="username" name="username" 
+                 autocomplete="username" [disabled]="loading()">
+          <mat-icon matPrefix>person</mat-icon>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Password</mat-label>
+          <input matInput [(ngModel)]="password" name="password"
+                 [type]="hidePassword() ? 'password' : 'text'"
+                 autocomplete="current-password" [disabled]="loading()">
+          <mat-icon matPrefix>lock</mat-icon>
+          <button mat-icon-button matSuffix type="button"
+                  (click)="hidePassword.set(!hidePassword())">
+            <mat-icon>{{hidePassword() ? 'visibility_off' : 'visibility'}}</mat-icon>
+          </button>
+        </mat-form-field>
+
+        <button mat-raised-button color="primary" type="submit" 
+                class="full-width login-button" [disabled]="loading()">
+          @if (loading()) {
+            <mat-spinner diameter="20"></mat-spinner>
+          } @else {
+            <ng-container>
+              <mat-icon>login</mat-icon>
+              Sign In
+            </ng-container>
+          }
+        </button>
+      </form>
+
+      @if (passkeyAvailable() || oidcProviders().length > 0) {
+        <div class="divider-section">
+          <mat-divider></mat-divider>
+          <span class="divider-text">or continue with</span>
+          <mat-divider></mat-divider>
+        </div>
+
+        <div class="alternative-logins">
+          @if (passkeyAvailable()) {
+            <button mat-stroked-button (click)="loginWithPasskey()" 
+                    [disabled]="loading()" class="alt-login-button">
+              <mat-icon>fingerprint</mat-icon>
+              Passkey
+            </button>
+          }
+
+          @for (provider of oidcProviders(); track provider.id) {
+            <button mat-stroked-button (click)="loginWithOIDC(provider)"
+                    [disabled]="loading()" class="alt-login-button">
+              <mat-icon>{{provider.icon || 'login'}}</mat-icon>
+              {{provider.name}}
+            </button>
+          }
+        </div>
+      }
+    </mat-card-content>
+  </mat-card>
+</div>

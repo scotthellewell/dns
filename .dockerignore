@@ -1,0 +1,38 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+dns
+dns-server
+dnsserver
+__debug_bin*
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Local config files (will be mounted as volumes)
+*.json
+*.yaml
+!web/package*.json
+!web/angular.json
+!web/tsconfig*.json
+
+# Node modules (will be installed in container)
+web/node_modules
+
+# Test files
+*_test.go
+
+# Documentation
+*.md
+!web/README.md
+
+# Keys directory
+keys/
+
+# Mac files
+.DS_Store

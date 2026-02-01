@@ -1,0 +1,78 @@
+<div class="setup-container">
+  <mat-card class="setup-card">
+    <mat-card-header>
+      <mat-card-title>
+        <mat-icon>dns</mat-icon>
+        DNS Server Initial Setup
+      </mat-card-title>
+      <mat-card-subtitle>Create your administrator account</mat-card-subtitle>
+    </mat-card-header>
+
+    <mat-card-content>
+      <p class="setup-info">
+        Welcome! This is the first time you're setting up the DNS server. 
+        Please create an administrator account to get started.
+      </p>
+
+      <form (ngSubmit)="setup()" class="setup-form">
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Username</mat-label>
+          <input matInput [(ngModel)]="username" name="username" 
+                 autocomplete="username" [disabled]="loading()" required>
+          <mat-icon matPrefix>person</mat-icon>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Email (optional)</mat-label>
+          <input matInput [(ngModel)]="email" name="email" type="email"
+                 autocomplete="email" [disabled]="loading()">
+          <mat-icon matPrefix>email</mat-icon>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Display Name (optional)</mat-label>
+          <input matInput [(ngModel)]="displayName" name="displayName"
+                 [disabled]="loading()">
+          <mat-icon matPrefix>badge</mat-icon>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Password</mat-label>
+          <input matInput [(ngModel)]="password" name="password"
+                 [type]="hidePassword() ? 'password' : 'text'"
+                 autocomplete="new-password" [disabled]="loading()" required>
+          <mat-icon matPrefix>lock</mat-icon>
+          <button mat-icon-button matSuffix type="button"
+                  (click)="hidePassword.set(!hidePassword())">
+            <mat-icon>{{hidePassword() ? 'visibility_off' : 'visibility'}}</mat-icon>
+          </button>
+          <mat-hint>Minimum 8 characters</mat-hint>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Confirm Password</mat-label>
+          <input matInput [(ngModel)]="confirmPassword" name="confirmPassword"
+                 [type]="hideConfirmPassword() ? 'password' : 'text'"
+                 autocomplete="new-password" [disabled]="loading()" required>
+          <mat-icon matPrefix>lock_outline</mat-icon>
+          <button mat-icon-button matSuffix type="button"
+                  (click)="hideConfirmPassword.set(!hideConfirmPassword())">
+            <mat-icon>{{hideConfirmPassword() ? 'visibility_off' : 'visibility'}}</mat-icon>
+          </button>
+        </mat-form-field>
+
+        <button mat-raised-button color="primary" type="submit" 
+                class="full-width setup-button" [disabled]="loading()">
+          @if (loading()) {
+            <mat-spinner diameter="20"></mat-spinner>
+          } @else {
+            <ng-container>
+              <mat-icon>rocket_launch</mat-icon>
+              Complete Setup
+            </ng-container>
+          }
+        </button>
+      </form>
+    </mat-card-content>
+  </mat-card>
+</div>

@@ -1,0 +1,299 @@
+<div class="page-container">
+  <div class="page-header">
+    <h1>Zone Transfer Settings</h1>
+    <p class="subtitle">Configure AXFR/IXFR zone transfer settings for this server as a primary</p>
+  </div>
+
+  <mat-card class="content-card">
+    <div class="card-section">
+      <div class="section-header">
+        <h2>General Settings</h2>
+      </div>
+      
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <h3>Enable Zone Transfers</h3>
+          <p>Allow secondary servers to transfer zone data from this server</p>
+        </div>
+        <mat-slide-toggle [(ngModel)]="config.enabled" color="primary"></mat-slide-toggle>
+      </div>
+    </div>
+
+    <!-- TSIG Keys Section -->
+    <div class="card-section">
+      <div class="section-header">
+        <h2>TSIG Keys</h2>
+        <p class="section-desc">Shared secrets for authenticated zone transfers</p>
+      </div>
+
+      <div class="tsig-list">
+        @for (key of config.tsig_keys; track key.name; let i = $index) {
+          <div class="tsig-item">
+            <div class="tsig-info">
+              <span class="key-name">{{ key.name }}</span>
+              <span class="key-algorithm">{{ key.algorithm }}</span>
+              <span class="key-secret">{{ key.secret.substring(0, 20) }}...</span>
+            </div>
+            <button mat-icon-button color="warn" (click)="removeTsigKey(i)">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </div>
+        }
+        @if (config.tsig_keys.length === 0) {
+          <div class="empty-text">No TSIG keys configured</div>
+        }
+      </div>
+
+      <div class="add-form">
+        <div class="add-row">
+          <mat-form-field appearance="outline">
+            <mat-label>Key Name</mat-label>
+            <input matInput [(ngModel)]="newTsigKey.name" placeholder="transfer-key.">
+          </mat-form-field>
+          <mat-form-field appearance="outline">
+            <mat-label>Algorithm</mat-label>
+            <mat-select [(ngModel)]="newTsigKey.algorithm">
+              @for (alg of algorithms; track alg) {
+                <mat-option [value]="alg">{{ alg }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+        </div>
+        <div class="add-row">
+          <mat-form-field appearance="outline" class="flex-grow">
+            <mat-label>Secret (Base64)</mat-label>
+            <input matInput [(ngModel)]="newTsigKey.secret" placeholder="base64-encoded-secret">
+          </mat-form-field>
+          <button mat-raised-button color="primary" (click)="addTsigKey()" [disabled]="!newTsigKey.name || !newTsigKey.secret">
+            <mat-icon>add</mat-icon>
+            Add Key
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ACLs Section -->
+    <div class="card-section">
+      <div class="section-header">
+        <h2>Transfer ACLs</h2>
+        <p class="section-desc">Access control lists for zone transfers per zone</p>
+      </div>
+
+      <div class="acl-list">
+        @for (acl of config.acls; track acl.zone; let i = $index) {
+          <mat-expansion-panel class="acl-panel">
+            <mat-expansion-panel-header>
+              <mat-panel-title>
+                <mat-icon>security</mat-icon>
+                {{ acl.zone }}
+              </mat-panel-title>
+              <mat-panel-description>
+                {{ acl.allow_transfer?.length || 0 }} transfer IPs, {{ acl.allow_notify?.length || 0 }} notify IPs
+              </mat-panel-description>
+            </mat-expansion-panel-header>
+            
+            <div class="acl-details">
+              <div class="acl-field">
+                <strong>Allow Transfer:</strong>
+                <div class="chip-list inline">
+                  @for (ip of acl.allow_transfer; track ip) {
+                    <span class="chip small">{{ ip }}</span>
+                  }
+                  @if (!acl.allow_transfer || acl.allow_transfer.length === 0) {
+                    <span class="empty-text">None</span>
+                  }
+                </div>
+              </div>
+              <div class="acl-field">
+                <strong>Allow Notify:</strong>
+                <div class="chip-list inline">
+                  @for (ip of acl.allow_notify; track ip) {
+                    <span class="chip small">{{ ip }}</span>
+                  }
+                  @if (!acl.allow_notify || acl.allow_notify.length === 0) {
+                    <span class="empty-text">None</span>
+                  }
+                </div>
+              </div>
+              @if (acl.tsig_key) {
+                <div class="acl-field">
+                  <strong>TSIG Key:</strong> {{ acl.tsig_key }}
+                </div>
+              }
+              <button mat-button color="warn" (click)="removeAcl(i)">
+                <mat-icon>delete</mat-icon>
+                Remove ACL
+              </button>
+            </div>
+          </mat-expansion-panel>
+        }
+        @if (config.acls.length === 0) {
+          <div class="empty-text">No ACLs configured - all transfers denied</div>
+        }
+      </div>
+
+      <!-- Add new ACL -->
+      <div class="add-form">
+        <h4>Add New ACL</h4>
+        <div class="add-row">
+          <mat-form-field appearance="outline">
+            <mat-label>Zone</mat-label>
+            <input matInput [(ngModel)]="newAcl.zone" placeholder="example.com or *">
+          </mat-form-field>
+          <mat-form-field appearance="outline">
+            <mat-label>TSIG Key (optional)</mat-label>
+            <mat-select [(ngModel)]="newAcl.tsig_key">
+              <mat-option value="">None</mat-option>
+              @for (keyName of getTsigKeyNames(); track keyName) {
+                <mat-option [value]="keyName">{{ keyName }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+        </div>
+        
+        <div class="ip-builder">
+          <div class="ip-section">
+            <label>Allow Transfer IPs:</label>
+            <div class="chip-list">
+              @for (ip of newAcl.allow_transfer; track ip) {
+                <div class="chip">
+                  {{ ip }}
+                  <button mat-icon-button (click)="removeAclTransferIp(ip)">
+                    <mat-icon>close</mat-icon>
+                  </button>
+                </div>
+              }
+            </div>
+            <div class="add-row mini">
+              <mat-form-field appearance="outline">
+                <mat-label>IP/CIDR</mat-label>
+                <input matInput [(ngModel)]="newAclTransferIp" placeholder="10.0.0.0/8" (keyup.enter)="addAclTransferIp()">
+              </mat-form-field>
+              <button mat-mini-fab color="primary" (click)="addAclTransferIp()">
+                <mat-icon>add</mat-icon>
+              </button>
+            </div>
+          </div>
+          
+          <div class="ip-section">
+            <label>Allow Notify IPs:</label>
+            <div class="chip-list">
+              @for (ip of newAcl.allow_notify; track ip) {
+                <div class="chip">
+                  {{ ip }}
+                  <button mat-icon-button (click)="removeAclNotifyIp(ip)">
+                    <mat-icon>close</mat-icon>
+                  </button>
+                </div>
+              }
+            </div>
+            <div class="add-row mini">
+              <mat-form-field appearance="outline">
+                <mat-label>IP/CIDR</mat-label>
+                <input matInput [(ngModel)]="newAclNotifyIp" placeholder="10.0.0.0/8" (keyup.enter)="addAclNotifyIp()">
+              </mat-form-field>
+              <button mat-mini-fab color="primary" (click)="addAclNotifyIp()">
+                <mat-icon>add</mat-icon>
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        <button mat-raised-button color="primary" (click)="addAcl()" [disabled]="!newAcl.zone">
+          <mat-icon>add</mat-icon>
+          Add ACL
+        </button>
+      </div>
+    </div>
+
+    <!-- Notify Targets Section -->
+    <div class="card-section">
+      <div class="section-header">
+        <h2>Notify Targets</h2>
+        <p class="section-desc">Secondary servers to notify when zones are updated</p>
+      </div>
+
+      <div class="notify-list">
+        @for (notify of config.notify_targets; track notify.zone; let i = $index) {
+          <div class="notify-item">
+            <div class="notify-info">
+              <span class="zone-name">{{ notify.zone }}</span>
+              <div class="targets">
+                @for (target of notify.targets; track target) {
+                  <span class="chip small">{{ target }}</span>
+                }
+              </div>
+              @if (notify.tsig_key) {
+                <span class="tsig-ref">TSIG: {{ notify.tsig_key }}</span>
+              }
+            </div>
+            <button mat-icon-button color="warn" (click)="removeNotifyEntry(i)">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </div>
+        }
+        @if (!config.notify_targets || config.notify_targets.length === 0) {
+          <div class="empty-text">No notify targets configured</div>
+        }
+      </div>
+
+      <!-- Add new Notify Target -->
+      <div class="add-form">
+        <h4>Add Notify Target</h4>
+        <div class="add-row">
+          <mat-form-field appearance="outline">
+            <mat-label>Zone</mat-label>
+            <input matInput [(ngModel)]="newNotify.zone" placeholder="example.com">
+          </mat-form-field>
+          <mat-form-field appearance="outline">
+            <mat-label>TSIG Key (optional)</mat-label>
+            <mat-select [(ngModel)]="newNotify.tsig_key">
+              <mat-option value="">None</mat-option>
+              @for (keyName of getTsigKeyNames(); track keyName) {
+                <mat-option [value]="keyName">{{ keyName }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+        </div>
+        
+        <div class="ip-section">
+          <label>Target Servers:</label>
+          <div class="chip-list">
+            @for (target of newNotify.targets; track target) {
+              <div class="chip">
+                {{ target }}
+                <button mat-icon-button (click)="removeNotifyTargetAddress(target)">
+                  <mat-icon>close</mat-icon>
+                </button>
+              </div>
+            }
+          </div>
+          <div class="add-row mini">
+            <mat-form-field appearance="outline">
+              <mat-label>Server Address</mat-label>
+              <input matInput [(ngModel)]="newNotifyTarget" placeholder="192.168.1.53:53" (keyup.enter)="addNotifyTargetAddress()">
+            </mat-form-field>
+            <button mat-mini-fab color="primary" (click)="addNotifyTargetAddress()">
+              <mat-icon>add</mat-icon>
+            </button>
+          </div>
+        </div>
+        
+        <button mat-raised-button color="primary" (click)="addNotifyEntry()" [disabled]="!newNotify.zone || newNotify.targets.length === 0">
+          <mat-icon>add</mat-icon>
+          Add Notify Target
+        </button>
+      </div>
+    </div>
+
+    <div class="card-footer">
+      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving">
+        @if (saving) {
+          Saving...
+        } @else {
+          Save Settings
+        }
+      </button>
+    </div>
+  </mat-card>
+</div>

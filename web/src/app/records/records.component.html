@@ -1,0 +1,377 @@
+<div class="records-page">
+  <div class="page-header">
+    <h1>DNS Records</h1>
+    <div class="header-actions">
+      <select [(ngModel)]="selectedZone" (change)="onZoneFilterChange()" class="zone-filter">
+        <option value="">All Zones</option>
+        <option *ngFor="let zone of zones" [value]="zone.name">{{ zone.name }}</option>
+      </select>
+      <select [(ngModel)]="selectedType" (change)="onTypeFilterChange()">
+        <option value="">All Types</option>
+        <option *ngFor="let type of recordTypes" [value]="type">{{ type }}</option>
+      </select>
+      <button class="btn btn-primary" (click)="openAddForm()">+ Add Record</button>
+    </div>
+  </div>
+
+  <div class="records-table" *ngIf="filteredRecords.length > 0">
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Zone</th>
+          <th>Record</th>
+          <th>TTL</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let record of filteredRecords">
+          <td><span class="type-badge" [attr.data-type]="record.type">{{ record.type }}</span></td>
+          <td><code class="zone-name">{{ record.zone || '(none)' }}</code></td>
+          <td><code>{{ getRecordSummary(record) }}</code></td>
+          <td>{{ record.ttl }}s</td>
+          <td class="actions">
+            <button class="btn btn-sm" (click)="openEditForm(record)">Edit</button>
+            <button class="btn btn-sm btn-danger" (click)="deleteRecord(record)">Delete</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Delegations Section -->
+  <div class="delegations-section" *ngIf="delegations.length > 0">
+    <h2 class="section-title">
+      Zone Delegations
+      <span class="count-badge">{{ delegations.length }}</span>
+    </h2>
+    <div class="delegations-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Child Zone</th>
+            <th>Parent Zone</th>
+            <th>Nameservers</th>
+            <th>DNSSEC</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let delegation of delegations">
+            <td><code class="zone-name">{{ delegation.child_zone }}</code></td>
+            <td><code class="zone-name">{{ delegation.parent_zone }}</code></td>
+            <td>
+              <span *ngFor="let ns of delegation.nameservers; let last = last">
+                <code>{{ ns }}</code>{{ last ? '' : ', ' }}
+              </span>
+            </td>
+            <td>
+              <span *ngIf="delegation.ds_records && delegation.ds_records.length > 0" 
+                    class="dnssec-badge secure" 
+                    [title]="delegation.ds_records.length + ' DS record(s)'">
+                🔒 Secured
+              </span>
+              <span *ngIf="!delegation.ds_records || delegation.ds_records.length === 0" 
+                    class="dnssec-badge insecure">
+                Unsigned
+              </span>
+            </td>
+            <td class="actions">
+              <button class="btn btn-sm btn-danger" (click)="deleteDelegation(delegation)">Delete</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div *ngIf="filteredRecords.length === 0 && delegations.length === 0" class="empty-state">
+    <p>No records found.</p>
+    <p *ngIf="selectedZone">Try selecting a different zone or add records to this zone.</p>
+  </div>
+
+  <!-- Modal Form -->
+  <div class="modal-backdrop" *ngIf="showForm" (click)="closeForm()"></div>
+  <div class="modal" *ngIf="showForm">
+    <div class="modal-header">
+      <h2>{{ editingRecord ? 'Edit Record' : 'Add Record' }}</h2>
+      <button class="close-btn" (click)="closeForm()">×</button>
+    </div>
+    <div class="modal-body">
+      <!-- Zone selection for new records -->
+      <div class="form-group" *ngIf="!editingRecord">
+        <label for="zone">Zone</label>
+        <select id="zone" [(ngModel)]="formData.zone">
+          <option value="">No Zone (Legacy)</option>
+          <option *ngFor="let zone of zones" [value]="zone.name">{{ zone.name }}</option>
+        </select>
+        <small>Select the zone this record belongs to</small>
+      </div>
+
+      <div class="form-group" *ngIf="!editingRecord">
+        <label for="type">Record Type</label>
+        <select id="type" [(ngModel)]="formData.type" (change)="onFormTypeChange()">
+          <option *ngFor="let type of formRecordTypes" [value]="type">{{ type }}</option>
+        </select>
+      </div>
+
+      <!-- A / AAAA -->
+      <ng-container *ngIf="formData.type === 'A' || formData.type === 'AAAA'">
+        <div class="form-group">
+          <label for="name">Hostname</label>
+          <input type="text" id="name" [(ngModel)]="formData.name" placeholder="e.g., www.example.com">
+        </div>
+        <div class="form-group">
+          <label for="ip">IP Address</label>
+          <input type="text" id="ip" [(ngModel)]="formData.ip" 
+                 [placeholder]="formData.type === 'A' ? '192.168.1.1' : '2001:db8::1'">
+        </div>
+      </ng-container>
+
+      <!-- MX -->
+      <ng-container *ngIf="formData.type === 'MX'">
+        <div class="form-group">
+          <label for="name">Domain</label>
+          <input type="text" id="name" [(ngModel)]="formData.name" placeholder="e.g., example.com">
+        </div>
+        <div class="form-group">
+          <label for="priority">Priority</label>
+          <input type="number" id="priority" [(ngModel)]="formData.priority" min="0">
+        </div>
+        <div class="form-group">
+          <label for="target">Mail Server</label>
+          <input type="text" id="target" [(ngModel)]="formData.target" placeholder="e.g., mail.example.com">
+        </div>
+      </ng-container>
+
+      <!-- TXT -->
+      <ng-container *ngIf="formData.type === 'TXT'">
+        <div class="form-group">
+          <label for="name">Hostname</label>
+          <input type="text" id="name" [(ngModel)]="formData.name" placeholder="e.g., example.com">
+        </div>
+        <div class="form-group">
+          <label>Values</label>
+          <div *ngFor="let value of formData.values; let i = index; trackBy: trackByIndex" class="txt-value-row">
+            <input type="text" [(ngModel)]="formData.values![i]" placeholder="TXT value">
+            <button class="btn btn-sm btn-danger" (click)="removeTxtValue(i)">×</button>
+          </div>
+          <button class="btn btn-sm" (click)="addTxtValue()">+ Add Value</button>
+        </div>
+      </ng-container>
+
+      <!-- NS / CNAME -->
+      <ng-container *ngIf="formData.type === 'NS' || formData.type === 'CNAME'">
+        <div class="form-group">
+          <label for="name">Hostname</label>
+          <input type="text" id="name" [(ngModel)]="formData.name" placeholder="e.g., example.com">
+        </div>
+        <div class="form-group">
+          <label for="target">Target</label>
+          <input type="text" id="target" [(ngModel)]="formData.target" 
+                 [placeholder]="formData.type === 'NS' ? 'ns1.example.com' : 'www.example.com'">
+        </div>
+      </ng-container>
+
+      <!-- SOA -->
+      <ng-container *ngIf="formData.type === 'SOA'">
+        <div class="form-group">
+          <label for="name">Zone</label>
+          <input type="text" id="name" [(ngModel)]="formData.name" placeholder="e.g., example.com">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="mname">Primary NS</label>
+            <input type="text" id="mname" [(ngModel)]="formData.mname" placeholder="ns1.example.com">
+          </div>
+          <div class="form-group">
+            <label for="rname">Admin Email</label>
+            <input type="text" id="rname" [(ngModel)]="formData.rname" placeholder="hostmaster.example.com">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="serial">Serial</label>
+            <input type="number" id="serial" [(ngModel)]="formData.serial">
+          </div>
+          <div class="form-group">
+            <label for="refresh">Refresh</label>
+            <input type="number" id="refresh" [(ngModel)]="formData.refresh">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="retry">Retry</label>
+            <input type="number" id="retry" [(ngModel)]="formData.retry">
+          </div>
+          <div class="form-group">
+            <label for="expire">Expire</label>
+            <input type="number" id="expire" [(ngModel)]="formData.expire">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="minimum">Minimum TTL</label>
+          <input type="number" id="minimum" [(ngModel)]="formData.minimum">
+        </div>
+      </ng-container>
+
+      <!-- SRV -->
+      <ng-container *ngIf="formData.type === 'SRV'">
+        <div class="form-group">
+          <label for="name">Service Name</label>
+          <input type="text" id="name" [(ngModel)]="formData.name" placeholder="_sip._tcp.example.com">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="priority">Priority</label>
+            <input type="number" id="priority" [(ngModel)]="formData.priority" min="0">
+          </div>
+          <div class="form-group">
+            <label for="weight">Weight</label>
+            <input type="number" id="weight" [(ngModel)]="formData.weight" min="0">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="port">Port</label>
+            <input type="number" id="port" [(ngModel)]="formData.port" min="0" max="65535">
+          </div>
+          <div class="form-group">
+            <label for="target">Target</label>
+            <input type="text" id="target" [(ngModel)]="formData.target" placeholder="sip.example.com">
+          </div>
+        </div>
+      </ng-container>
+
+      <!-- CAA -->
+      <ng-container *ngIf="formData.type === 'CAA'">
+        <div class="form-group">
+          <label for="name">Hostname</label>
+          <input type="text" id="name" [(ngModel)]="formData.name" placeholder="e.g., example.com">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="flag">Flag</label>
+            <input type="number" id="flag" [(ngModel)]="formData.flag" min="0" max="255">
+          </div>
+          <div class="form-group">
+            <label for="tag">Tag</label>
+            <select id="tag" [(ngModel)]="formData.tag">
+              <option value="issue">issue</option>
+              <option value="issuewild">issuewild</option>
+              <option value="iodef">iodef</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="value">Value</label>
+          <input type="text" id="value" [(ngModel)]="formData.value" placeholder="e.g., letsencrypt.org">
+        </div>
+      </ng-container>
+
+      <!-- PTR -->
+      <ng-container *ngIf="formData.type === 'PTR'">
+        <div class="form-group">
+          <label for="ip">IP Address</label>
+          <input type="text" id="ip" [(ngModel)]="formData.ip" placeholder="e.g., 192.168.1.1">
+        </div>
+        <div class="form-group">
+          <label for="hostname">Hostname</label>
+          <input type="text" id="hostname" [(ngModel)]="formData.hostname" placeholder="e.g., server.example.com">
+        </div>
+      </ng-container>
+
+      <!-- Common TTL field -->
+      <div class="form-group">
+        <label for="ttl">TTL (seconds)</label>
+        <input type="number" id="ttl" [(ngModel)]="formData.ttl" min="60">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" (click)="closeForm()">Cancel</button>
+      <button class="btn btn-primary" (click)="saveRecord()">Save</button>
+    </div>
+  </div>
+
+  <!-- Delegation Modal Form -->
+  <div class="modal-backdrop" *ngIf="showDelegationForm" (click)="closeDelegationForm()"></div>
+  <div class="modal delegation-modal" *ngIf="showDelegationForm">
+    <div class="modal-header">
+      <h2>Add Zone Delegation</h2>
+      <button class="close-btn" (click)="closeDelegationForm()">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="delegation-intro">
+        Create a delegation to a subdomain. This will create NS records pointing to the delegated nameservers,
+        optional glue records for in-bailiwick nameservers, and DS records for DNSSEC chain of trust.
+      </p>
+
+      <div class="form-group">
+        <label for="parent_zone">Parent Zone</label>
+        <select id="parent_zone" [(ngModel)]="delegationData.parent_zone">
+          <option value="">Select a zone</option>
+          <option *ngFor="let zone of zones" [value]="zone.name">{{ zone.name }}</option>
+        </select>
+        <small>The zone that will contain the delegation</small>
+      </div>
+
+      <div class="form-group">
+        <label for="child_zone">Delegated Subdomain</label>
+        <input type="text" id="child_zone" [(ngModel)]="delegationData.child_zone" 
+               placeholder="e.g., subdomain or sub.domain">
+        <small>Just the subdomain part (will be combined with parent zone)</small>
+      </div>
+
+      <div class="form-section">
+        <h3>Nameservers</h3>
+        <div *ngFor="let ns of delegationData.nameservers; let i = index; trackBy: trackByIndex" class="array-input">
+          <input type="text" [(ngModel)]="delegationData.nameservers[i]" 
+                 placeholder="e.g., ns1.subdomain.example.com">
+          <button class="btn btn-sm btn-danger" (click)="removeNameserver(i)" *ngIf="delegationData.nameservers.length > 1">×</button>
+        </div>
+        <button class="btn btn-sm" (click)="addNameserver()">+ Add Nameserver</button>
+      </div>
+
+      <div class="form-section">
+        <h3>Glue Records <span class="optional">(optional)</span></h3>
+        <small class="section-help">Required when nameservers are within the delegated zone</small>
+        <div *ngFor="let glue of delegationData.glue_records; let i = index" class="glue-record-row">
+          <input type="text" [(ngModel)]="glue.hostname" placeholder="Hostname (e.g., ns1.subdomain)">
+          <select [(ngModel)]="glue.ip_type">
+            <option value="A">A (IPv4)</option>
+            <option value="AAAA">AAAA (IPv6)</option>
+          </select>
+          <input type="text" [(ngModel)]="glue.ip" placeholder="IP Address">
+          <button class="btn btn-sm btn-danger" (click)="removeGlueRecord(i)">×</button>
+        </div>
+        <button class="btn btn-sm" (click)="addGlueRecord()">+ Add Glue Record</button>
+      </div>
+
+      <div class="form-section">
+        <h3>DS Records <span class="optional">(optional)</span></h3>
+        <small class="section-help">For DNSSEC chain of trust. Get these from the child zone's DNSSEC configuration.</small>
+        <div *ngFor="let ds of delegationData.ds_records; let i = index" class="ds-record-row">
+          <input type="number" [(ngModel)]="ds.key_tag" placeholder="Key Tag" class="small-input">
+          <select [(ngModel)]="ds.algorithm" class="small-input">
+            <option [value]="13">13 - ECDSAP256SHA256</option>
+            <option [value]="14">14 - ECDSAP384SHA384</option>
+            <option [value]="15">15 - ED25519</option>
+            <option [value]="8">8 - RSASHA256</option>
+          </select>
+          <select [(ngModel)]="ds.digest_type" class="small-input">
+            <option [value]="2">2 - SHA-256</option>
+            <option [value]="4">4 - SHA-384</option>
+          </select>
+          <input type="text" [(ngModel)]="ds.digest" placeholder="Digest (hex)" class="digest-input">
+          <button class="btn btn-sm btn-danger" (click)="removeDsRecord(i)">×</button>
+        </div>
+        <button class="btn btn-sm" (click)="addDsRecord()">+ Add DS Record</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" (click)="closeDelegationForm()">Cancel</button>
+      <button class="btn btn-primary" (click)="saveDelegation()">Create Delegation</button>
+    </div>
+  </div>
+</div>

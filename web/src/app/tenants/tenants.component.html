@@ -1,0 +1,87 @@
+<div class="tenants-container">
+  <mat-card>
+    <mat-card-header>
+      <mat-card-title>
+        <mat-icon>business</mat-icon>
+        Tenant Management
+      </mat-card-title>
+      <mat-card-subtitle>
+        Manage tenants and their users
+      </mat-card-subtitle>
+    </mat-card-header>
+
+    <mat-card-content>
+      <div class="toolbar">
+        <button mat-raised-button color="primary" (click)="openCreateDialog()">
+          <mat-icon>add</mat-icon>
+          New Tenant
+        </button>
+      </div>
+
+      @if (loading()) {
+        <div class="loading">
+          <mat-spinner diameter="40"></mat-spinner>
+          <span>Loading tenants...</span>
+        </div>
+      } @else if (tenants().length === 0) {
+        <div class="empty-state">
+          <mat-icon>business_center</mat-icon>
+          <p>No tenants found</p>
+          <button mat-stroked-button color="primary" (click)="openCreateDialog()">
+            Create Your First Tenant
+          </button>
+        </div>
+      } @else {
+        <table mat-table [dataSource]="tenants()" class="tenants-table">
+          <ng-container matColumnDef="name">
+            <th mat-header-cell *matHeaderCellDef>Name</th>
+            <td mat-cell *matCellDef="let tenant">{{ tenant.name }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="description">
+            <th mat-header-cell *matHeaderCellDef>Description</th>
+            <td mat-cell *matCellDef="let tenant">
+              {{ tenant.description || '-' }}
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="is_main">
+            <th mat-header-cell *matHeaderCellDef>Type</th>
+            <td mat-cell *matCellDef="let tenant">
+              @if (tenant.is_main) {
+                <mat-chip color="primary" highlighted>Main</mat-chip>
+              } @else {
+                <mat-chip>Standard</mat-chip>
+              }
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef>Actions</th>
+            <td mat-cell *matCellDef="let tenant">
+              <button mat-icon-button
+                      matTooltip="View Users"
+                      (click)="openUsersDialog(tenant)">
+                <mat-icon>people</mat-icon>
+              </button>
+              <button mat-icon-button
+                      matTooltip="Edit Tenant"
+                      (click)="openEditDialog(tenant)">
+                <mat-icon>edit</mat-icon>
+              </button>
+              <button mat-icon-button
+                      matTooltip="Delete Tenant"
+                      [disabled]="tenant.is_main"
+                      (click)="deleteTenant(tenant)">
+                <mat-icon>delete</mat-icon>
+              </button>
+            </td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+          <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+        </table>
+      }
+    </mat-card-content>
+  </mat-card>
+</div>

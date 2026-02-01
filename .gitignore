@@ -1,6 +1,10 @@
-# Compiled binary
+# Compiled binaries
+dns
 dnsserver
 dns-server
+dns-server-*
+e2e.test
+__debug_bin*
 
 # Go build artifacts
 *.exe
@@ -9,7 +13,7 @@ dns-server
 *.so
 *.dylib
 
-# Test binary
+# Test binaries
 *.test
 
 # Output of go coverage
@@ -18,6 +22,7 @@ coverage.html
 
 # Go workspace file
 go.work
+go.work.sum
 
 # IDE/Editor directories
 .idea/
@@ -30,20 +35,25 @@ go.work
 .DS_Store
 Thumbs.db
 
-# DNSSEC keys (sensitive!)
-keys/
-*.key
-*.private
-Kexample.com.*
-K*.+*+*
-
-# Test/development configs with secrets
-config-*.json
-!config.example.json
-
 # Logs
 *.log
+logs/
 
 # Temporary files
 tmp/
 temp/
+
+# Build artifacts
+*.tar.gz
+dist/
+
+# Web build output
+web/dist/
+web/node_modules/
+web/.angular/
+web/.tmp/
+web/playwright-report/
+web/test-results/
+
+# Playwright
+playwright/.cache/

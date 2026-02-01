@@ -1,7 +1,12 @@
 package secondary
 
 import (
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -281,6 +286,15 @@ func (m *Manager) transferZone(szCfg config.ParsedSecondaryZone) {
 
 		log.Printf("Secondary: Zone %s transferred successfully (%d records, serial %d, next refresh in %ds)",
 			zone, len(records), soa.Serial, refreshInterval)
+
+		// Fetch DNSSEC keys if configured (async to not block)
+		if szCfg.DNSSECKeyURL != "" {
+			go func(cfg config.ParsedSecondaryZone) {
+				if err := m.FetchDNSSECKeys(cfg); err != nil {
+					log.Printf("Secondary: Failed to fetch DNSSEC keys for %s: %v", cfg.Zone, err)
+				}
+			}(szCfg)
+		}
 		return
 	}
 
@@ -425,5 +439,111 @@ func getTSIGAlgorithm(algo string) string {
 		return dns.HmacMD5
 	default:
 		return dns.HmacSHA256
+	}
+}
+
+// DNSSECKeyData holds DNSSEC key information fetched from a primary
+type DNSSECKeyData struct {
+	Zone       string `json:"zone"`
+	Algorithm  string `json:"algorithm"`
+	Enabled    bool   `json:"enabled"`
+	KSKPrivate string `json:"ksk_private"`
+	KSKPublic  string `json:"ksk_public"`
+	KSKKeyTag  uint16 `json:"ksk_key_tag"`
+	ZSKPrivate string `json:"zsk_private"`
+	ZSKPublic  string `json:"zsk_public"`
+	ZSKKeyTag  uint16 `json:"zsk_key_tag"`
+	DSRecord   string `json:"ds_record"`
+}
+
+// KeyFetchCallback is called when keys are fetched from a primary
+type KeyFetchCallback func(zone string, keys *DNSSECKeyData) error
+
+// keyFetchCallback stores the callback for key fetches
+var keyFetchCallback KeyFetchCallback
+
+// SetKeyFetchCallback sets the callback to be invoked when DNSSEC keys are fetched
+func SetKeyFetchCallback(cb KeyFetchCallback) {
+	keyFetchCallback = cb
+}
+
+// FetchDNSSECKeys fetches DNSSEC keys from a primary server
+func (m *Manager) FetchDNSSECKeys(szCfg config.ParsedSecondaryZone) error {
+	if szCfg.DNSSECKeyURL == "" {
+		return nil // No key URL configured
+	}
+
+	log.Printf("Secondary: Fetching DNSSEC keys for %s from %s", szCfg.Zone, szCfg.DNSSECKeyURL)
+
+	// Build URL with token
+	url := szCfg.DNSSECKeyURL
+	if szCfg.DNSSECKeyToken != "" {
+		if strings.Contains(url, "?") {
+			url += "&token=" + szCfg.DNSSECKeyToken
+		} else {
+			url += "?token=" + szCfg.DNSSECKeyToken
+		}
+	}
+
+	// Create HTTP client with TLS skip verify for self-signed certs
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to fetch keys: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("key fetch failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var keys DNSSECKeyData
+	if err := json.NewDecoder(resp.Body).Decode(&keys); err != nil {
+		return fmt.Errorf("failed to decode keys: %w", err)
+	}
+
+	if keys.KSKPrivate == "" || keys.ZSKPrivate == "" {
+		return fmt.Errorf("incomplete key data received")
+	}
+
+	log.Printf("Secondary: Successfully fetched DNSSEC keys for %s (KSK tag: %d, ZSK tag: %d)",
+		szCfg.Zone, keys.KSKKeyTag, keys.ZSKKeyTag)
+
+	// Invoke callback to store the keys
+	if keyFetchCallback != nil {
+		if err := keyFetchCallback(szCfg.Zone, &keys); err != nil {
+			return fmt.Errorf("failed to store fetched keys: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// FetchKeysForAllZones fetches DNSSEC keys for all configured secondary zones
+func (m *Manager) FetchKeysForAllZones() {
+	m.mu.RLock()
+	configs := make([]config.ParsedSecondaryZone, len(m.config))
+	copy(configs, m.config)
+	m.mu.RUnlock()
+
+	for _, szCfg := range configs {
+		if szCfg.DNSSECKeyURL != "" {
+			if err := m.FetchDNSSECKeys(szCfg); err != nil {
+				log.Printf("Secondary: Failed to fetch DNSSEC keys for %s: %v", szCfg.Zone, err)
+			}
+		}
 	}
 }

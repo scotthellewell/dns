@@ -1,0 +1,73 @@
+<div class="dashboard">
+  <h1>DNS Server Dashboard</h1>
+
+  <div *ngIf="status" class="stats-grid">
+    <div class="stat-card status">
+      <div class="stat-icon">●</div>
+      <div class="stat-content">
+        <div class="stat-value" [class.running]="status.status === 'running'">
+          {{ status.status | uppercase }}
+        </div>
+        <div class="stat-label">Server Status</div>
+      </div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-icon">⏱</div>
+      <div class="stat-content">
+        <div class="stat-value">{{ status.uptime }}</div>
+        <div class="stat-label">Uptime</div>
+      </div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-icon">📊</div>
+      <div class="stat-content">
+        <div class="stat-value">{{ status.total_queries | number }}</div>
+        <div class="stat-label">Total Queries</div>
+      </div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-icon">🌐</div>
+      <div class="stat-content">
+        <div class="stat-value">{{ status.zone_count }}</div>
+        <div class="stat-label">Zones</div>
+      </div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-icon">📝</div>
+      <div class="stat-content">
+        <div class="stat-value">{{ status.record_count }}</div>
+        <div class="stat-label">Records</div>
+      </div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-icon">🔄</div>
+      <div class="stat-content">
+        <div class="stat-value">{{ status.secondary_zones }}</div>
+        <div class="stat-label">Secondary Zones</div>
+      </div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-icon">🔌</div>
+      <div class="stat-content">
+        <div class="stat-value">{{ getDnsAddress() }}</div>
+        <div class="stat-label">DNS Address</div>
+      </div>
+    </div>
+  </div>
+
+  <div *ngIf="status && getQueryTypes().length > 0" class="query-stats">
+    <h2>Queries by Type</h2>
+    <div class="query-type-grid">
+      <div *ngFor="let qt of getQueryTypes()" class="query-type-card">
+        <div class="query-type">{{ qt.type }}</div>
+        <div class="query-count">{{ qt.count | number }}</div>
+      </div>
+    </div>
+  </div>
+</div>

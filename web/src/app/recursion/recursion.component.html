@@ -1,0 +1,93 @@
+<div class="page-container">
+  <div class="page-header">
+    <h1>Recursion Settings</h1>
+    <p class="subtitle">Configure recursive DNS resolution for queries not in local zones</p>
+  </div>
+
+  <mat-card class="content-card">
+    <div class="card-section">
+      <div class="section-header">
+        <h2>General Settings</h2>
+      </div>
+      
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Recursion Mode</mat-label>
+        <mat-select [(ngModel)]="config.mode">
+          @for (mode of modes; track mode.value) {
+            <mat-option [value]="mode.value">{{ mode.label }}</mat-option>
+          }
+        </mat-select>
+        <mat-hint>Controls when recursive resolution is used</mat-hint>
+      </mat-form-field>
+    </div>
+
+    <div class="card-section">
+      <div class="section-header">
+        <h2>Upstream Servers</h2>
+        <p class="section-desc">DNS servers to forward recursive queries to (leave empty for iterative resolution from root)</p>
+      </div>
+
+      <div class="server-list">
+        @for (server of config.upstream; track server; let i = $index) {
+          <div class="server-item">
+            <div class="server-info">
+              <mat-icon>dns</mat-icon>
+              <span>{{ server }}</span>
+              @if (i === 0) {
+                <span class="badge">Primary</span>
+              }
+            </div>
+            <button mat-icon-button color="warn" (click)="removeUpstream(server)">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </div>
+        }
+        @if (!config.upstream || config.upstream.length === 0) {
+          <div class="empty-text">No upstream servers configured - using iterative resolution from root servers</div>
+        }
+      </div>
+
+      <div class="add-row">
+        <mat-form-field appearance="outline" class="flex-grow">
+          <mat-label>Server Address</mat-label>
+          <input matInput [(ngModel)]="newUpstream" placeholder="8.8.8.8:53" (keyup.enter)="addUpstream()">
+        </mat-form-field>
+        <button mat-raised-button color="primary" (click)="addUpstream()" [disabled]="!newUpstream">
+          <mat-icon>add</mat-icon>
+          Add
+        </button>
+      </div>
+    </div>
+
+    <div class="card-section">
+      <div class="section-header">
+        <h2>Advanced Settings</h2>
+        <p class="section-desc">Configure timeouts and limits</p>
+      </div>
+
+      <div class="form-row">
+        <mat-form-field appearance="outline">
+          <mat-label>Timeout (seconds)</mat-label>
+          <input matInput type="number" [(ngModel)]="config.timeout">
+          <mat-hint>Timeout for upstream queries</mat-hint>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Max Depth</mat-label>
+          <input matInput type="number" [(ngModel)]="config.max_depth">
+          <mat-hint>Maximum CNAME chain depth</mat-hint>
+        </mat-form-field>
+      </div>
+    </div>
+
+    <div class="card-footer">
+      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving">
+        @if (saving) {
+          Saving...
+        } @else {
+          Save Settings
+        }
+      </button>
+    </div>
+  </mat-card>
+</div>

@@ -1,0 +1,432 @@
+<div class="network-container">
+  <h1>Network Settings</h1>
+  <p class="subtitle">Configure DNS server ports, protocols, and TLS certificates</p>
+
+  @if (loading) {
+    <div class="loading-container">
+      <mat-spinner diameter="40"></mat-spinner>
+      <p>Loading configuration...</p>
+    </div>
+  } @else {
+    <!-- TLS Certificate Management -->
+    <mat-card class="config-card cert-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar>verified_user</mat-icon>
+        <mat-card-title>TLS Certificate</mat-card-title>
+        <mat-card-subtitle>Shared certificate for Web UI, DoH, and DoT</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        @if (loadingCert) {
+          <div class="loading-container">
+            <mat-spinner diameter="30"></mat-spinner>
+          </div>
+        } @else if (certInfo) {
+          <div class="cert-info">
+            <div class="cert-status" [ngClass]="getCertExpiryClass()">
+              @if (certInfo.is_expired) {
+                <mat-icon>error</mat-icon>
+                <span>Certificate Expired</span>
+              } @else if (certInfo.is_expiring_soon) {
+                <mat-icon>warning</mat-icon>
+                <span>Certificate Expiring Soon</span>
+              } @else {
+                <mat-icon>check_circle</mat-icon>
+                <span>Certificate Valid</span>
+              }
+              @if (certInfo.auto_generated) {
+                <mat-chip>Self-Signed</mat-chip>
+              }
+            </div>
+            <div class="cert-details">
+              <div class="detail-row">
+                <strong>Subject:</strong>
+                <span>{{ certInfo.subject }}</span>
+              </div>
+              <div class="detail-row">
+                <strong>Issuer:</strong>
+                <span>{{ certInfo.issuer }}</span>
+              </div>
+              <div class="detail-row">
+                <strong>Valid From:</strong>
+                <span>{{ formatDate(certInfo.not_before) }}</span>
+              </div>
+              <div class="detail-row">
+                <strong>Valid Until:</strong>
+                <span [ngClass]="getCertExpiryClass()">{{ formatDate(certInfo.not_after) }}</span>
+              </div>
+              @if (certInfo.dns_names && certInfo.dns_names.length > 0) {
+                <div class="detail-row">
+                  <strong>DNS Names:</strong>
+                  <span>{{ certInfo.dns_names.join(', ') }}</span>
+                </div>
+              }
+              @if (certInfo.ip_addresses && certInfo.ip_addresses.length > 0) {
+                <div class="detail-row">
+                  <strong>IP Addresses:</strong>
+                  <span>{{ certInfo.ip_addresses.join(', ') }}</span>
+                </div>
+              }
+            </div>
+          </div>
+        } @else {
+          <p class="no-cert">No certificate configured</p>
+        }
+
+        <mat-divider></mat-divider>
+
+        <mat-expansion-panel>
+          <mat-expansion-panel-header>
+            <mat-panel-title>
+              <mat-icon>autorenew</mat-icon>
+              Generate Self-Signed Certificate
+            </mat-panel-title>
+          </mat-expansion-panel-header>
+          <div class="generate-form">
+            <mat-form-field appearance="outline">
+              <mat-label>Common Name</mat-label>
+              <input matInput [(ngModel)]="generateRequest.common_name" placeholder="localhost">
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label>DNS Names (comma-separated)</mat-label>
+              <input matInput [(ngModel)]="dnsNamesInput" placeholder="localhost, myserver.local">
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label>IP Addresses (comma-separated)</mat-label>
+              <input matInput [(ngModel)]="ipAddressesInput" placeholder="127.0.0.1, ::1">
+            </mat-form-field>
+            <button mat-raised-button color="primary" (click)="generateCertificate()" [disabled]="generatingCert">
+              @if (generatingCert) {
+                <mat-spinner diameter="20"></mat-spinner>
+              } @else {
+                Generate Certificate
+              }
+            </button>
+          </div>
+        </mat-expansion-panel>
+
+        <mat-expansion-panel>
+          <mat-expansion-panel-header>
+            <mat-panel-title>
+              <mat-icon>upload_file</mat-icon>
+              Upload Certificate
+            </mat-panel-title>
+          </mat-expansion-panel-header>
+          <div class="upload-form">
+            <div class="file-input">
+              <label>Certificate (PEM format):</label>
+              <input type="file" accept=".pem,.crt,.cer" (change)="onCertFileSelected($event)">
+              @if (certFileContent) {
+                <mat-icon color="primary">check</mat-icon>
+              }
+            </div>
+            <div class="file-input">
+              <label>Private Key (PEM format):</label>
+              <input type="file" accept=".pem,.key" (change)="onKeyFileSelected($event)">
+              @if (keyFileContent) {
+                <mat-icon color="primary">check</mat-icon>
+              }
+            </div>
+            <button mat-raised-button color="primary" (click)="uploadCertificate()" 
+                    [disabled]="uploadingCert || !certFileContent || !keyFileContent">
+              @if (uploadingCert) {
+                <mat-spinner diameter="20"></mat-spinner>
+              } @else {
+                Upload Certificate
+              }
+            </button>
+          </div>
+        </mat-expansion-panel>
+
+        <mat-expansion-panel>
+          <mat-expansion-panel-header>
+            <mat-panel-title>
+              <mat-icon>verified</mat-icon>
+              Let's Encrypt (ACME)
+            </mat-panel-title>
+          </mat-expansion-panel-header>
+          <div class="acme-form">
+            <p class="acme-description">
+              Automatically obtain and renew free TLS certificates from Let's Encrypt.
+            </p>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Email Address</mat-label>
+              <input matInput [(ngModel)]="acmeConfig.email" placeholder="admin@example.com" type="email">
+              <mat-hint>Required for certificate expiry notifications</mat-hint>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Domains (comma-separated)</mat-label>
+              <input matInput [(ngModel)]="acmeDomainsInput" placeholder="example.com, www.example.com">
+              <mat-hint>Domains to include in the certificate</mat-hint>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Challenge Type</mat-label>
+              <mat-select [(ngModel)]="acmeConfig.challenge_type">
+                <mat-option value="dns-01">DNS-01 (Recommended - uses this DNS server)</mat-option>
+                <mat-option value="http-01">HTTP-01 (Requires port 80 access)</mat-option>
+              </mat-select>
+              <mat-hint>
+                @if (acmeConfig.challenge_type === 'dns-01') {
+                  DNS-01 creates a temporary TXT record for validation
+                } @else {
+                  HTTP-01 requires this server to be accessible on port 80
+                }
+              </mat-hint>
+            </mat-form-field>
+
+            <div class="acme-options">
+              <mat-slide-toggle [(ngModel)]="acmeConfig.use_staging" color="primary">
+                Use Staging Environment
+              </mat-slide-toggle>
+              <mat-icon matTooltip="Use Let's Encrypt staging for testing. Certificates won't be trusted by browsers but have higher rate limits.">help_outline</mat-icon>
+            </div>
+
+            <div class="acme-options">
+              <mat-slide-toggle [(ngModel)]="acmeConfig.auto_renew" color="primary">
+                Auto-Renew Certificates
+              </mat-slide-toggle>
+            </div>
+
+            @if (acmeConfig.last_renewal) {
+              <div class="acme-status">
+                <p><strong>Last Renewal:</strong> {{ formatDate(acmeConfig.last_renewal) }}</p>
+                @if (acmeConfig.next_renewal) {
+                  <p><strong>Next Renewal:</strong> {{ formatDate(acmeConfig.next_renewal) }}</p>
+                }
+              </div>
+            }
+
+            <div class="acme-actions">
+              <button mat-raised-button (click)="saveACMEConfig()" [disabled]="savingAcme">
+                @if (savingAcme) {
+                  <mat-spinner diameter="20"></mat-spinner>
+                } @else {
+                  Save Settings
+                }
+              </button>
+
+              <button mat-raised-button color="primary" (click)="requestACMECertificate()" 
+                      [disabled]="requestingAcme || !acmeConfig.email || !acmeDomainsInput">
+                @if (requestingAcme) {
+                  <mat-spinner diameter="20"></mat-spinner>
+                } @else {
+                  Request Certificate
+                }
+              </button>
+
+              @if (acmeConfig.enabled) {
+                <button mat-stroked-button (click)="renewACMECertificate()" [disabled]="renewingAcme">
+                  @if (renewingAcme) {
+                    <mat-spinner diameter="20"></mat-spinner>
+                  } @else {
+                    Renew Now
+                  }
+                </button>
+              }
+            </div>
+
+            @if (acmeConfig.use_staging) {
+              <p class="staging-warning">
+                <mat-icon>warning</mat-icon>
+                Staging certificates are not trusted by browsers. Disable staging for production use.
+              </p>
+            }
+          </div>
+        </mat-expansion-panel>
+      </mat-card-content>
+    </mat-card>
+
+    <!-- DNS Port Configuration -->
+    <mat-card class="config-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar>dns</mat-icon>
+        <mat-card-title>DNS Server (UDP/TCP)</mat-card-title>
+        <mat-card-subtitle>Standard DNS protocol on port 53</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="config-row">
+          <mat-slide-toggle [(ngModel)]="portsConfig.dns.enabled" color="primary">
+            Enable DNS Server
+          </mat-slide-toggle>
+        </div>
+        <div class="config-row">
+          <mat-form-field appearance="outline">
+            <mat-label>Port</mat-label>
+            <input matInput type="number" [(ngModel)]="portsConfig.dns.port" min="1" max="65535">
+            <mat-hint>Default: 53 (requires root/admin)</mat-hint>
+          </mat-form-field>
+          <mat-form-field appearance="outline">
+            <mat-label>Bind Address</mat-label>
+            <input matInput [(ngModel)]="portsConfig.dns.address" placeholder="0.0.0.0">
+            <mat-hint>Leave empty to bind to all interfaces</mat-hint>
+          </mat-form-field>
+        </div>
+      </mat-card-content>
+      <mat-card-actions align="end">
+        <button mat-raised-button color="primary" (click)="saveDNS()" [disabled]="saving['dns']">
+          @if (saving['dns']) {
+            <mat-spinner diameter="20"></mat-spinner>
+          } @else {
+            Save DNS Settings
+          }
+        </button>
+      </mat-card-actions>
+    </mat-card>
+
+    <!-- DoT Configuration -->
+    <mat-card class="config-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar>lock</mat-icon>
+        <mat-card-title>DNS over TLS (DoT)</mat-card-title>
+        <mat-card-subtitle>Encrypted DNS on port 853 (RFC 7858)</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="config-row">
+          <mat-slide-toggle [(ngModel)]="portsConfig.dot.enabled" color="primary">
+            Enable DoT Server
+          </mat-slide-toggle>
+        </div>
+        <p class="info-text">
+          <mat-icon>info</mat-icon>
+          Uses the shared TLS certificate configured above
+        </p>
+        <div class="config-row">
+          <mat-form-field appearance="outline">
+            <mat-label>Port</mat-label>
+            <input matInput type="number" [(ngModel)]="portsConfig.dot.port" min="1" max="65535">
+            <mat-hint>Default: 853</mat-hint>
+          </mat-form-field>
+          <mat-form-field appearance="outline">
+            <mat-label>Bind Address</mat-label>
+            <input matInput [(ngModel)]="portsConfig.dot.address" placeholder="0.0.0.0">
+            <mat-hint>Leave empty to bind to all interfaces</mat-hint>
+          </mat-form-field>
+        </div>
+      </mat-card-content>
+      <mat-card-actions align="end">
+        <button mat-raised-button color="primary" (click)="saveDoT()" [disabled]="saving['dot']">
+          @if (saving['dot']) {
+            <mat-spinner diameter="20"></mat-spinner>
+          } @else {
+            Save DoT Settings
+          }
+        </button>
+      </mat-card-actions>
+    </mat-card>
+
+    <!-- DoH Configuration -->
+    <mat-card class="config-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar>https</mat-icon>
+        <mat-card-title>DNS over HTTPS (DoH)</mat-card-title>
+        <mat-card-subtitle>HTTPS-based DNS (RFC 8484)</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="config-row">
+          <mat-slide-toggle [(ngModel)]="portsConfig.doh.enabled" color="primary">
+            Enable DoH Server
+          </mat-slide-toggle>
+        </div>
+        <p class="info-text">
+          <mat-icon>info</mat-icon>
+          Uses the shared TLS certificate configured above
+        </p>
+        <div class="config-row">
+          <mat-slide-toggle [(ngModel)]="portsConfig.doh.standalone" color="primary">
+            Standalone Mode (separate port)
+          </mat-slide-toggle>
+          <mat-icon matTooltip="When disabled, DoH runs on the Web UI port using the /dns-query path">help_outline</mat-icon>
+        </div>
+        @if (portsConfig.doh.standalone) {
+          <div class="config-row">
+            <mat-form-field appearance="outline">
+              <mat-label>Port</mat-label>
+              <input matInput type="number" [(ngModel)]="portsConfig.doh.port" min="1" max="65535">
+              <mat-hint>Default: 443 or 8443</mat-hint>
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label>Bind Address</mat-label>
+              <input matInput [(ngModel)]="portsConfig.doh.address" placeholder="0.0.0.0">
+              <mat-hint>Leave empty to bind to all interfaces</mat-hint>
+            </mat-form-field>
+          </div>
+        } @else {
+          <p class="info-text secondary">
+            DoH will be available at <code>https://[web-address]:{{ portsConfig.web.port }}{{ portsConfig.doh.path }}</code>
+          </p>
+        }
+        <div class="config-row">
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Query Path</mat-label>
+            <input matInput [(ngModel)]="portsConfig.doh.path" placeholder="/dns-query">
+            <mat-hint>URL path for DNS queries (default: /dns-query)</mat-hint>
+          </mat-form-field>
+        </div>
+      </mat-card-content>
+      <mat-card-actions align="end">
+        <button mat-raised-button color="primary" (click)="saveDoH()" [disabled]="saving['doh']">
+          @if (saving['doh']) {
+            <mat-spinner diameter="20"></mat-spinner>
+          } @else {
+            Save DoH Settings
+          }
+        </button>
+      </mat-card-actions>
+    </mat-card>
+
+    <!-- Web UI Configuration -->
+    <mat-card class="config-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar>web</mat-icon>
+        <mat-card-title>Web Admin UI</mat-card-title>
+        <mat-card-subtitle>HTTP/HTTPS server for this admin interface</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="config-row">
+          <mat-slide-toggle [(ngModel)]="portsConfig.web.enabled" color="primary">
+            Enable Web UI
+          </mat-slide-toggle>
+        </div>
+        <div class="config-row">
+          <mat-slide-toggle [(ngModel)]="portsConfig.web.tls" color="primary">
+            Enable HTTPS
+          </mat-slide-toggle>
+          <mat-icon matTooltip="Uses the shared TLS certificate configured above">help_outline</mat-icon>
+        </div>
+        <div class="config-row warning-row">
+          <mat-icon color="warn">warning</mat-icon>
+          <span>Changing port or TLS settings will require you to navigate to the new address</span>
+        </div>
+        <div class="config-row">
+          <mat-form-field appearance="outline">
+            <mat-label>Port</mat-label>
+            <input matInput type="number" [(ngModel)]="portsConfig.web.port" min="1" max="65535">
+            <mat-hint>Default: 8080 (HTTP) or 8443 (HTTPS)</mat-hint>
+          </mat-form-field>
+          <mat-form-field appearance="outline">
+            <mat-label>Bind Address</mat-label>
+            <input matInput [(ngModel)]="portsConfig.web.address" placeholder="0.0.0.0">
+            <mat-hint>Leave empty to bind to all interfaces</mat-hint>
+          </mat-form-field>
+        </div>
+        @if (!portsConfig.doh.standalone && portsConfig.doh.enabled) {
+          <p class="info-text secondary">
+            <mat-icon>info</mat-icon>
+            DoH is also served on this port at <code>{{ portsConfig.doh.path }}</code>
+          </p>
+        }
+      </mat-card-content>
+      <mat-card-actions align="end">
+        <button mat-raised-button color="primary" (click)="saveWeb()" [disabled]="saving['web']">
+          @if (saving['web']) {
+            <mat-spinner diameter="20"></mat-spinner>
+          } @else {
+            Save Web UI Settings
+          }
+        </button>
+      </mat-card-actions>
+    </mat-card>
+  }
+</div>

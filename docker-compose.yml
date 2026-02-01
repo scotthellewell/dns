@@ -1,0 +1,47 @@
+services:
+  dns-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dns-server
+    restart: unless-stopped
+    ports:
+      # DNS ports
+      - "53:53/udp"
+      - "53:53/tcp"
+      # DNS over TLS
+      - "853:853/tcp"
+      # Web UI / API
+      - "8080:8080/tcp"
+      # HTTPS Web UI
+      - "8443:8443/tcp"
+    volumes:
+      # Mount config directory
+      - ./data:/app/data
+      # Mount cache directory
+      - dns-cache:/app/cache
+      # Mount keys directory
+      - ./keys:/app/keys
+    environment:
+      - TZ=UTC
+    # Required for binding to port 53
+    cap_add:
+      - NET_BIND_SERVICE
+    networks:
+      - dns-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+networks:
+  dns-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+volumes:
+  dns-cache:

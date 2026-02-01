@@ -1,0 +1,138 @@
+<div class="page-container">
+  <div class="page-header">
+    <h1>Secondary Zones</h1>
+    <p class="subtitle">Configure zones to replicate from primary DNS servers</p>
+  </div>
+
+  <mat-card class="content-card">
+    <div class="card-header">
+      <h2>Configured Secondary Zones</h2>
+      <button mat-raised-button color="primary" (click)="openAddModal()">
+        <mat-icon>add</mat-icon>
+        Add Secondary Zone
+      </button>
+    </div>
+
+    @if (secondaryZones.length === 0) {
+      <div class="empty-state">
+        <mat-icon>sync_disabled</mat-icon>
+        <h3>No Secondary Zones Configured</h3>
+        <p>Add a secondary zone to replicate DNS data from a primary server</p>
+      </div>
+    } @else {
+      <table mat-table [dataSource]="secondaryZones" class="zones-table">
+        <ng-container matColumnDef="zone">
+          <th mat-header-cell *matHeaderCellDef>Zone</th>
+          <td mat-cell *matCellDef="let zone">{{ zone.zone }}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="primary">
+          <th mat-header-cell *matHeaderCellDef>Primary Server</th>
+          <td mat-cell *matCellDef="let zone">{{ zone.primary }}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="refresh_interval">
+          <th mat-header-cell *matHeaderCellDef>Refresh Interval</th>
+          <td mat-cell *matCellDef="let zone">{{ zone.refresh_interval }}s</td>
+        </ng-container>
+
+        <ng-container matColumnDef="tsig_key">
+          <th mat-header-cell *matHeaderCellDef>TSIG Key</th>
+          <td mat-cell *matCellDef="let zone">
+            @if (zone.tsig_key) {
+              <span class="badge badge-success">Configured</span>
+            } @else {
+              <span class="badge badge-muted">None</span>
+            }
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="actions">
+          <th mat-header-cell *matHeaderCellDef>Actions</th>
+          <td mat-cell *matCellDef="let zone">
+            <button mat-icon-button color="primary" (click)="triggerTransfer(zone)" title="Trigger Transfer">
+              <mat-icon>sync</mat-icon>
+            </button>
+            <button mat-icon-button (click)="openEditModal(zone)" title="Edit">
+              <mat-icon>edit</mat-icon>
+            </button>
+            <button mat-icon-button color="warn" (click)="deleteZone(zone)" title="Delete">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </td>
+        </ng-container>
+
+        <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+        <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+      </table>
+    }
+  </mat-card>
+</div>
+
+<!-- Modal -->
+@if (showModal) {
+  <div class="modal-overlay" (click)="closeModal()">
+    <div class="modal-content" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h2>{{ editingZone ? 'Edit' : 'Add' }} Secondary Zone</h2>
+        <button mat-icon-button (click)="closeModal()">
+          <mat-icon>close</mat-icon>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Zone Name</mat-label>
+          <input matInput [(ngModel)]="formData.zone" placeholder="example.com" [disabled]="!!editingZone">
+          <mat-hint>The zone to replicate (e.g., example.com)</mat-hint>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Primary Server</mat-label>
+          <input matInput [(ngModel)]="formData.primary" placeholder="192.168.1.1:53">
+          <mat-hint>Address of the primary DNS server (IP:port)</mat-hint>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Refresh Interval (seconds)</mat-label>
+          <input matInput type="number" [(ngModel)]="formData.refresh_interval">
+          <mat-hint>How often to check for zone updates</mat-hint>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>TSIG Key Name (optional)</mat-label>
+          <input matInput [(ngModel)]="formData.tsig_key" placeholder="transfer-key">
+          <mat-hint>Name of the TSIG key for authenticated transfers</mat-hint>
+        </mat-form-field>
+
+        <!-- DNSSEC Key Sharing Section -->
+        <div class="dnssec-key-section">
+          <h3>DNSSEC Key Sharing</h3>
+          <p class="section-description">
+            For reverse zones with dynamic records (like IPv6 PTR), import DNSSEC keys from the primary server
+            to sign records locally on this secondary.
+          </p>
+
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>DNSSEC Key URL (optional)</mat-label>
+            <input matInput [(ngModel)]="formData.dnssec_key_url" placeholder="https://primary.example.com/api/dnssec/keys/zone">
+            <mat-hint>URL to fetch DNSSEC keys from primary server</mat-hint>
+          </mat-form-field>
+
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>DNSSEC Key Token (optional)</mat-label>
+            <input matInput [(ngModel)]="formData.dnssec_key_token" type="password" placeholder="Token from primary server">
+            <mat-hint>Authentication token for fetching keys</mat-hint>
+          </mat-form-field>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button mat-button (click)="closeModal()">Cancel</button>
+        <button mat-raised-button color="primary" (click)="saveZone()">
+          {{ editingZone ? 'Update' : 'Add' }} Zone
+        </button>
+      </div>
+    </div>
+  </div>
+}

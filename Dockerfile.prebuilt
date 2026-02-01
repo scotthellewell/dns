@@ -1,0 +1,47 @@
+# Dockerfile for pre-built binaries
+# Use this when cross-compiling Go binary on macOS
+FROM alpine:3.21
+
+# Install ca-certificates for HTTPS and tzdata for timezones
+RUN apk add --no-cache ca-certificates tzdata
+
+# Create non-root user
+RUN adduser -D -u 1000 dnsuser
+
+# Create directories for data and web UI
+RUN mkdir -p /app/data /app/web/dist/dns-admin/browser && \
+    chown -R dnsuser:dnsuser /app
+
+WORKDIR /app
+
+# Copy the pre-built binary (use dns-server-amd64 or dns-server-arm64)
+ARG BINARY=dns-server-amd64
+COPY ${BINARY} /app/dns-server
+
+# Copy the pre-built web UI
+COPY web/dist/dns-admin/browser /app/web/dist/dns-admin/browser
+
+# Set ownership and permissions
+RUN chmod +x /app/dns-server && chown -R dnsuser:dnsuser /app
+
+# Expose ports
+# DNS ports
+EXPOSE 53/udp
+EXPOSE 53/tcp
+# DNS over TLS
+EXPOSE 853/tcp
+# Web UI (HTTPS)
+EXPOSE 443/tcp
+# Web UI (HTTP for ACME/redirects)
+EXPOSE 80/tcp
+
+# Volume mount for persistent data (bbolt database)
+VOLUME ["/app/data"]
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider --no-check-certificate https://localhost:443/api/health || exit 1
+
+# Default command
+ENTRYPOINT ["/app/dns-server"]
+CMD ["-data", "/app/data"]

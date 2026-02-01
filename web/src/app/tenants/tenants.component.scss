@@ -1,0 +1,99 @@
+.tenants-container {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+
+  mat-card {
+    mat-card-header {
+      margin-bottom: 16px;
+
+      mat-card-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+
+        mat-icon {
+          color: #60a5fa;
+        }
+      }
+    }
+
+    mat-card-content {
+      .toolbar {
+        margin-bottom: 16px;
+        display: flex;
+        gap: 8px;
+
+        button mat-icon {
+          margin-right: 4px;
+        }
+      }
+
+      .loading {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 48px;
+        color: #94a3b8;
+
+        span {
+          margin-top: 16px;
+        }
+      }
+
+      .empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 48px;
+        color: #94a3b8;
+
+        mat-icon {
+          font-size: 64px;
+          width: 64px;
+          height: 64px;
+          opacity: 0.5;
+        }
+
+        p {
+          margin: 16px 0;
+          font-size: 16px;
+        }
+      }
+
+      .tenants-table {
+        width: 100%;
+
+        code {
+          background: rgba(255, 255, 255, 0.1);
+          color: #e2e8f0;
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-size: 12px;
+        }
+
+        th.mat-header-cell {
+          font-weight: 600;
+          color: #e2e8f0;
+        }
+
+        td.mat-cell {
+          padding: 8px 16px;
+          color: #e2e8f0;
+        }
+
+        tr.mat-row:hover {
+          background: rgba(255, 255, 255, 0.05);
+        }
+      }
+    }
+  }
+}
+
+:host ::ng-deep {
+  .mat-mdc-chip.mat-mdc-standard-chip {
+    --mdc-chip-label-text-size: 12px;
+  }
+}

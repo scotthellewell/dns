@@ -1,0 +1,109 @@
+<div class="api-keys-container">
+  <div class="section-header">
+    <h2>API Keys</h2>
+    <p class="section-desc">Manage API keys for programmatic access</p>
+  </div>
+
+  <!-- New Key Alert -->
+  @if (newKeyValue()) {
+    <div class="new-key-alert">
+      <mat-icon>warning</mat-icon>
+      <div class="alert-content">
+        <strong>New API Key Created</strong>
+        <p>Make sure to copy your API key now. You won't be able to see it again!</p>
+        <div class="key-display">
+          <code>{{newKeyValue()}}</code>
+          <button mat-icon-button (click)="copyKey(newKeyValue()!)" matTooltip="Copy to clipboard">
+            <mat-icon>content_copy</mat-icon>
+          </button>
+        </div>
+        <button mat-button color="primary" (click)="dismissNewKey()">
+          I've copied the key
+        </button>
+      </div>
+    </div>
+  }
+
+  <!-- Create New Key -->
+  <mat-card class="create-key-card">
+    <mat-card-content>
+      <div class="create-key-form">
+        <mat-form-field appearance="outline" class="key-name-field">
+          <mat-label>API Key Name</mat-label>
+          <input matInput [(ngModel)]="newKeyName" placeholder="e.g., CI/CD Pipeline">
+          <mat-hint>A descriptive name to identify this key</mat-hint>
+        </mat-form-field>
+        <button mat-raised-button color="primary" (click)="createApiKey()" [disabled]="creating()">
+          @if (creating()) {
+            <mat-spinner diameter="18"></mat-spinner>
+          } @else {
+            <ng-container>
+              <mat-icon>add</mat-icon>
+              Create Key
+            </ng-container>
+          }
+        </button>
+      </div>
+    </mat-card-content>
+  </mat-card>
+
+  <!-- Keys Table -->
+  @if (loading()) {
+    <div class="loading-container">
+      <mat-spinner diameter="40"></mat-spinner>
+    </div>
+  } @else if (apiKeys().length === 0) {
+    <div class="empty-state">
+      <mat-icon>vpn_key</mat-icon>
+      <h3>No API Keys</h3>
+      <p>Create an API key to enable programmatic access to the DNS server.</p>
+    </div>
+  } @else {
+    <mat-card class="keys-table-card">
+      <table mat-table [dataSource]="apiKeys()" class="keys-table">
+        <ng-container matColumnDef="name">
+          <th mat-header-cell *matHeaderCellDef>Name</th>
+          <td mat-cell *matCellDef="let key">{{key.name}}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="prefix">
+          <th mat-header-cell *matHeaderCellDef>Key Prefix</th>
+          <td mat-cell *matCellDef="let key">
+            <code class="key-prefix">{{key.prefix}}...</code>
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="created_at">
+          <th mat-header-cell *matHeaderCellDef>Created</th>
+          <td mat-cell *matCellDef="let key">{{formatDate(key.created_at)}}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="last_used">
+          <th mat-header-cell *matHeaderCellDef>Last Used</th>
+          <td mat-cell *matCellDef="let key">{{formatDate(key.last_used)}}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="actions">
+          <th mat-header-cell *matHeaderCellDef>Actions</th>
+          <td mat-cell *matCellDef="let key">
+            <button mat-icon-button color="warn" (click)="revokeKey(key.id)" matTooltip="Revoke Key">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </td>
+        </ng-container>
+
+        <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+        <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+      </table>
+    </mat-card>
+  }
+
+  <div class="info-box">
+    <mat-icon>info</mat-icon>
+    <div class="info-content">
+      <strong>Using API Keys</strong>
+      <p>Include your API key in the <code>X-API-Key</code> header or as a <code>Bearer</code> token in the <code>Authorization</code> header.</p>
+      <code class="example">curl -H "X-API-Key: your-api-key" http://localhost:8080/api/zones</code>
+    </div>
+  </div>
+</div>

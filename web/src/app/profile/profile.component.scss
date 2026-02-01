@@ -1,0 +1,172 @@
+.page-container {
+  padding: 24px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.page-header {
+  margin-bottom: 24px;
+
+  h1 {
+    margin: 0;
+    font-weight: 500;
+  }
+
+  .subtitle {
+    margin: 8px 0 0;
+    color: rgba(0, 0, 0, 0.6);
+  }
+}
+
+.loading-container {
+  display: flex;
+  justify-content: center;
+  padding: 48px;
+}
+
+.content-card {
+  margin-bottom: 24px;
+}
+
+.card-section {
+  padding: 16px;
+}
+
+.section-header {
+  margin-bottom: 16px;
+
+  h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 500;
+  }
+
+  .section-desc {
+    margin: 4px 0 0;
+    font-size: 14px;
+    color: rgba(0, 0, 0, 0.6);
+  }
+}
+
+.account-info {
+  .info-row {
+    display: flex;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    .label {
+      width: 120px;
+      color: rgba(0, 0, 0, 0.6);
+    }
+
+    .value {
+      flex: 1;
+      font-weight: 500;
+    }
+
+    .role-badge {
+      text-transform: capitalize;
+    }
+  }
+}
+
+.password-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 400px;
+
+  button {
+    align-self: flex-start;
+    margin-top: 8px;
+  }
+}
+
+.full-width {
+  width: 100%;
+}
+
+.passkey-register {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+
+  .passkey-name-field {
+    flex: 1;
+  }
+
+  button {
+    margin-top: 4px;
+  }
+}
+
+.credentials-table {
+  width: 100%;
+}
+
+.empty-passkeys {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 8px;
+
+  mat-icon {
+    font-size: 48px;
+    width: 48px;
+    height: 48px;
+    color: rgba(0, 0, 0, 0.2);
+    margin-bottom: 12px;
+  }
+
+  p {
+    margin: 0;
+    color: rgba(0, 0, 0, 0.5);
+    max-width: 300px;
+  }
+}
+
+.logout-card {
+  .card-section {
+    display: flex;
+    justify-content: center;
+  }
+}
+
+// Dark theme
+@media (prefers-color-scheme: dark) {
+  .page-header .subtitle {
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .section-header .section-desc {
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .account-info .info-row {
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+
+    .label {
+      color: rgba(255, 255, 255, 0.6);
+    }
+  }
+
+  .empty-passkeys {
+    background: rgba(255, 255, 255, 0.05);
+
+    mat-icon {
+      color: rgba(255, 255, 255, 0.2);
+    }
+
+    p {
+      color: rgba(255, 255, 255, 0.5);
+    }
+  }
+}

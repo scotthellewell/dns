@@ -2,22 +2,41 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"sort"
 	"strings"
 )
 
-// ZoneConfig defines configuration for an IPv4 or IPv6 zone
-// This handles both forward DNS pattern generation and reverse DNS
+// ZoneType represents the type of DNS zone
+type ZoneType string
+
+const (
+	// ZoneTypeForward is a forward lookup zone (name to IP)
+	ZoneTypeForward ZoneType = "forward"
+	// ZoneTypeReverse is a reverse lookup zone (IP to name, PTR records)
+	ZoneTypeReverse ZoneType = "reverse"
+)
+
+// ZoneConfig defines configuration for a DNS zone
+// Supports both forward zones (e.g., "example.com") and reverse zones (e.g., "1.168.192.in-addr.arpa")
 type ZoneConfig struct {
-	// Subnet in CIDR notation (e.g., "2602:FF29::/40" or "23.148.184.0/24")
-	Subnet string `json:"subnet"`
-	// Domain suffix for generated hostnames (e.g., "ip6.example.com")
-	Domain string `json:"domain"`
-	// StripPrefix - if true, strip the subnet prefix from generated names
-	// For IPv6: 2602:ff29:0001::1 with /40 becomes 01-0001-0000-0000-0000-0001
-	// For IPv4: 23.148.184.5 with /24 becomes 5
+	// TenantID specifies which tenant owns this zone (empty = main tenant for backward compatibility)
+	TenantID string `json:"tenant_id,omitempty"`
+	// Name is the zone name (e.g., "example.com" or "1.168.192.in-addr.arpa")
+	// For reverse zones, this can be auto-generated from Subnet if not specified
+	Name string `json:"name,omitempty"`
+	// Type is the zone type: "forward" or "reverse" (default: "forward" if no subnet, "reverse" if subnet specified)
+	Type ZoneType `json:"type,omitempty"`
+	// Subnet in CIDR notation - only for reverse zones (e.g., "192.168.1.0/24" or "2602:FF29::/40")
+	// For reverse zones, this defines the IP range and enables auto-PTR generation
+	Subnet string `json:"subnet,omitempty"`
+	// Domain suffix for generated hostnames in reverse zones (e.g., "home.local")
+	// For forward zones, this is ignored (use Name instead)
+	Domain string `json:"domain,omitempty"`
+	// StripPrefix - if true, strip the subnet prefix from generated PTR names
+	// Only applies to reverse zones with pattern generation
 	StripPrefix bool `json:"strip_prefix"`
 	// TTL for DNS records in seconds
 	TTL uint32 `json:"ttl"`
@@ -25,9 +44,11 @@ type ZoneConfig struct {
 
 // ARecord defines an A (IPv4) record
 type ARecord struct {
-	Name string `json:"name"` // Hostname (e.g., "gateway.example.com")
-	IP   string `json:"ip"`   // IPv4 address
-	TTL  uint32 `json:"ttl"`  // TTL in seconds
+	TenantID string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name     string `json:"name"`                // Hostname (relative to zone, or FQDN for backward compat)
+	IP       string `json:"ip"`                  // IPv4 address
+	TTL      uint32 `json:"ttl"`                 // TTL in seconds
 	// PTR controls auto-creation of PTR record. Default is true if IP is in a configured zone.
 	// Set to false to disable PTR creation.
 	PTR *bool `json:"ptr,omitempty"`
@@ -35,9 +56,11 @@ type ARecord struct {
 
 // AAAARecord defines an AAAA (IPv6) record
 type AAAARecord struct {
-	Name string `json:"name"` // Hostname (e.g., "gateway.example.com")
-	IP   string `json:"ip"`   // IPv6 address
-	TTL  uint32 `json:"ttl"`  // TTL in seconds
+	TenantID string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name     string `json:"name"`                // Hostname (relative to zone, or FQDN for backward compat)
+	IP       string `json:"ip"`                  // IPv6 address
+	TTL      uint32 `json:"ttl"`                 // TTL in seconds
 	// PTR controls auto-creation of PTR record. Default is true if IP is in a configured zone.
 	// Set to false to disable PTR creation.
 	PTR *bool `json:"ptr,omitempty"`
@@ -45,69 +68,85 @@ type AAAARecord struct {
 
 // CNAMERecord defines a CNAME record
 type CNAMERecord struct {
-	Name   string `json:"name"`   // Hostname (e.g., "www.example.com")
-	Target string `json:"target"` // Target hostname (e.g., "example.com")
-	TTL    uint32 `json:"ttl"`    // TTL in seconds
+	TenantID string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name     string `json:"name"`                // Hostname (relative to zone, or FQDN for backward compat)
+	Target   string `json:"target"`              // Target hostname (e.g., "example.com")
+	TTL      uint32 `json:"ttl"`                 // TTL in seconds
 }
 
 // MXRecord defines an MX record
 type MXRecord struct {
-	Name     string `json:"name"`     // Domain (e.g., "example.com")
-	Priority uint16 `json:"priority"` // MX priority
-	Target   string `json:"target"`   // Mail server hostname
-	TTL      uint32 `json:"ttl"`      // TTL in seconds
+	TenantID string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name     string `json:"name"`                // Domain (relative to zone, or FQDN for backward compat)
+	Priority uint16 `json:"priority"`            // MX priority
+	Target   string `json:"target"`              // Mail server hostname
+	TTL      uint32 `json:"ttl"`                 // TTL in seconds
 }
 
 // TXTRecord defines a TXT record
 type TXTRecord struct {
-	Name   string   `json:"name"`   // Hostname (e.g., "example.com")
-	Values []string `json:"values"` // TXT values
-	TTL    uint32   `json:"ttl"`    // TTL in seconds
+	TenantID string   `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string   `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name     string   `json:"name"`                // Hostname (relative to zone, or FQDN for backward compat)
+	Values   []string `json:"values"`              // TXT values
+	TTL      uint32   `json:"ttl"`                 // TTL in seconds
 }
 
 // NSRecord defines an NS record
 type NSRecord struct {
-	Name   string `json:"name"`   // Zone (e.g., "example.com")
-	Target string `json:"target"` // Nameserver hostname
-	TTL    uint32 `json:"ttl"`    // TTL in seconds
+	TenantID string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name     string `json:"name"`                // Zone apex or subdomain (relative to zone, or FQDN for backward compat)
+	Target   string `json:"target"`              // Nameserver hostname
+	TTL      uint32 `json:"ttl"`                 // TTL in seconds
 }
 
 // PTRRecord defines a PTR record explicitly
 type PTRRecord struct {
-	IP       string `json:"ip"`       // IP address
-	Hostname string `json:"hostname"` // Hostname to return
-	TTL      uint32 `json:"ttl"`      // TTL in seconds
+	TenantID string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string `json:"zone,omitempty"`      // Zone name this record belongs to (reverse zone)
+	IP       string `json:"ip"`                  // IP address
+	Hostname string `json:"hostname"`            // Hostname to return
+	TTL      uint32 `json:"ttl"`                 // TTL in seconds
 }
 
 // SRVRecord defines an SRV record for service discovery
 type SRVRecord struct {
-	Name     string `json:"name"`     // Service name (e.g., "_sip._tcp.example.com")
-	Priority uint16 `json:"priority"` // Priority (lower = preferred)
-	Weight   uint16 `json:"weight"`   // Weight for load balancing
-	Port     uint16 `json:"port"`     // Port number
-	Target   string `json:"target"`   // Target hostname
-	TTL      uint32 `json:"ttl"`      // TTL in seconds
+	TenantID string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name     string `json:"name"`                // Service name (e.g., "_sip._tcp" relative to zone)
+	Priority uint16 `json:"priority"`            // Priority (lower = preferred)
+	Weight   uint16 `json:"weight"`              // Weight for load balancing
+	Port     uint16 `json:"port"`                // Port number
+	Target   string `json:"target"`              // Target hostname
+	TTL      uint32 `json:"ttl"`                 // TTL in seconds
 }
 
 // SOARecord defines an SOA (Start of Authority) record
 type SOARecord struct {
-	Name    string `json:"name"`    // Zone name (e.g., "example.com")
-	MName   string `json:"mname"`   // Primary nameserver
-	RName   string `json:"rname"`   // Responsible person email (use . instead of @)
-	Serial  uint32 `json:"serial"`  // Serial number (typically YYYYMMDDNN)
-	Refresh uint32 `json:"refresh"` // Refresh interval in seconds
-	Retry   uint32 `json:"retry"`   // Retry interval in seconds
-	Expire  uint32 `json:"expire"`  // Expire time in seconds
-	Minimum uint32 `json:"minimum"` // Minimum TTL (negative cache TTL)
-	TTL     uint32 `json:"ttl"`     // TTL in seconds
+	TenantID string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name     string `json:"name"`                // Zone name (should match zone, or @ for apex)
+	MName    string `json:"mname"`               // Primary nameserver
+	RName    string `json:"rname"`               // Responsible person email (use . instead of @)
+	Serial   uint32 `json:"serial"`              // Serial number (typically YYYYMMDDNN)
+	Refresh  uint32 `json:"refresh"`             // Refresh interval in seconds
+	Retry    uint32 `json:"retry"`               // Retry interval in seconds
+	Expire   uint32 `json:"expire"`              // Expire time in seconds
+	Minimum  uint32 `json:"minimum"`             // Minimum TTL (negative cache TTL)
+	TTL      uint32 `json:"ttl"`                 // TTL in seconds
 }
 
 // ALIASRecord defines an ALIAS/ANAME record (CNAME-like for apex domains)
 // Returns the A/AAAA records of the target instead of a CNAME
 type ALIASRecord struct {
-	Name   string `json:"name"`   // Hostname (typically apex like "example.com")
-	Target string `json:"target"` // Target to resolve (e.g., "cdn.example.net")
-	TTL    uint32 `json:"ttl"`    // TTL in seconds
+	TenantID string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name     string `json:"name"`                // Hostname (relative to zone, or FQDN for backward compat)
+	Target   string `json:"target"`              // Target to resolve (e.g., "cdn.example.net")
+	TTL      uint32 `json:"ttl"`                 // TTL in seconds
 	// PTR controls auto-creation of PTR record for resolved IPs. Default is true if IP is in a configured zone.
 	// Set to false to disable PTR creation.
 	PTR *bool `json:"ptr,omitempty"`
@@ -115,72 +154,86 @@ type ALIASRecord struct {
 
 // CAARecord defines a CAA (Certificate Authority Authorization) record
 type CAARecord struct {
-	Name  string `json:"name"`  // Hostname
-	Flag  uint8  `json:"flag"`  // Critical flag (0 or 128)
-	Tag   string `json:"tag"`   // Tag: "issue", "issuewild", or "iodef"
-	Value string `json:"value"` // CA domain or URL
-	TTL   uint32 `json:"ttl"`   // TTL in seconds
+	TenantID string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name     string `json:"name"`                // Hostname (relative to zone, or FQDN for backward compat)
+	Flag     uint8  `json:"flag"`                // Critical flag (0 or 128)
+	Tag      string `json:"tag"`                 // Tag: "issue", "issuewild", or "iodef"
+	Value    string `json:"value"`               // CA domain or URL
+	TTL      uint32 `json:"ttl"`                 // TTL in seconds
 }
 
 // SSHFPRecord defines an SSHFP (SSH Fingerprint) record
 type SSHFPRecord struct {
-	Name        string `json:"name"`        // Hostname
-	Algorithm   uint8  `json:"algorithm"`   // 1=RSA, 2=DSA, 3=ECDSA, 4=Ed25519
-	Type        uint8  `json:"type"`        // 1=SHA-1, 2=SHA-256
-	Fingerprint string `json:"fingerprint"` // Hex-encoded fingerprint
-	TTL         uint32 `json:"ttl"`         // TTL in seconds
+	TenantID    string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone        string `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name        string `json:"name"`                // Hostname (relative to zone, or FQDN for backward compat)
+	Algorithm   uint8  `json:"algorithm"`           // 1=RSA, 2=DSA, 3=ECDSA, 4=Ed25519
+	Type        uint8  `json:"type"`                // 1=SHA-1, 2=SHA-256
+	Fingerprint string `json:"fingerprint"`         // Hex-encoded fingerprint
+	TTL         uint32 `json:"ttl"`                 // TTL in seconds
 }
 
 // TLSARecord defines a TLSA (DANE TLS Certificate) record
 type TLSARecord struct {
-	Name         string `json:"name"`          // Name (e.g., "_443._tcp.example.com")
-	Usage        uint8  `json:"usage"`         // 0=CA, 1=Service, 2=Trust anchor, 3=Domain-issued
-	Selector     uint8  `json:"selector"`      // 0=Full cert, 1=SubjectPublicKeyInfo
-	MatchingType uint8  `json:"matching_type"` // 0=Exact, 1=SHA-256, 2=SHA-512
-	Certificate  string `json:"certificate"`   // Hex-encoded cert data
-	TTL          uint32 `json:"ttl"`           // TTL in seconds
+	TenantID     string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone         string `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name         string `json:"name"`                // Name (e.g., "_443._tcp" relative to zone)
+	Usage        uint8  `json:"usage"`               // 0=CA, 1=Service, 2=Trust anchor, 3=Domain-issued
+	Selector     uint8  `json:"selector"`            // 0=Full cert, 1=SubjectPublicKeyInfo
+	MatchingType uint8  `json:"matching_type"`       // 0=Exact, 1=SHA-256, 2=SHA-512
+	Certificate  string `json:"certificate"`         // Hex-encoded cert data
+	TTL          uint32 `json:"ttl"`                 // TTL in seconds
 }
 
 // NAPTRRecord defines a NAPTR (Naming Authority Pointer) record
 type NAPTRRecord struct {
-	Name        string `json:"name"`        // Domain name
-	Order       uint16 `json:"order"`       // Order (lower = first)
-	Preference  uint16 `json:"preference"`  // Preference (lower = preferred)
-	Flags       string `json:"flags"`       // Flags (e.g., "s", "a", "u")
-	Service     string `json:"service"`     // Service (e.g., "SIP+D2U")
-	Regexp      string `json:"regexp"`      // Regular expression
-	Replacement string `json:"replacement"` // Replacement domain
-	TTL         uint32 `json:"ttl"`         // TTL in seconds
+	TenantID    string `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone        string `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name        string `json:"name"`                // Domain name (relative to zone, or FQDN for backward compat)
+	Order       uint16 `json:"order"`               // Order (lower = first)
+	Preference  uint16 `json:"preference"`          // Preference (lower = preferred)
+	Flags       string `json:"flags"`               // Flags (e.g., "s", "a", "u")
+	Service     string `json:"service"`             // Service (e.g., "SIP+D2U")
+	Regexp      string `json:"regexp"`              // Regular expression
+	Replacement string `json:"replacement"`         // Replacement domain
+	TTL         uint32 `json:"ttl"`                 // TTL in seconds
 }
 
 // SVCBRecord defines an SVCB (Service Binding) record
 type SVCBRecord struct {
-	Name     string            `json:"name"`     // Name (e.g., "_dns.example.com")
-	Priority uint16            `json:"priority"` // Priority (0 = alias mode)
-	Target   string            `json:"target"`   // Target name
-	Params   map[string]string `json:"params"`   // Parameters (alpn, port, ipv4hint, ipv6hint, etc.)
-	TTL      uint32            `json:"ttl"`      // TTL in seconds
+	TenantID string            `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string            `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name     string            `json:"name"`                // Name (e.g., "_dns" relative to zone)
+	Priority uint16            `json:"priority"`            // Priority (0 = alias mode)
+	Target   string            `json:"target"`              // Target name
+	Params   map[string]string `json:"params"`              // Parameters (alpn, port, ipv4hint, ipv6hint, etc.)
+	TTL      uint32            `json:"ttl"`                 // TTL in seconds
 }
 
 // HTTPSRecord defines an HTTPS (HTTPS-specific SVCB) record
 type HTTPSRecord struct {
-	Name     string            `json:"name"`     // Name (e.g., "example.com")
-	Priority uint16            `json:"priority"` // Priority (0 = alias mode)
-	Target   string            `json:"target"`   // Target name (. for same name)
-	Params   map[string]string `json:"params"`   // Parameters (alpn, port, ipv4hint, ipv6hint, ech, etc.)
-	TTL      uint32            `json:"ttl"`      // TTL in seconds
+	TenantID string            `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone     string            `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name     string            `json:"name"`                // Name (relative to zone, or FQDN for backward compat)
+	Priority uint16            `json:"priority"`            // Priority (0 = alias mode)
+	Target   string            `json:"target"`              // Target name (. for same name)
+	Params   map[string]string `json:"params"`              // Parameters (alpn, port, ipv4hint, ipv6hint, ech, etc.)
+	TTL      uint32            `json:"ttl"`                 // TTL in seconds
 }
 
 // LOCRecord defines a LOC (Location) record
 type LOCRecord struct {
-	Name      string  `json:"name"`      // Hostname
-	Latitude  float64 `json:"latitude"`  // Latitude in decimal degrees
-	Longitude float64 `json:"longitude"` // Longitude in decimal degrees
-	Altitude  float64 `json:"altitude"`  // Altitude in meters
-	Size      float64 `json:"size"`      // Size/diameter in meters
-	HorizPre  float64 `json:"horiz_pre"` // Horizontal precision in meters
-	VertPre   float64 `json:"vert_pre"`  // Vertical precision in meters
-	TTL       uint32  `json:"ttl"`       // TTL in seconds
+	TenantID  string  `json:"tenant_id,omitempty"` // Tenant ID (empty = main tenant)
+	Zone      string  `json:"zone,omitempty"`      // Zone name this record belongs to
+	Name      string  `json:"name"`                // Hostname (relative to zone, or FQDN for backward compat)
+	Latitude  float64 `json:"latitude"`            // Latitude in decimal degrees
+	Longitude float64 `json:"longitude"`           // Longitude in decimal degrees
+	Altitude  float64 `json:"altitude"`            // Altitude in meters
+	Size      float64 `json:"size"`                // Size/diameter in meters
+	HorizPre  float64 `json:"horiz_pre"`           // Horizontal precision in meters
+	VertPre   float64 `json:"vert_pre"`            // Vertical precision in meters
+	TTL       uint32  `json:"ttl"`                 // TTL in seconds
 }
 
 // Records holds all static record definitions
@@ -297,6 +350,8 @@ type TransferConfig struct {
 
 // SecondaryZoneConfig defines a zone to be pulled from a primary server
 type SecondaryZoneConfig struct {
+	// TenantID specifies which tenant owns this secondary zone (empty = main tenant for backward compatibility)
+	TenantID string `json:"tenant_id,omitempty"`
 	// Zone is the zone name to transfer (e.g., "example.com")
 	Zone string `json:"zone"`
 	// Primaries are the primary server addresses to pull from (IP:port)
@@ -307,6 +362,36 @@ type SecondaryZoneConfig struct {
 	RefreshInterval uint32 `json:"refresh_interval"`
 	// RetryInterval overrides the SOA retry interval (seconds, optional)
 	RetryInterval uint32 `json:"retry_interval"`
+	// DNSSECKeyURL is the URL to fetch DNSSEC keys from primary (optional)
+	DNSSECKeyURL string `json:"dnssec_key_url,omitempty"`
+	// DNSSECKeyToken is the authentication token for fetching keys (optional)
+	DNSSECKeyToken string `json:"dnssec_key_token,omitempty"`
+}
+
+// SyncConfig holds cluster synchronization configuration
+type SyncConfig struct {
+	// Enabled enables cluster synchronization
+	Enabled bool `json:"enabled"`
+	// NodeID is the unique identifier for this node in the cluster
+	NodeID string `json:"node_id"`
+	// ListenAddr is the address to listen for sync connections (e.g., ":8444")
+	ListenAddr string `json:"listen_addr"`
+	// SharedSecret is the HMAC secret used for peer authentication
+	SharedSecret string `json:"shared_secret"`
+	// Peers is the list of peer nodes to synchronize with
+	Peers []SyncPeerConfig `json:"peers,omitempty"`
+	// OpLogRetentionDays is how long to keep operation log entries (default: 7)
+	OpLogRetentionDays int `json:"oplog_retention_days,omitempty"`
+	// TombstoneRetentionDays is how long to keep tombstones for deleted entities (default: 30)
+	TombstoneRetentionDays int `json:"tombstone_retention_days,omitempty"`
+}
+
+// SyncPeerConfig holds configuration for a sync peer
+type SyncPeerConfig struct {
+	// ID is the unique identifier for this peer
+	ID string `json:"id"`
+	// Address is the WebSocket address of the peer (e.g., "ws://peer1.example.com:8444/sync")
+	Address string `json:"address"`
 }
 
 // Config holds the complete server configuration
@@ -331,12 +416,14 @@ type Config struct {
 
 // ParsedZone holds a parsed zone configuration
 type ParsedZone struct {
-	Network     *net.IPNet
-	Domain      string
+	Name        string     // Zone name (e.g., "example.com" or generated in-addr.arpa)
+	Type        ZoneType   // "forward" or "reverse"
+	Network     *net.IPNet // For reverse zones only
+	Domain      string     // For reverse zones - domain suffix
 	StripPrefix bool
-	PrefixLen   int // Number of bits in the prefix
+	PrefixLen   int // Number of bits in the prefix (reverse zones)
 	TTL         uint32
-	IsIPv6      bool
+	IsIPv6      bool // For reverse zones
 }
 
 // ParsedARecord holds a parsed A record
@@ -493,10 +580,10 @@ type ParsedLOCRecord struct {
 // ParsedRecursion holds parsed recursion configuration
 // ParsedDelegation holds a parsed zone delegation
 type ParsedDelegation struct {
-	Zone        string            // Zone name (FQDN with trailing dot)
-	Nameservers []string          // NS hostnames (FQDN with trailing dot)
+	Zone        string              // Zone name (FQDN with trailing dot)
+	Nameservers []string            // NS hostnames (FQDN with trailing dot)
 	Glue        map[string][]net.IP // Nameserver hostname -> IP addresses
-	Forward     bool              // Whether to forward queries or just refer
+	Forward     bool                // Whether to forward queries or just refer
 	TTL         uint32
 }
 
@@ -524,10 +611,10 @@ type ParsedTSIGKey struct {
 
 // ParsedTransferACL holds a parsed transfer ACL
 type ParsedTransferACL struct {
-	Zone          string     // Zone name (FQDN) or "*"
+	Zone          string       // Zone name (FQDN) or "*"
 	AllowTransfer []*net.IPNet // Networks allowed to request transfers
 	AllowNotify   []*net.IPNet // Networks allowed to send NOTIFY
-	TSIGKey       string     // Required TSIG key name (optional)
+	TSIGKey       string       // Required TSIG key name (optional)
 }
 
 // ParsedNotifyTarget holds a parsed notify target
@@ -554,18 +641,40 @@ type ParsedSecondaryZone struct {
 	TSIGAlgorithm   string
 	RefreshInterval uint32
 	RetryInterval   uint32
+	// DNSSEC key sharing for secondary signing
+	DNSSECKeyURL   string // URL to fetch DNSSEC keys from primary
+	DNSSECKeyToken string // Authentication token for key fetch
 }
 
 // ParsedConfig holds the parsed configuration
+// RateLimitConfig holds rate limiting settings for DDoS protection.
+type RateLimitConfig struct {
+	Enabled         bool     // Whether rate limiting is enabled
+	ResponsesPerSec int      // Max responses per second per client
+	SlipRatio       int      // 1-in-N responses sent when rate limited (0 = refuse all)
+	WindowSeconds   int      // Time window for rate tracking
+	WhitelistCIDRs  []string // CIDRs exempt from rate limiting
+}
+
+// QueryLogConfig holds query logging settings.
+type QueryLogConfig struct {
+	Enabled     bool // Whether query logging is enabled
+	LogSuccess  bool // Log successful queries
+	LogNXDomain bool // Log NXDOMAIN responses
+	LogErrors   bool // Log error responses
+}
+
 type ParsedConfig struct {
 	Listen         string
-	Zones          []ParsedZone           // Sorted by prefix length (most specific first)
-	DNSSEC         []DNSSECKeyConfig      // DNSSEC configurations
-	Recursion      ParsedRecursion        // Recursion settings
-	Delegations    []ParsedDelegation     // Zone delegations
-	Transfer       ParsedTransfer         // Zone transfer settings
-	SecondaryZones []ParsedSecondaryZone  // Secondary zones to pull via AXFR
-	
+	Zones          []ParsedZone          // Sorted by prefix length (most specific first)
+	DNSSEC         []DNSSECKeyConfig     // DNSSEC configurations
+	Recursion      ParsedRecursion       // Recursion settings
+	Delegations    []ParsedDelegation    // Zone delegations
+	Transfer       ParsedTransfer        // Zone transfer settings
+	SecondaryZones []ParsedSecondaryZone // Secondary zones to pull via AXFR
+	RateLimit      RateLimitConfig       // Response rate limiting
+	QueryLog       QueryLogConfig        // Query logging settings
+
 	// Static records
 	ARecords     map[string][]ParsedARecord     // Name -> A records
 	AAAARecords  map[string][]ParsedAAAARecord  // Name -> AAAA records
@@ -601,6 +710,66 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// LoadOrCreate reads a configuration file, or creates a default one if it doesn't exist
+func LoadOrCreate(path string) (*Config, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Create default config
+			cfg := DefaultConfig()
+			if err := SaveConfig(path, cfg); err != nil {
+				return nil, false, err
+			}
+			return cfg, true, nil
+		}
+		return nil, false, err
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, false, err
+	}
+
+	return &cfg, false, nil
+}
+
+// DefaultConfig returns a minimal default configuration
+func DefaultConfig() *Config {
+	return &Config{
+		Listen: ":53",
+		Zones:  []ZoneConfig{},
+		Records: Records{
+			A:     []ARecord{},
+			AAAA:  []AAAARecord{},
+			CNAME: []CNAMERecord{},
+			MX:    []MXRecord{},
+			TXT:   []TXTRecord{},
+			NS:    []NSRecord{},
+			SOA:   []SOARecord{},
+			SRV:   []SRVRecord{},
+			CAA:   []CAARecord{},
+			PTR:   []PTRRecord{},
+		},
+		Recursion: RecursionConfig{
+			Enabled:  false,
+			Mode:     RecursionModeDisabled,
+			Upstream: []string{"1.1.1.1:53", "8.8.8.8:53"},
+			Timeout:  5,
+			MaxDepth: 10,
+		},
+		DNSSEC: []DNSSECKeyConfig{},
+	}
+}
+
+// SaveConfig writes a configuration to a file
+func SaveConfig(path string, cfg *Config) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
 // Parse validates and parses the configuration
 func (c *Config) Parse() (*ParsedConfig, error) {
 	// Set recursion defaults
@@ -612,7 +781,7 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 	if maxDepth == 0 {
 		maxDepth = 10
 	}
-	
+
 	// Determine recursion mode
 	recursionMode := c.Recursion.Mode
 	if recursionMode == "" {
@@ -656,21 +825,50 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 
 	// Parse zones
 	for _, s := range c.Zones {
-		_, network, err := net.ParseCIDR(s.Subnet)
-		if err != nil {
-			return nil, err
+		// Determine zone type
+		zoneType := s.Type
+		if zoneType == "" {
+			// Infer from fields
+			if s.Subnet != "" {
+				zoneType = ZoneTypeReverse
+			} else {
+				zoneType = ZoneTypeForward
+			}
 		}
-		prefixLen, _ := network.Mask.Size()
-		isIPv6 := network.IP.To4() == nil
 
-		parsed.Zones = append(parsed.Zones, ParsedZone{
-			Network:     network,
-			Domain:      s.Domain,
-			StripPrefix: s.StripPrefix,
-			PrefixLen:   prefixLen,
-			TTL:         s.TTL,
-			IsIPv6:      isIPv6,
-		})
+		if zoneType == ZoneTypeReverse {
+			// Reverse zone - parse subnet
+			_, network, err := net.ParseCIDR(s.Subnet)
+			if err != nil {
+				return nil, fmt.Errorf("invalid CIDR for reverse zone: %w", err)
+			}
+			prefixLen, _ := network.Mask.Size()
+			isIPv6 := network.IP.To4() == nil
+
+			// Generate zone name from subnet if not provided
+			zoneName := s.Name
+			if zoneName == "" {
+				zoneName = generateReverseZoneName(network, isIPv6)
+			}
+
+			parsed.Zones = append(parsed.Zones, ParsedZone{
+				Name:        zoneName,
+				Type:        ZoneTypeReverse,
+				Network:     network,
+				Domain:      s.Domain,
+				StripPrefix: s.StripPrefix,
+				PrefixLen:   prefixLen,
+				TTL:         s.TTL,
+				IsIPv6:      isIPv6,
+			})
+		} else {
+			// Forward zone - just needs name
+			parsed.Zones = append(parsed.Zones, ParsedZone{
+				Name: s.Name,
+				Type: ZoneTypeForward,
+				TTL:  s.TTL,
+			})
+		}
 	}
 
 	// Sort zones by prefix length (most specific first)
@@ -681,13 +879,13 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 	// Parse delegations
 	for _, del := range c.Delegations {
 		zone := normalizeName(del.Zone)
-		
+
 		// Parse nameservers
 		nameservers := make([]string, 0, len(del.Nameservers))
 		for _, ns := range del.Nameservers {
 			nameservers = append(nameservers, normalizeName(ns))
 		}
-		
+
 		// Parse glue records
 		glue := make(map[string][]net.IP)
 		for hostname, ips := range del.Glue {
@@ -698,12 +896,12 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 				}
 			}
 		}
-		
+
 		ttl := del.TTL
 		if ttl == 0 {
 			ttl = 3600
 		}
-		
+
 		parsed.Delegations = append(parsed.Delegations, ParsedDelegation{
 			Zone:        zone,
 			Nameservers: nameservers,
@@ -712,7 +910,7 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 			TTL:         ttl,
 		})
 	}
-	
+
 	// Sort delegations by zone length (most specific first - longest names first)
 	sort.Slice(parsed.Delegations, func(i, j int) bool {
 		return len(parsed.Delegations[i].Zone) > len(parsed.Delegations[j].Zone)
@@ -723,7 +921,7 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 		Enabled:  c.Transfer.Enabled,
 		TSIGKeys: make(map[string]ParsedTSIGKey),
 	}
-	
+
 	// Parse TSIG keys
 	for _, key := range c.Transfer.TSIGKeys {
 		keyName := normalizeName(key.Name)
@@ -733,19 +931,19 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 			Secret:    key.Secret,
 		}
 	}
-	
+
 	// Parse transfer ACLs
 	for _, acl := range c.Transfer.ACLs {
 		zone := acl.Zone
 		if zone != "*" {
 			zone = normalizeName(zone)
 		}
-		
+
 		parsedACL := ParsedTransferACL{
 			Zone:    zone,
 			TSIGKey: acl.TSIGKey,
 		}
-		
+
 		// Parse allow_transfer networks
 		for _, cidr := range acl.AllowTransfer {
 			if !strings.Contains(cidr, "/") {
@@ -761,7 +959,7 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 				parsedACL.AllowTransfer = append(parsedACL.AllowTransfer, network)
 			}
 		}
-		
+
 		// Parse allow_notify networks
 		for _, cidr := range acl.AllowNotify {
 			if !strings.Contains(cidr, "/") {
@@ -776,10 +974,10 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 				parsedACL.AllowNotify = append(parsedACL.AllowNotify, network)
 			}
 		}
-		
+
 		parsed.Transfer.ACLs = append(parsed.Transfer.ACLs, parsedACL)
 	}
-	
+
 	// Parse notify targets
 	for _, notify := range c.Transfer.NotifyTargets {
 		zone := normalizeName(notify.Zone)
@@ -807,14 +1005,16 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 			}
 			primaries = append(primaries, p)
 		}
-		
+
 		parsedSZ := ParsedSecondaryZone{
 			Zone:            zone,
 			Primaries:       primaries,
 			RefreshInterval: sz.RefreshInterval,
 			RetryInterval:   sz.RetryInterval,
+			DNSSECKeyURL:    sz.DNSSECKeyURL,
+			DNSSECKeyToken:  sz.DNSSECKeyToken,
 		}
-		
+
 		// Look up TSIG key details if specified
 		if sz.TSIGKey != "" {
 			keyName := normalizeName(sz.TSIGKey)
@@ -824,7 +1024,7 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 				parsedSZ.TSIGAlgorithm = key.Algorithm
 			}
 		}
-		
+
 		parsed.SecondaryZones = append(parsed.SecondaryZones, parsedSZ)
 	}
 
@@ -1079,6 +1279,39 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 	return parsed, nil
 }
 
+// generateReverseZoneName creates the in-addr.arpa or ip6.arpa zone name from a network
+func generateReverseZoneName(network *net.IPNet, isIPv6 bool) string {
+	if isIPv6 {
+		// For IPv6, generate ip6.arpa format based on prefix length
+		prefixLen, _ := network.Mask.Size()
+		nibbles := prefixLen / 4
+		ip := network.IP.To16()
+		var parts []string
+		for i := 0; i < nibbles; i++ {
+			byteIdx := i / 2
+			if i%2 == 0 {
+				parts = append([]string{fmt.Sprintf("%x", ip[byteIdx]>>4)}, parts...)
+			} else {
+				parts = append([]string{fmt.Sprintf("%x", ip[byteIdx]&0xf)}, parts...)
+			}
+		}
+		// Reverse the parts for proper ip6.arpa format
+		for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+			parts[i], parts[j] = parts[j], parts[i]
+		}
+		return strings.Join(parts, ".") + ".ip6.arpa"
+	}
+	// For IPv4, generate in-addr.arpa format
+	ip := network.IP.To4()
+	prefixLen, _ := network.Mask.Size()
+	octets := prefixLen / 8
+	var parts []string
+	for i := octets - 1; i >= 0; i-- {
+		parts = append(parts, fmt.Sprintf("%d", ip[i]))
+	}
+	return strings.Join(parts, ".") + ".in-addr.arpa"
+}
+
 // normalizeName ensures a hostname ends with a dot (FQDN format)
 func normalizeName(name string) string {
 	if name == "" {
@@ -1107,10 +1340,14 @@ func shouldCreatePTR(ptr *bool, ip net.IP, zones []ParsedZone) bool {
 	return isIPInZone(ip, zones)
 }
 
-// isIPInZone checks if an IP address falls within any configured zone
+// isIPInZone checks if an IP address falls within any configured reverse zone
 func isIPInZone(ip net.IP, zones []ParsedZone) bool {
 	isIPv6 := ip.To4() == nil
 	for _, zone := range zones {
+		// Skip forward zones - they don't have networks
+		if zone.Type == ZoneTypeForward || zone.Network == nil {
+			continue
+		}
 		if zone.IsIPv6 != isIPv6 {
 			continue
 		}
@@ -1138,7 +1375,7 @@ func (p *ParsedConfig) FindDelegation(name string) (*ParsedDelegation, bool) {
 	if !strings.HasSuffix(name, ".") {
 		name += "."
 	}
-	
+
 	// Delegations are sorted by zone length (most specific first)
 	for i := range p.Delegations {
 		del := &p.Delegations[i]

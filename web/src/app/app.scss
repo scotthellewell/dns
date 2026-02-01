@@ -1,0 +1,126 @@
+.app-container {
+  height: 100vh;
+  width: 100%;
+}
+
+.sidenav {
+  width: 250px;
+  background: #0f172a;
+  border-right: 1px solid #1e293b;
+}
+
+.sidenav-header {
+  display: flex;
+  align-items: center;
+  padding: 20px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  
+  .logo-icon {
+    font-size: 32px;
+    width: 32px;
+    height: 32px;
+    color: #3b82f6;
+  }
+  
+  .logo-text {
+    font-size: 18px;
+    font-weight: 600;
+    color: white;
+    margin-left: 12px;
+  }
+}
+
+mat-nav-list {
+  padding-top: 8px;
+  
+  a {
+    color: #cbd5e1 !important;
+    margin: 4px 8px;
+    border-radius: 8px;
+    
+    mat-icon {
+      color: #94a3b8 !important;
+    }
+    
+    &:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: #f1f5f9 !important;
+      
+      mat-icon {
+        color: #e2e8f0 !important;
+      }
+    }
+    
+    &.active {
+      background: rgba(59, 130, 246, 0.25);
+      color: #60a5fa !important;
+      
+      mat-icon {
+        color: #60a5fa !important;
+      }
+    }
+  }
+}
+
+.nav-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 16px 16px;
+}
+
+.nav-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #64748b;
+  padding: 8px 24px;
+}
+
+.main-content {
+  background: #1e293b;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.content-wrapper {
+  flex: 1;
+  padding: 24px;
+}
+
+.sidenav-footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  padding: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.2);
+
+  mat-icon {
+    font-size: 36px;
+    width: 36px;
+    height: 36px;
+    color: #94a3b8;
+  }
+
+  .user-info {
+    margin-left: 12px;
+    display: flex;
+    flex-direction: column;
+
+    .user-name {
+      color: #f1f5f9;
+      font-weight: 500;
+    }
+
+    .user-role {
+      color: #64748b;
+      font-size: 12px;
+      text-transform: capitalize;
+    }
+  }
+}

@@ -1,0 +1,92 @@
+<mat-sidenav-container class="app-container">
+  @if (!isLoginPage() && (!authEnabled() || isAuthenticated())) {
+  <mat-sidenav mode="side" opened class="sidenav">
+    <div class="sidenav-header">
+      <mat-icon class="logo-icon">dns</mat-icon>
+      <span class="logo-text">DNS Admin</span>
+    </div>
+    
+    <mat-nav-list>
+      <a mat-list-item routerLink="/dashboard" routerLinkActive="active">
+        <mat-icon matListItemIcon>dashboard</mat-icon>
+        <span matListItemTitle>Dashboard</span>
+      </a>
+      <a mat-list-item routerLink="/zones" routerLinkActive="active">
+        <mat-icon matListItemIcon>public</mat-icon>
+        <span matListItemTitle>Zones</span>
+      </a>
+      <a mat-list-item routerLink="/records" routerLinkActive="active">
+        <mat-icon matListItemIcon>list_alt</mat-icon>
+        <span matListItemTitle>Records</span>
+      </a>
+      
+      <div class="nav-divider"></div>
+      <div class="nav-section-title">Settings</div>
+      
+      <a mat-list-item routerLink="/secondary-zones" routerLinkActive="active">
+        <mat-icon matListItemIcon>sync</mat-icon>
+        <span matListItemTitle>Secondary Zones</span>
+      </a>
+      <a mat-list-item routerLink="/transfer" routerLinkActive="active">
+        <mat-icon matListItemIcon>swap_horiz</mat-icon>
+        <span matListItemTitle>Zone Transfer</span>
+      </a>
+      <a mat-list-item routerLink="/recursion" routerLinkActive="active">
+        <mat-icon matListItemIcon>account_tree</mat-icon>
+        <span matListItemTitle>Recursion</span>
+      </a>
+      @if (isAdmin()) {
+        <a mat-list-item routerLink="/network" routerLinkActive="active">
+          <mat-icon matListItemIcon>router</mat-icon>
+          <span matListItemTitle>Network</span>
+        </a>
+        <a mat-list-item routerLink="/cluster-sync" routerLinkActive="active">
+          <mat-icon matListItemIcon>cloud_sync</mat-icon>
+          <span matListItemTitle>Cluster Sync</span>
+        </a>
+      }
+      @if (isSuperAdmin()) {
+        <a mat-list-item routerLink="/tenants" routerLinkActive="active">
+          <mat-icon matListItemIcon>business</mat-icon>
+          <span matListItemTitle>Tenants</span>
+        </a>
+      }
+      
+      @if (authEnabled()) {
+        <div class="nav-divider"></div>
+        <div class="nav-section-title">Account</div>
+        
+        <a mat-list-item routerLink="/profile" routerLinkActive="active">
+          <mat-icon matListItemIcon>person</mat-icon>
+          <span matListItemTitle>My Profile</span>
+        </a>
+        <a mat-list-item routerLink="/api-keys" routerLinkActive="active">
+          <mat-icon matListItemIcon>vpn_key</mat-icon>
+          <span matListItemTitle>API Keys</span>
+        </a>
+        <a mat-list-item (click)="logout()">
+          <mat-icon matListItemIcon>logout</mat-icon>
+          <span matListItemTitle>Sign Out</span>
+        </a>
+      }
+    </mat-nav-list>
+    
+    @if (authEnabled() && isAuthenticated()) {
+      <div class="sidenav-footer">
+        <mat-icon>account_circle</mat-icon>
+        <div class="user-info">
+          <span class="user-name">{{currentUser()?.username}}</span>
+          <span class="user-role">{{currentUser()?.role}}</span>
+        </div>
+      </div>
+    }
+  </mat-sidenav>
+  }
+  
+  <mat-sidenav-content class="main-content">
+    <div class="content-wrapper">
+      <router-outlet></router-outlet>
+    </div>
+    <app-footer></app-footer>
+  </mat-sidenav-content>
+</mat-sidenav-container>

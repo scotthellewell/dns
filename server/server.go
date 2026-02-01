@@ -12,8 +12,10 @@ import (
 	"github.com/miekg/dns"
 	"github.com/scott/dns/config"
 	"github.com/scott/dns/dnssec"
+	"github.com/scott/dns/querylog"
 	"github.com/scott/dns/recurse"
 	"github.com/scott/dns/resolver"
+	"github.com/scott/dns/rrl"
 	"github.com/scott/dns/secondary"
 	"github.com/scott/dns/transfer"
 )
@@ -26,17 +28,42 @@ type Server struct {
 	dnssec    *dnssec.Manager
 	transfer  *transfer.Handler
 	secondary *secondary.Manager
+	rrl       *rrl.Limiter     // Response Rate Limiter
+	querylog  *querylog.Logger // Query Logger
 	mu        sync.RWMutex
+
+	// ACME challenge records (temporary TXT records for DNS-01 validation)
+	acmeRecords   map[string]string
+	acmeRecordsMu sync.RWMutex
 }
 
 // New creates a new DNS server
 func New(cfg *config.ParsedConfig) *Server {
 	srv := &Server{
-		config:    cfg,
-		resolver:  resolver.New(cfg),
-		recursion: recurse.New(cfg.Recursion),
-		dnssec:    dnssec.NewManager(),
+		config:      cfg,
+		resolver:    resolver.New(cfg),
+		recursion:   recurse.New(cfg.Recursion),
+		dnssec:      dnssec.NewManager(),
+		acmeRecords: make(map[string]string),
 	}
+
+	// Initialize rate limiter
+	srv.rrl = rrl.New(&rrl.Config{
+		Enabled:         cfg.RateLimit.Enabled,
+		ResponsesPerSec: cfg.RateLimit.ResponsesPerSec,
+		SlipRatio:       cfg.RateLimit.SlipRatio,
+		WindowSeconds:   cfg.RateLimit.WindowSeconds,
+		WhitelistCIDRs:  cfg.RateLimit.WhitelistCIDRs,
+	})
+
+	// Initialize query logger
+	srv.querylog = querylog.New(&querylog.Config{
+		Enabled:     cfg.QueryLog.Enabled,
+		LogSuccess:  cfg.QueryLog.LogSuccess,
+		LogNXDomain: cfg.QueryLog.LogNXDomain,
+		LogErrors:   cfg.QueryLog.LogErrors,
+	})
+
 	srv.loadDNSSEC(cfg)
 	// Initialize transfer handler (srv implements ZoneDataProvider)
 	srv.transfer = transfer.New(cfg, srv)
@@ -70,13 +97,13 @@ func (s *Server) loadDNSSEC(cfg *config.ParsedConfig) {
 // UpdateConfig updates the server configuration atomically
 func (s *Server) UpdateConfig(cfg *config.ParsedConfig) {
 	s.mu.Lock()
-	
+
 	// Track old serials to detect changes
 	oldSerials := make(map[string]uint32)
 	for name, soa := range s.config.SOARecords {
 		oldSerials[name] = soa.Serial
 	}
-	
+
 	s.config = cfg
 	s.resolver = resolver.New(cfg)
 	s.recursion = recurse.New(cfg.Recursion)
@@ -88,7 +115,28 @@ func (s *Server) UpdateConfig(cfg *config.ParsedConfig) {
 	if s.secondary != nil {
 		s.secondary.UpdateConfig(cfg)
 	}
-	
+
+	// Update rate limiter config
+	if s.rrl != nil {
+		s.rrl.UpdateConfig(&rrl.Config{
+			Enabled:         cfg.RateLimit.Enabled,
+			ResponsesPerSec: cfg.RateLimit.ResponsesPerSec,
+			SlipRatio:       cfg.RateLimit.SlipRatio,
+			WindowSeconds:   cfg.RateLimit.WindowSeconds,
+			WhitelistCIDRs:  cfg.RateLimit.WhitelistCIDRs,
+		})
+	}
+
+	// Update query logger config
+	if s.querylog != nil {
+		s.querylog.UpdateConfig(&querylog.Config{
+			Enabled:     cfg.QueryLog.Enabled,
+			LogSuccess:  cfg.QueryLog.LogSuccess,
+			LogNXDomain: cfg.QueryLog.LogNXDomain,
+			LogErrors:   cfg.QueryLog.LogErrors,
+		})
+	}
+
 	// Check for zones with changed serials and send NOTIFY
 	var changedZones []string
 	for name, soa := range cfg.SOARecords {
@@ -97,12 +145,12 @@ func (s *Server) UpdateConfig(cfg *config.ParsedConfig) {
 			changedZones = append(changedZones, name)
 		}
 	}
-	
+
 	s.mu.Unlock()
-	
-	log.Printf("Configuration reloaded: %d zones, %d secondary zones (recursion: %v)", 
+
+	log.Printf("Configuration reloaded: %d zones, %d secondary zones (recursion: %v)",
 		len(cfg.Zones), len(cfg.SecondaryZones), cfg.Recursion.Enabled)
-	
+
 	// Send NOTIFY for zones with changed serials
 	if s.transfer != nil && len(changedZones) > 0 {
 		for _, zone := range changedZones {
@@ -175,8 +223,56 @@ func (s *Server) getDNSSEC() *dnssec.Manager {
 	return s.dnssec
 }
 
+// GetRRL returns the rate limiter for external access
+func (s *Server) GetRRL() *rrl.Limiter {
+	return s.rrl
+}
+
+// GetQueryLog returns the query logger for external access
+func (s *Server) GetQueryLog() *querylog.Logger {
+	return s.querylog
+}
+
+// ServeDNS implements the dns.Handler interface
+func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
+	s.handleRequest(w, r)
+}
+
 // handleRequest handles incoming DNS requests
 func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
+	startTime := time.Now()
+
+	// Extract client IP for RRL and logging
+	clientAddr := w.RemoteAddr()
+	var clientIP net.IP
+	switch addr := clientAddr.(type) {
+	case *net.UDPAddr:
+		clientIP = addr.IP
+	case *net.TCPAddr:
+		clientIP = addr.IP
+	}
+	clientIPStr := ""
+	if clientIP != nil {
+		clientIPStr = clientIP.String()
+	}
+
+	// Response Rate Limiting (RRL) check
+	if s.rrl != nil && clientIP != nil {
+		action := s.rrl.Check(clientIP)
+		switch action {
+		case rrl.Refuse:
+			// Silently drop - don't send response for DDoS mitigation
+			return
+		case rrl.Slip:
+			// Send truncated response to force TCP retry
+			m := new(dns.Msg)
+			m.SetReply(r)
+			m.Truncated = true
+			w.WriteMsg(m)
+			return
+		}
+	}
+
 	// Handle NOTIFY messages (opcode 4)
 	if r.Opcode == dns.OpcodeNotify {
 		if s.transfer != nil {
@@ -297,12 +393,17 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	w.WriteMsg(m)
+
+	// Log query if enabled
+	if s.querylog != nil {
+		s.querylog.Log(clientIPStr, r, m, time.Since(startTime))
+	}
 }
 
 // handlePTR handles PTR (reverse DNS) queries
 func (s *Server) handlePTR(m *dns.Msg, q dns.Question) {
 	name := strings.ToLower(q.Name)
-	
+
 	// Handle both ip6.arpa and in-addr.arpa queries
 	if !strings.HasSuffix(name, ".ip6.arpa.") && !strings.HasSuffix(name, ".in-addr.arpa.") {
 		return
@@ -616,6 +717,25 @@ func (s *Server) handleMX(m *dns.Msg, q dns.Question) {
 
 // handleTXT handles TXT queries
 func (s *Server) handleTXT(m *dns.Msg, q dns.Question) {
+	// Check ACME challenge records first (for Let's Encrypt DNS-01 validation)
+	s.acmeRecordsMu.RLock()
+	acmeValue, hasACME := s.acmeRecords[strings.ToLower(q.Name)]
+	s.acmeRecordsMu.RUnlock()
+
+	if hasACME {
+		rr := &dns.TXT{
+			Hdr: dns.RR_Header{
+				Name:   q.Name,
+				Rrtype: dns.TypeTXT,
+				Class:  dns.ClassINET,
+				Ttl:    60, // Short TTL for challenge records
+			},
+			Txt: []string{acmeValue},
+		}
+		m.Answer = append(m.Answer, rr)
+		return
+	}
+
 	// Check secondary zones first
 	if rrs := s.lookupSecondaryRecords(q.Name, dns.TypeTXT); len(rrs) > 0 {
 		m.Answer = append(m.Answer, rrs...)
@@ -1280,7 +1400,7 @@ func (s *Server) GetZoneRecords(zone string) []dns.RR {
 		if ip == nil {
 			continue
 		}
-		
+
 		var ptrName string
 		if ip.To4() != nil {
 			// IPv4 reverse
@@ -1296,11 +1416,11 @@ func (s *Server) GetZoneRecords(zone string) []dns.RR {
 			}
 			ptrName = strings.Join(parts, ".") + ".ip6.arpa."
 		}
-		
+
 		if !inZone(ptrName) {
 			continue
 		}
-		
+
 		records = append(records, &dns.PTR{
 			Hdr: dns.RR_Header{Name: ptrName, Rrtype: dns.TypePTR, Class: dns.ClassINET, Ttl: rec.TTL},
 			Ptr: dns.Fqdn(rec.Hostname),
@@ -1439,4 +1559,38 @@ func (s *Server) SendNotify(zone string) {
 	if t != nil {
 		t.SendNotify(zone)
 	}
+}
+
+// SetTXTRecord sets a temporary TXT record for ACME DNS-01 challenge
+// This implements the certs.DNSProvider interface
+func (s *Server) SetTXTRecord(fqdn, value string) error {
+	s.acmeRecordsMu.Lock()
+	defer s.acmeRecordsMu.Unlock()
+
+	// Normalize the FQDN to lowercase
+	fqdn = strings.ToLower(fqdn)
+	if !strings.HasSuffix(fqdn, ".") {
+		fqdn = fqdn + "."
+	}
+
+	s.acmeRecords[fqdn] = value
+	log.Printf("Added ACME challenge TXT record: %s = %s", fqdn, value)
+	return nil
+}
+
+// RemoveTXTRecord removes a temporary TXT record after ACME challenge
+// This implements the certs.DNSProvider interface
+func (s *Server) RemoveTXTRecord(fqdn string) error {
+	s.acmeRecordsMu.Lock()
+	defer s.acmeRecordsMu.Unlock()
+
+	// Normalize the FQDN to lowercase
+	fqdn = strings.ToLower(fqdn)
+	if !strings.HasSuffix(fqdn, ".") {
+		fqdn = fqdn + "."
+	}
+
+	delete(s.acmeRecords, fqdn)
+	log.Printf("Removed ACME challenge TXT record: %s", fqdn)
+	return nil
 }

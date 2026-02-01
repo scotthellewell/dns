@@ -1,0 +1,251 @@
+<div class="cluster-sync-container">
+  <mat-card class="config-card">
+    <mat-card-header>
+      <mat-icon mat-card-avatar>settings</mat-icon>
+      <mat-card-title>Cluster Sync Configuration</mat-card-title>
+      <mat-card-subtitle>Configure multi-server synchronization</mat-card-subtitle>
+    </mat-card-header>
+    
+    <mat-card-content>
+      <div *ngIf="loading && !config" class="loading-container">
+        <mat-spinner diameter="40"></mat-spinner>
+        <p>Loading configuration...</p>
+      </div>
+
+      <div *ngIf="config" class="config-form">
+        <div class="form-row toggle-row">
+          <mat-slide-toggle [(ngModel)]="configForm.enabled" color="primary">
+            Enable Cluster Synchronization
+          </mat-slide-toggle>
+          <p class="hint" *ngIf="!configForm.enabled">
+            Enable to replicate zones, records, and settings across multiple DNS servers.
+          </p>
+        </div>
+
+        <mat-divider></mat-divider>
+
+        <div class="form-section">
+          <h3>Server Identity</h3>
+          
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Server Name</mat-label>
+            <input matInput [(ngModel)]="configForm.server_name" placeholder="e.g., Primary DNS Server">
+            <mat-hint>A friendly name for this server in the cluster</mat-hint>
+          </mat-form-field>
+
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Server ID</mat-label>
+            <input matInput [(ngModel)]="configForm.server_id" placeholder="Auto-generated if empty" class="monospace">
+            <mat-hint>Unique identifier for this server (auto-generated if left empty)</mat-hint>
+          </mat-form-field>
+
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Listen Address</mat-label>
+            <input matInput [(ngModel)]="configForm.listen_addr" placeholder=":9443">
+            <mat-hint>Address for peer connections (e.g., :9443 or 0.0.0.0:9443)</mat-hint>
+          </mat-form-field>
+        </div>
+
+        <mat-divider></mat-divider>
+
+        <div class="form-section">
+          <h3>Security</h3>
+          
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Shared Secret</mat-label>
+            <input matInput [(ngModel)]="configForm.shared_secret" type="password"
+                   placeholder="Enter shared secret for peer authentication" class="monospace">
+            <mat-hint>HMAC secret used to authenticate peer connections (must be same on all servers)</mat-hint>
+          </mat-form-field>
+
+          <button mat-stroked-button color="primary" (click)="generateSecret()" class="generate-btn">
+            <mat-icon>vpn_key</mat-icon>
+            Generate New Secret
+          </button>
+        </div>
+
+        <mat-divider></mat-divider>
+
+        <div class="form-section">
+          <h3>Peer Servers</h3>
+          <p class="section-hint">Add other DNS servers to synchronize with.</p>
+          
+          <div class="peers-list" *ngIf="configForm.peers.length">
+            <div class="peer-item" *ngFor="let peer of configForm.peers; let i = index">
+              <mat-icon class="peer-icon">dns</mat-icon>
+              <span class="peer-url monospace">{{ peer.url }}</span>
+              <span class="peer-badge" *ngIf="peer.insecure_skip_verify">insecure</span>
+              <button mat-icon-button color="warn" (click)="removePeerFromConfig(i)" matTooltip="Remove peer">
+                <mat-icon>delete</mat-icon>
+              </button>
+            </div>
+          </div>
+
+          <div class="no-peers-config" *ngIf="!configForm.peers.length">
+            <mat-icon>link_off</mat-icon>
+            <span>No peers configured</span>
+          </div>
+
+          <div *ngIf="showAddPeer" class="add-peer-form">
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Peer URL</mat-label>
+              <input matInput [(ngModel)]="newPeerUrl" placeholder="wss://peer.example.com:9443/sync">
+              <mat-hint>WebSocket URL of the peer server</mat-hint>
+            </mat-form-field>
+            
+            <mat-checkbox [(ngModel)]="newPeerInsecure" class="insecure-checkbox">
+              Skip TLS verification (for self-signed certificates)
+            </mat-checkbox>
+
+            <div class="form-actions">
+              <button mat-button (click)="toggleAddPeer()">Cancel</button>
+              <button mat-raised-button color="primary" (click)="addPeerToConfig()" [disabled]="!newPeerUrl">
+                Add Peer
+              </button>
+            </div>
+          </div>
+
+          <button mat-stroked-button (click)="toggleAddPeer()" *ngIf="!showAddPeer" class="add-peer-btn">
+            <mat-icon>add</mat-icon>
+            Add Peer Server
+          </button>
+        </div>
+
+        <mat-divider></mat-divider>
+
+        <mat-expansion-panel class="advanced-panel">
+          <mat-expansion-panel-header>
+            <mat-panel-title>
+              <mat-icon>tune</mat-icon>
+              Advanced Settings
+            </mat-panel-title>
+          </mat-expansion-panel-header>
+
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Tombstone Retention (days)</mat-label>
+            <input matInput type="number" [(ngModel)]="configForm.tombstone_retention_days" min="1" max="365">
+            <mat-hint>How long to keep deleted entity markers for sync (default: 7 days)</mat-hint>
+          </mat-form-field>
+        </mat-expansion-panel>
+      </div>
+    </mat-card-content>
+
+    <mat-card-actions *ngIf="config">
+      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving">
+        <mat-icon *ngIf="!saving">save</mat-icon>
+        <mat-spinner *ngIf="saving" diameter="18"></mat-spinner>
+        {{ saving ? 'Saving...' : 'Save Configuration' }}
+      </button>
+      <button mat-button (click)="loadData()">
+        <mat-icon>refresh</mat-icon>
+        Reset
+      </button>
+    </mat-card-actions>
+  </mat-card>
+
+  <mat-card class="status-card" *ngIf="status?.enabled">
+    <mat-card-header>
+      <mat-icon mat-card-avatar>cloud_sync</mat-icon>
+      <mat-card-title>Sync Status</mat-card-title>
+      <mat-card-subtitle><span class="status-enabled">Active</span></mat-card-subtitle>
+    </mat-card-header>
+    
+    <mat-card-content>
+      <div class="status-info">
+        <div class="info-grid">
+          <div class="info-item">
+            <span class="label">Server ID</span>
+            <span class="value monospace">{{ status?.server_id | slice:0:24 }}...</span>
+          </div>
+          <div class="info-item">
+            <span class="label">Server Name</span>
+            <span class="value">{{ status?.server_name || 'Not set' }}</span>
+          </div>
+          <div class="info-item">
+            <span class="label">OpLog Entries</span>
+            <span class="value">{{ status?.oplog_entries | number }}</span>
+          </div>
+          <div class="info-item">
+            <span class="label">Current HLC</span>
+            <span class="value monospace">{{ formatHLC(status?.current_hlc) }}</span>
+          </div>
+        </div>
+      </div>
+    </mat-card-content>
+
+    <mat-card-actions>
+      <button mat-button (click)="loadStatus()">
+        <mat-icon>refresh</mat-icon>
+        Refresh
+      </button>
+    </mat-card-actions>
+  </mat-card>
+
+  <mat-card class="peers-card" *ngIf="status?.enabled">
+    <mat-card-header>
+      <mat-icon mat-card-avatar>hub</mat-icon>
+      <mat-card-title>Connected Peers</mat-card-title>
+      <mat-card-subtitle>{{ status?.peers?.length || 0 }} peer(s)</mat-card-subtitle>
+    </mat-card-header>
+    
+    <mat-card-content>
+      <div *ngIf="status?.peers?.length" class="peers-table-container">
+        <table mat-table [dataSource]="status!.peers" class="peers-table">
+          <ng-container matColumnDef="server_name">
+            <th mat-header-cell *matHeaderCellDef>Name</th>
+            <td mat-cell *matCellDef="let peer">{{ peer.server_name || 'Unknown' }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="server_id">
+            <th mat-header-cell *matHeaderCellDef>Server ID</th>
+            <td mat-cell *matCellDef="let peer">
+              <span class="monospace">{{ peer.server_id | slice:0:16 }}...</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="status">
+            <th mat-header-cell *matHeaderCellDef>Status</th>
+            <td mat-cell *matCellDef="let peer">
+              <mat-chip [ngClass]="getStatusClass(peer)">
+                <mat-icon class="status-icon">
+                  {{ peer.connected ? 'check_circle' : (peer.last_error ? 'error' : 'cancel') }}
+                </mat-icon>
+                {{ getStatusText(peer) }}
+              </mat-chip>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="last_sync">
+            <th mat-header-cell *matHeaderCellDef>Last Sync</th>
+            <td mat-cell *matCellDef="let peer">{{ formatTime(peer.last_sync_time) }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="pending_ops">
+            <th mat-header-cell *matHeaderCellDef>Pending</th>
+            <td mat-cell *matCellDef="let peer">
+              <span [class.has-pending]="peer.pending_ops > 0">{{ peer.pending_ops | number }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef>Actions</th>
+            <td mat-cell *matCellDef="let peer">
+              <button mat-icon-button matTooltip="Force Sync" (click)="forceSync(peer)" [disabled]="!peer.connected">
+                <mat-icon>sync</mat-icon>
+              </button>
+            </td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+          <tr mat-row *matRowDef="let row; columns: displayedColumns;" [class.error-row]="row.last_error"></tr>
+        </table>
+      </div>
+
+      <div *ngIf="!status?.peers?.length" class="no-peers">
+        <mat-icon>link_off</mat-icon>
+        <p>No peers connected</p>
+        <p class="hint">Add peer servers in the configuration above</p>
+      </div>
+    </mat-card-content>
+  </mat-card>
+</div>

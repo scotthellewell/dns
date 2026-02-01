@@ -1,0 +1,166 @@
+.page-container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.page-header {
+  margin-bottom: 24px;
+  
+  h1 {
+    font-size: 28px;
+    font-weight: 600;
+    color: #f1f5f9;
+    margin: 0;
+  }
+  
+  .subtitle {
+    color: #94a3b8;
+    margin-top: 4px;
+  }
+}
+
+.content-card {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  border-bottom: 1px solid #334155;
+  
+  h2 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0;
+    color: #f1f5f9;
+  }
+}
+
+.zones-table {
+  width: 100%;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  color: #94a3b8;
+  
+  mat-icon {
+    font-size: 48px;
+    width: 48px;
+    height: 48px;
+    color: #475569;
+    margin-bottom: 16px;
+  }
+  
+  h3 {
+    font-size: 18px;
+    color: #e2e8f0;
+    margin-bottom: 8px;
+  }
+  
+  p {
+    margin: 0;
+  }
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  
+  &.badge-success {
+    background: #14532d;
+    color: #4ade80;
+  }
+  
+  &.badge-muted {
+    background: #334155;
+    color: #94a3b8;
+  }
+}
+
+// Modal styles
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  width: 500px;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  border-bottom: 1px solid #334155;
+  
+  h2 {
+    margin: 0;
+    font-size: 18px;
+    color: #f1f5f9;
+  }
+}
+
+.modal-body {
+  padding: 24px;
+  
+  mat-form-field {
+    margin-bottom: 16px;
+  }
+}
+
+.dnssec-key-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #334155;
+
+  h3 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    color: #94a3b8;
+    font-weight: 500;
+  }
+
+  .section-description {
+    color: #64748b;
+    font-size: 12px;
+    margin: 0 0 16px 0;
+    line-height: 1.5;
+  }
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid #334155;
+}
+
+.full-width {
+  width: 100%;
+}

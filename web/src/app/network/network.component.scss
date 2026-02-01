@@ -1,0 +1,322 @@
+.network-container {
+  padding: 24px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+h1 {
+  margin-bottom: 4px;
+}
+
+.subtitle {
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 24px;
+}
+
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  gap: 16px;
+}
+
+.config-card {
+  margin-bottom: 24px;
+  background-color: #1e1e1e;
+
+  mat-card-header {
+    margin-bottom: 16px;
+
+    mat-icon[mat-card-avatar] {
+      font-size: 40px;
+      width: 40px;
+      height: 40px;
+      color: #90caf9;
+    }
+  }
+
+  mat-card-content {
+    padding-top: 8px;
+
+    h4 {
+      margin: 16px 0 8px 0;
+      color: rgba(255, 255, 255, 0.7);
+    }
+  }
+}
+
+.config-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+  align-items: flex-start;
+
+  mat-form-field {
+    flex: 1;
+  }
+
+  &.warning-row {
+    background-color: rgba(255, 152, 0, 0.1);
+    border: 1px solid rgba(255, 152, 0, 0.3);
+    border-radius: 4px;
+    padding: 12px;
+    align-items: center;
+
+    mat-icon {
+      margin-right: 8px;
+    }
+
+    span {
+      color: #ffb74d;
+    }
+  }
+}
+
+.full-width {
+  width: 100%;
+}
+
+mat-divider {
+  margin: 16px 0;
+}
+
+mat-card-actions {
+  padding: 16px;
+
+  button {
+    min-width: 150px;
+
+    mat-spinner {
+      display: inline-block;
+    }
+  }
+}
+
+// Certificate management styles
+.cert-card {
+  mat-expansion-panel {
+    margin-top: 16px;
+    background-color: rgba(255, 255, 255, 0.05);
+
+    mat-panel-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+  }
+}
+
+.cert-info {
+  margin-bottom: 16px;
+}
+
+.cert-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border-radius: 4px;
+  font-weight: 500;
+
+  &.valid {
+    background-color: rgba(76, 175, 80, 0.1);
+    color: #81c784;
+
+    mat-icon {
+      color: #81c784;
+    }
+  }
+
+  &.expiring-soon {
+    background-color: rgba(255, 152, 0, 0.1);
+    color: #ffb74d;
+
+    mat-icon {
+      color: #ffb74d;
+    }
+  }
+
+  &.expired {
+    background-color: rgba(244, 67, 54, 0.1);
+    color: #e57373;
+
+    mat-icon {
+      color: #e57373;
+    }
+  }
+
+  mat-chip {
+    margin-left: auto;
+  }
+}
+
+.cert-details {
+  .detail-row {
+    display: flex;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+
+    strong {
+      min-width: 120px;
+      color: rgba(255, 255, 255, 0.7);
+    }
+
+    span {
+      flex: 1;
+
+      &.expired {
+        color: #e57373;
+      }
+
+      &.expiring-soon {
+        color: #ffb74d;
+      }
+
+      &.valid {
+        color: #81c784;
+      }
+    }
+  }
+}
+
+.no-cert {
+  color: rgba(255, 255, 255, 0.5);
+  font-style: italic;
+  padding: 16px;
+  text-align: center;
+}
+
+.generate-form, .upload-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 0;
+
+  mat-form-field {
+    width: 100%;
+  }
+
+  button {
+    align-self: flex-start;
+  }
+}
+
+.file-input {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  label {
+    min-width: 180px;
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  input[type="file"] {
+    flex: 1;
+  }
+
+  mat-icon {
+    margin-left: auto;
+  }
+}
+
+.info-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  margin-bottom: 16px;
+
+  mat-icon {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+    color: #90caf9;
+  }
+
+  &.secondary {
+    background-color: rgba(144, 202, 249, 0.1);
+    padding: 8px 12px;
+    border-radius: 4px;
+  }
+
+  code {
+    background-color: rgba(0, 0, 0, 0.3);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: monospace;
+    color: #90caf9;
+  }
+}
+
+// ACME / Let's Encrypt styles
+.acme-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 0;
+
+  mat-form-field {
+    width: 100%;
+  }
+}
+
+.acme-description {
+  color: rgba(255, 255, 255, 0.7);
+  margin: 0;
+}
+
+.acme-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  mat-icon {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+    cursor: help;
+  }
+}
+
+.acme-status {
+  background-color: rgba(144, 202, 249, 0.1);
+  padding: 12px;
+  border-radius: 4px;
+
+  p {
+    margin: 4px 0;
+    color: rgba(255, 255, 255, 0.8);
+
+    strong {
+      color: rgba(255, 255, 255, 0.6);
+    }
+  }
+}
+
+.acme-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.staging-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: rgba(255, 152, 0, 0.1);
+  border: 1px solid rgba(255, 152, 0, 0.3);
+  border-radius: 4px;
+  padding: 12px;
+  color: #ffb74d;
+  margin: 0;
+
+  mat-icon {
+    color: #ffb74d;
+  }
+}
