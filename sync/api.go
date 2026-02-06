@@ -277,7 +277,7 @@ func (h *APIHandler) HandleFullSync(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":      "full_sync_complete",
+		"status":       "full_sync_complete",
 		"items_synced": count,
 	})
 }

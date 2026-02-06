@@ -327,12 +327,12 @@ func (m *Manager) Status() *ClusterStatus {
 	defer m.peersMu.RUnlock()
 
 	status := &ClusterStatus{
-		ServerID:    m.serverID,
-		ServerName:  m.serverName,
-		Enabled:     m.config.Enabled,
-		CurrentHLC:  currentHLC,
+		ServerID:     m.serverID,
+		ServerName:   m.serverName,
+		Enabled:      m.config.Enabled,
+		CurrentHLC:   currentHLC,
 		OpLogEntries: -1, // Indicate we're not counting
-		Peers:       make([]PeerState, 0, len(m.peers)),
+		Peers:        make([]PeerState, 0, len(m.peers)),
 	}
 
 	for _, peer := range m.peers {
@@ -886,7 +886,7 @@ func (p *peerConn) handleMessage(msg *Message) {
 func (p *peerConn) handleChange(payload *ChangePayload) {
 	entry := &payload.Entry
 
-	log.Printf("[sync] Received change from peer %s: type=%s entity=%s op=%s", 
+	log.Printf("[sync] Received change from peer %s: type=%s entity=%s op=%s",
 		p.serverID, entry.EntityType, entry.EntityID, entry.Operation)
 
 	// Apply to local oplog

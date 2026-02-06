@@ -806,7 +806,7 @@ func (m *Manager) handleTenant(w http.ResponseWriter, r *http.Request) {
 // handleTenantUsers handles listing and creating users for a specific tenant
 func (m *Manager) handleTenantUsers(w http.ResponseWriter, r *http.Request, tenantID string) {
 	log.Printf("[DEBUG] handleTenantUsers called with tenantID='%s' method=%s", tenantID, r.Method)
-	
+
 	switch r.Method {
 	case "GET":
 		users := m.ListUsersByTenant(tenantID)
