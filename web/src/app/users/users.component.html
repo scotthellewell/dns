@@ -1,0 +1,147 @@
+<div class="users-page">
+  <div class="page-header">
+    <h1>Users</h1>
+    <div class="header-info">
+      <span class="tenant-badge">{{ auth.tenantName() }}</span>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn btn-primary" (click)="showCreateForm = !showCreateForm">
+      {{ showCreateForm ? '✕ Cancel' : '+ Add User' }}
+    </button>
+  </div>
+
+  <div *ngIf="loading()" class="loading">
+    <div class="spinner"></div>
+    <span>Loading users...</span>
+  </div>
+
+  <!-- Create User Form -->
+  <div *ngIf="showCreateForm" class="form-card">
+    <h2>Create New User</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="new_username">Username *</label>
+        <input type="text" id="new_username" #usernameInput placeholder="Enter username">
+      </div>
+      <div class="form-group">
+        <label for="new_email">Email</label>
+        <input type="email" id="new_email" #emailInput placeholder="user@example.com">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="new_display_name">Display Name</label>
+        <input type="text" id="new_display_name" #displayNameInput placeholder="John Doe">
+      </div>
+      <div class="form-group">
+        <label for="new_role">Role *</label>
+        <select id="new_role" #roleSelect>
+          <option value="admin">Tenant Admin</option>
+          <option value="user" selected>User</option>
+          <option value="readonly">Read Only</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="new_password">Password *</label>
+        <input type="password" id="new_password" #passwordInput placeholder="Minimum 8 characters">
+      </div>
+      <div class="form-group">
+        <label for="new_confirm_password">Confirm Password *</label>
+        <input type="password" id="new_confirm_password" #confirmPasswordInput placeholder="Re-enter password">
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button type="button" class="btn" (click)="showCreateForm = false">Cancel</button>
+      <button type="button" class="btn btn-primary"
+              (click)="createUserFromInputs(usernameInput.value, emailInput.value, displayNameInput.value, roleSelect.value, passwordInput.value, confirmPasswordInput.value)"
+              [disabled]="creating()">
+        {{ creating() ? 'Creating...' : 'Create User' }}
+      </button>
+    </div>
+  </div>
+
+  <!-- Edit User Form -->
+  <div *ngIf="editingUser" class="form-card">
+    <h2>Edit User: {{ editingUser.username }}</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="edit_display_name">Display Name</label>
+        <input type="text" id="edit_display_name" #editDisplayNameInput [value]="editingUser.display_name || ''" placeholder="John Doe">
+      </div>
+      <div class="form-group">
+        <label for="edit_email">Email</label>
+        <input type="email" id="edit_email" #editEmailInput [value]="editingUser.email || ''" placeholder="user@example.com">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="edit_role">Role *</label>
+        <select id="edit_role" #editRoleSelect [value]="editingUser.role">
+          <option value="admin" [selected]="editingUser.role === 'admin'">Tenant Admin</option>
+          <option value="user" [selected]="editingUser.role === 'user'">User</option>
+          <option value="readonly" [selected]="editingUser.role === 'readonly'">Read Only</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button type="button" class="btn" (click)="cancelEdit()">Cancel</button>
+      <button type="button" class="btn btn-primary"
+              (click)="saveUser(editDisplayNameInput.value, editEmailInput.value, editRoleSelect.value)"
+              [disabled]="saving()">
+        {{ saving() ? 'Saving...' : 'Save Changes' }}
+      </button>
+    </div>
+  </div>
+
+  <!-- Users Table -->
+  <div *ngIf="!loading() && users().length > 0 && !editingUser" class="users-table">
+    <table>
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Display Name</th>
+          <th>Email</th>
+          <th>Role</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let user of users()">
+          <td><code>{{ user.username }}</code></td>
+          <td>{{ user.display_name || '-' }}</td>
+          <td>{{ user.email || '-' }}</td>
+          <td>
+            <span class="role-badge" [attr.data-role]="user.role">
+              {{ getRoleLabel(user.role) }}
+            </span>
+          </td>
+          <td class="actions">
+            <button class="btn btn-sm" (click)="startEditUser(user)" title="Edit User">Edit</button>
+            <button class="btn btn-sm" (click)="resetPassword(user)" title="Reset Password">Reset PW</button>
+            <button class="btn btn-sm btn-danger"
+                    (click)="deleteUser(user)"
+                    [disabled]="isCurrentUser(user)"
+                    [title]="isCurrentUser(user) ? 'Cannot delete yourself' : 'Delete User'">
+              Delete
+            </button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div *ngIf="!loading() && users().length === 0 && !showCreateForm" class="empty-state">
+    <span class="empty-icon">👤</span>
+    <p>No users in this tenant</p>
+    <button class="btn btn-primary" (click)="showCreateForm = true">+ Add First User</button>
+  </div>
+</div>

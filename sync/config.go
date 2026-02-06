@@ -15,15 +15,6 @@ type Config struct {
 	// Display name for this server
 	ServerName string `json:"server_name"`
 
-	// Address to listen for peer connections (e.g., ":9443")
-	ListenAddr string `json:"listen_addr"`
-
-	// TLS certificate file for peer connections (optional, uses main cert if empty)
-	TLSCert string `json:"tls_cert,omitempty"`
-
-	// TLS key file for peer connections (optional, uses main key if empty)
-	TLSKey string `json:"tls_key,omitempty"`
-
 	// Peers to connect to
 	Peers []PeerConfig `json:"peers"`
 
@@ -45,8 +36,14 @@ type Config struct {
 
 // PeerConfig holds configuration for a sync peer
 type PeerConfig struct {
-	// URL of the peer (e.g., "wss://dns2.example.com:9443/sync")
+	// ID is a friendly identifier for this peer (e.g., "ns2")
+	ID string `json:"id,omitempty"`
+
+	// URL of the peer (e.g., "https://dns2.example.com")
 	URL string `json:"url"`
+
+	// API key for authenticating with the peer
+	APIKey string `json:"api_key,omitempty"`
 
 	// Optional: Skip TLS verification (for self-signed certs)
 	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`

@@ -19,10 +19,10 @@ export type ZoneType = 'forward' | 'reverse';
 export interface Zone {
   id?: number;
   zone_id?: string;         // Storage-based ID (zone name)
+  tenant_id?: string;       // Tenant that owns this zone
   name: string;             // Zone name (e.g., "example.com" or "168.192.in-addr.arpa")
   type: ZoneType;           // "forward" or "reverse"
   subnet?: string;          // For reverse zones
-  domain?: string;          // For reverse zones (legacy)
   strip_prefix: boolean;
   ttl: number;
   // DNSSEC fields (populated when fetching zone details)
@@ -33,8 +33,11 @@ export interface Zone {
 }
 
 export interface DnsRecord {
+  id?: string;              // Record ID for storage backend
+  zone_id?: string;         // Zone ID
+  zone_name?: string;       // Zone name for display
   type: string;
-  zone?: string;            // Zone this record belongs to
+  zone?: string;            // Zone this record belongs to (legacy)
   name?: string;
   ip?: string;
   ttl: number;
@@ -307,12 +310,12 @@ export class ApiService {
     return this.http.post(`${this.baseUrl}/records`, record);
   }
 
-  updateRecord(type: string, index: number, record: DnsRecord): Observable<any> {
-    return this.http.put(`${this.baseUrl}/records/${type}/${index}`, record);
+  updateRecord(type: string, id: string | number, record: DnsRecord): Observable<any> {
+    return this.http.put(`${this.baseUrl}/records/${type}/${id}`, record);
   }
 
-  deleteRecord(type: string, index: number): Observable<any> {
-    return this.http.delete(`${this.baseUrl}/records/${type}/${index}`);
+  deleteRecord(type: string, id: string | number): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/records/${type}/${id}`);
   }
 
   // Secondary Zones
@@ -499,6 +502,10 @@ export class ApiService {
     return this.http.post(`${this.baseUrl}/sync/force`, { server_id: serverId });
   }
 
+  fullSync(): Observable<{ status: string; items_synced: number }> {
+    return this.http.post<{ status: string; items_synced: number }>(`${this.baseUrl}/sync/full-sync`, {});
+  }
+
   getSyncConfig(): Observable<SyncConfig> {
     return this.http.get<SyncConfig>(`${this.baseUrl}/sync/config`);
   }
@@ -549,7 +556,6 @@ export interface SyncConfig {
   enabled: boolean;
   server_id: string;
   server_name: string;
-  listen_addr: string;
   shared_secret: string;
   peers: SyncPeer[];
   tombstone_retention_days: number;

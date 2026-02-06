@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +40,9 @@ type Manager struct {
 	// Callbacks for applying changes
 	applyCallback ApplyCallback
 
+	// Full sync data provider
+	fullSyncProvider FullSyncProvider
+
 	// Context for shutdown
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -52,6 +56,17 @@ type Manager struct {
 
 // ApplyCallback is called when a remote change needs to be applied locally
 type ApplyCallback func(entry *OpLogEntry) error
+
+// FullSyncDataItem represents a single item to be synced during full sync
+type FullSyncDataItem struct {
+	EntityType string
+	EntityID   string
+	TenantID   string
+	Data       interface{}
+}
+
+// FullSyncProvider provides all data for a full sync operation
+type FullSyncProvider func() ([]FullSyncDataItem, error)
 
 // peerConn represents a connection to a peer
 type peerConn struct {
@@ -109,6 +124,52 @@ func (m *Manager) SetApplyCallback(cb ApplyCallback) {
 	m.applyCallback = cb
 }
 
+// SetFullSyncProvider sets the callback for providing full sync data
+func (m *Manager) SetFullSyncProvider(provider FullSyncProvider) {
+	m.fullSyncProvider = provider
+}
+
+// FullSync broadcasts all local data to connected peers
+// This is used for initial sync when a new peer joins the cluster
+func (m *Manager) FullSync() (int, error) {
+	if !m.config.Enabled {
+		return 0, fmt.Errorf("sync is not enabled")
+	}
+
+	if m.fullSyncProvider == nil {
+		return 0, fmt.Errorf("full sync provider not configured")
+	}
+
+	// Get all data from the provider
+	items, err := m.fullSyncProvider()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get full sync data: %w", err)
+	}
+
+	log.Printf("[sync] Starting full sync with %d items", len(items))
+
+	// Record each item as a change (OpUpdate so it won't fail if already exists on peer)
+	synced := 0
+	for _, item := range items {
+		entry, err := m.oplog.Append(item.EntityType, item.EntityID, item.TenantID, OpUpdate, item.Data)
+		if err != nil {
+			log.Printf("[sync] Failed to append item %s/%s: %v", item.EntityType, item.EntityID, err)
+			continue
+		}
+
+		// Broadcast to connected peers
+		select {
+		case m.changeChan <- entry:
+			synced++
+		default:
+			log.Printf("[sync] Warning: change channel full, dropping broadcast for %s/%s", item.EntityType, item.EntityID)
+		}
+	}
+
+	log.Printf("[sync] Full sync complete: %d/%d items broadcast", synced, len(items))
+	return synced, nil
+}
+
 // Start begins sync operations
 func (m *Manager) Start() error {
 	if !m.config.Enabled {
@@ -131,6 +192,10 @@ func (m *Manager) Start() error {
 	// Start tombstone pruner
 	m.wg.Add(1)
 	go m.runPruner()
+
+	// Start periodic peer state saver (every 30 seconds)
+	m.wg.Add(1)
+	go m.runPeerStateSaver()
 
 	return nil
 }
@@ -158,6 +223,21 @@ func (m *Manager) UpdateConfig(newConfig *Config) {
 	oldPeers := make(map[string]bool)
 	for _, p := range m.config.Peers {
 		oldPeers[p.URL] = true
+	}
+
+	// Preserve internal config values that aren't set via API
+	if newConfig.PingInterval == 0 {
+		newConfig.PingInterval = m.config.PingInterval
+	}
+	if newConfig.ReconnectInterval == 0 {
+		newConfig.ReconnectInterval = m.config.ReconnectInterval
+	}
+	// Set defaults if still zero (e.g., initial config)
+	if newConfig.PingInterval == 0 {
+		newConfig.PingInterval = 30 * time.Second
+	}
+	if newConfig.ReconnectInterval == 0 {
+		newConfig.ReconnectInterval = 5 * time.Second
 	}
 
 	// Update config
@@ -238,19 +318,22 @@ func (m *Manager) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // Status returns the current cluster status
 func (m *Manager) Status() *ClusterStatus {
+	// Get oplog info first, outside the peersMu lock to avoid potential deadlocks
+	currentHLC := m.oplog.CurrentHLC()
+	// Skip Count() as it can be slow with large oplogs - it's not critical info
+	// count, _ := m.oplog.Count()
+
 	m.peersMu.RLock()
 	defer m.peersMu.RUnlock()
 
 	status := &ClusterStatus{
-		ServerID:   m.serverID,
-		ServerName: m.serverName,
-		Enabled:    m.config.Enabled,
-		CurrentHLC: m.oplog.CurrentHLC(),
-		Peers:      make([]PeerState, 0, len(m.peers)),
+		ServerID:    m.serverID,
+		ServerName:  m.serverName,
+		Enabled:     m.config.Enabled,
+		CurrentHLC:  currentHLC,
+		OpLogEntries: -1, // Indicate we're not counting
+		Peers:       make([]PeerState, 0, len(m.peers)),
 	}
-
-	count, _ := m.oplog.Count()
-	status.OpLogEntries = count
 
 	for _, peer := range m.peers {
 		if peer.state != nil {
@@ -288,10 +371,14 @@ func (m *Manager) broadcastChange(entry *OpLogEntry) {
 	m.peersMu.RLock()
 	defer m.peersMu.RUnlock()
 
+	log.Printf("[sync] Broadcasting change %s to %d peers", entry.ID, len(m.peers))
+
 	for _, peer := range m.peers {
+		log.Printf("[sync] Peer %s: state=%v connected=%v", peer.serverID, peer.state != nil, peer.state != nil && peer.state.Connected)
 		if peer.state != nil && peer.state.Connected {
 			select {
 			case peer.sendChan <- msg:
+				log.Printf("[sync] Sent change %s to peer %s", entry.ID, peer.serverID)
 			default:
 				log.Printf("[sync] Send channel full for peer %s", peer.serverID)
 			}
@@ -325,10 +412,27 @@ func (m *Manager) connectToPeer(cfg PeerConfig) {
 }
 
 func (m *Manager) dialPeer(cfg PeerConfig) error {
-	// Parse URL
+	// Parse URL and convert to WebSocket URL
 	u, err := url.Parse(cfg.URL)
 	if err != nil {
 		return fmt.Errorf("parse URL: %w", err)
+	}
+
+	// Convert http(s) to ws(s) scheme
+	switch u.Scheme {
+	case "https":
+		u.Scheme = "wss"
+	case "http":
+		u.Scheme = "ws"
+	case "wss", "ws":
+		// Already a WebSocket URL
+	default:
+		return fmt.Errorf("unsupported URL scheme: %s", u.Scheme)
+	}
+
+	// Add the sync WebSocket path if not present
+	if !strings.HasSuffix(u.Path, "/sync") {
+		u.Path = strings.TrimSuffix(u.Path, "/") + "/sync"
 	}
 
 	// Create dialer with TLS config
@@ -338,9 +442,15 @@ func (m *Manager) dialPeer(cfg PeerConfig) error {
 		},
 	}
 
-	log.Printf("[sync] Connecting to peer %s", cfg.URL)
+	log.Printf("[sync] Connecting to peer %s", u.String())
 
-	conn, _, err := dialer.DialContext(m.ctx, u.String(), nil)
+	// Set up headers with API key for authentication
+	headers := http.Header{}
+	if cfg.APIKey != "" {
+		headers.Set("X-API-Key", cfg.APIKey)
+	}
+
+	conn, _, err := dialer.DialContext(m.ctx, u.String(), headers)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
@@ -476,6 +586,12 @@ func (m *Manager) performHandshake(peer *peerConn, isInitiator bool) error {
 		peer.state.Connected = true
 		peer.state.LastSyncTime = time.Now()
 
+		// Reject self-connections (can happen with hairpin NAT)
+		if peer.serverID == m.serverID {
+			log.Printf("[sync] Rejecting self-connection to %s (server_id=%s)", peer.url, peer.serverID)
+			return fmt.Errorf("self-connection detected")
+		}
+
 		log.Printf("[sync] Connected to peer %s (%s)", peer.serverName, peer.serverID)
 
 	} else {
@@ -536,6 +652,12 @@ func (m *Manager) performHandshake(peer *peerConn, isInitiator bool) error {
 		peer.state.ServerName = hello.ServerName
 		peer.state.Connected = true
 		peer.state.LastSyncTime = time.Now()
+
+		// Reject self-connections (can happen with hairpin NAT)
+		if peer.serverID == m.serverID {
+			log.Printf("[sync] Rejecting self-connection (server_id=%s)", peer.serverID)
+			return fmt.Errorf("self-connection detected")
+		}
 
 		log.Printf("[sync] Accepted peer %s (%s)", peer.serverName, peer.serverID)
 	}
@@ -604,14 +726,50 @@ func (m *Manager) runPruner() {
 	}
 }
 
+// runPeerStateSaver periodically saves peer state to reduce write frequency
+func (m *Manager) runPeerStateSaver() {
+	defer m.wg.Done()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			// Save final state on shutdown
+			m.savePeerStates()
+			return
+		case <-ticker.C:
+			m.savePeerStates()
+		}
+	}
+}
+
+// savePeerStates saves all connected peer states to disk
+func (m *Manager) savePeerStates() {
+	m.peersMu.RLock()
+	defer m.peersMu.RUnlock()
+
+	for _, peer := range m.peers {
+		if peer.state != nil && peer.state.Connected {
+			if err := m.oplog.SavePeerState(peer.state); err != nil {
+				log.Printf("[sync] Failed to save peer state for %s: %v", peer.serverID, err)
+			}
+		}
+	}
+}
+
 // peerConn methods
 
 func (p *peerConn) readLoop() {
 	defer p.cancel()
 
+	log.Printf("[sync] readLoop started for peer %s (url=%s)", p.serverID, p.url)
+
 	for {
 		select {
 		case <-p.ctx.Done():
+			log.Printf("[sync] readLoop context done for peer %s", p.serverID)
 			return
 		default:
 		}
@@ -622,6 +780,10 @@ func (p *peerConn) readLoop() {
 			return
 		}
 
+		// Only log non-keepalive messages
+		if msg.Type != MsgPing && msg.Type != MsgPong {
+			log.Printf("[sync] readLoop received message type=%s from peer %s", msg.Type, p.serverID)
+		}
 		p.handleMessage(msg)
 	}
 }
@@ -636,6 +798,10 @@ func (p *peerConn) writeLoop() {
 		case msg, ok := <-p.sendChan:
 			if !ok {
 				return
+			}
+			// Only log non-keepalive messages
+			if msg.Type != MsgPing && msg.Type != MsgPong {
+				log.Printf("[sync] writeLoop sending %s to peer %s", msg.Type, p.serverID)
 			}
 			if err := p.sendMessage(msg); err != nil {
 				log.Printf("[sync] Write error to %s: %v", p.serverID, err)
@@ -720,6 +886,9 @@ func (p *peerConn) handleMessage(msg *Message) {
 func (p *peerConn) handleChange(payload *ChangePayload) {
 	entry := &payload.Entry
 
+	log.Printf("[sync] Received change from peer %s: type=%s entity=%s op=%s", 
+		p.serverID, entry.EntityType, entry.EntityID, entry.Operation)
+
 	// Apply to local oplog
 	applied, err := p.manager.oplog.ApplyRemote(entry)
 	if err != nil {
@@ -733,21 +902,24 @@ func (p *peerConn) handleChange(payload *ChangePayload) {
 		return
 	}
 
+	log.Printf("[sync] Change %s applied=%v, calling callback", entry.ID, applied)
+
 	if applied && p.manager.applyCallback != nil {
 		if err := p.manager.applyCallback(entry); err != nil {
 			log.Printf("[sync] Apply callback failed for %s: %v", entry.ID, err)
 		}
 	}
 
-	// Update peer state
-	p.state.LastHLC = entry.HLC
-	p.state.LastSyncTime = time.Now()
-	p.manager.oplog.SavePeerState(p.state)
+	// Update peer state (in memory only - save periodically, not on every change)
+	if applied {
+		p.state.LastHLC = entry.HLC
+		p.state.LastSyncTime = time.Now()
+	}
 
 	// Send ack
 	ack, _ := NewMessage(MsgChangeAck, &ChangeAckPayload{
 		OpID:    entry.ID,
-		Applied: true,
+		Applied: applied,
 	})
 	p.sendChan <- ack
 }
@@ -759,13 +931,20 @@ func (p *peerConn) handleSyncRequest(payload *SyncRequestPayload) {
 		since = hlc
 	}
 
-	entries, err := p.manager.oplog.GetEntriesSince(since, payload.Limit)
+	// Ensure limit is valid (default to 1000 if not set)
+	limit := payload.Limit
+	if limit <= 0 {
+		limit = 1000
+	}
+
+	entries, err := p.manager.oplog.GetEntriesSince(since, limit)
 	if err != nil {
 		log.Printf("[sync] Failed to get entries: %v", err)
 		return
 	}
 
-	hasMore := len(entries) == payload.Limit
+	// hasMore is true only if we returned a full batch AND limit was > 0
+	hasMore := len(entries) > 0 && len(entries) == limit
 
 	resp, _ := NewMessage(MsgSyncResponse, &SyncResponsePayload{
 		Entries:    entries,
@@ -778,6 +957,7 @@ func (p *peerConn) handleSyncRequest(payload *SyncRequestPayload) {
 func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 	log.Printf("[sync] Received %d entries from %s", len(payload.Entries), p.serverID)
 
+	appliedCount := 0
 	for _, entry := range payload.Entries {
 		entryCopy := entry // avoid loop variable capture
 		applied, err := p.manager.oplog.ApplyRemote(&entryCopy)
@@ -786,18 +966,24 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 			continue
 		}
 
-		if applied && p.manager.applyCallback != nil {
-			if err := p.manager.applyCallback(&entryCopy); err != nil {
-				log.Printf("[sync] Apply callback failed for %s: %v", entry.ID, err)
+		if applied {
+			appliedCount++
+			if p.manager.applyCallback != nil {
+				if err := p.manager.applyCallback(&entryCopy); err != nil {
+					log.Printf("[sync] Apply callback failed for %s: %v", entry.ID, err)
+				}
 			}
+			// Update last HLC only for actually applied entries
+			p.state.LastHLC = entry.HLC
 		}
+	}
 
-		// Update last HLC
-		p.state.LastHLC = entry.HLC
+	if appliedCount > 0 {
+		log.Printf("[sync] Applied %d new entries from %s", appliedCount, p.serverID)
 	}
 
 	p.state.LastSyncTime = time.Now()
-	p.manager.oplog.SavePeerState(p.state)
+	// Don't save peer state here - let the periodic saver handle it
 
 	// Request more if available
 	if payload.HasMore {
@@ -813,9 +999,9 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 }
 
 func (p *peerConn) readMessage() (*Message, error) {
-	p.connMu.Lock()
-	defer p.connMu.Unlock()
-
+	// Note: No mutex here - gorilla/websocket supports one concurrent reader
+	// and one concurrent writer. The mutex is only needed for sendMessage
+	// to protect against concurrent writes (though our design has one writeLoop).
 	_, data, err := p.conn.ReadMessage()
 	if err != nil {
 		return nil, err
@@ -838,7 +1024,11 @@ func (p *peerConn) sendMessage(msg *Message) error {
 		return fmt.Errorf("marshal message: %w", err)
 	}
 
-	return p.conn.WriteMessage(websocket.TextMessage, data)
+	err = p.conn.WriteMessage(websocket.TextMessage, data)
+	if err != nil {
+		log.Printf("[sync] WriteMessage failed for peer %s: %v", p.serverID, err)
+	}
+	return err
 }
 
 func (p *peerConn) close() {

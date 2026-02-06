@@ -522,6 +522,11 @@ func (m *Manager) InvalidateSession(sessionID string) {
 
 // CreateUser creates a new user
 func (m *Manager) CreateUser(username, password, email, displayName, role, tenantID string) (*User, error) {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.CreateUser(username, password, email, displayName, role, tenantID)
+	}
+
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 
@@ -572,6 +577,11 @@ func (m *Manager) CreateUser(username, password, email, displayName, role, tenan
 
 // UpdateUserPassword updates a user's password
 func (m *Manager) UpdateUserPassword(userID, newPassword string) error {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.UpdateUserPassword(userID, newPassword)
+	}
+
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 
@@ -591,6 +601,11 @@ func (m *Manager) UpdateUserPassword(userID, newPassword string) error {
 
 // DeleteUser removes a user
 func (m *Manager) DeleteUser(userID string) error {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.DeleteUser(userID)
+	}
+
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 
@@ -605,7 +620,12 @@ func (m *Manager) DeleteUser(userID string) error {
 }
 
 // CreateAPIKey creates a new API key and returns the raw key (only shown once)
-func (m *Manager) CreateAPIKey(name string, permissions []string, expiresAt *time.Time, createdBy string) (*APIKey, string, error) {
+func (m *Manager) CreateAPIKey(name string, permissions []string, tenantID string, expiresAt *time.Time, createdBy string) (*APIKey, string, error) {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.CreateAPIKey(name, permissions, tenantID, expiresAt, createdBy)
+	}
+
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 
@@ -620,6 +640,7 @@ func (m *Manager) CreateAPIKey(name string, permissions []string, expiresAt *tim
 		Name:        name,
 		KeyHash:     HashAPIKey(rawKey),
 		KeyPrefix:   rawKey[:12],
+		TenantID:    tenantID,
 		Permissions: permissions,
 		CreatedAt:   time.Now(),
 		ExpiresAt:   expiresAt,
@@ -637,6 +658,11 @@ func (m *Manager) CreateAPIKey(name string, permissions []string, expiresAt *tim
 
 // DeleteAPIKey removes an API key
 func (m *Manager) DeleteAPIKey(keyID string) error {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.store.DeleteAPIKey(keyID)
+	}
+
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 
@@ -652,6 +678,11 @@ func (m *Manager) DeleteAPIKey(keyID string) error {
 
 // ListUsers returns all users (without password hashes)
 func (m *Manager) ListUsers() []User {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.ListUsers("")
+	}
+
 	m.configMu.RLock()
 	defer m.configMu.RUnlock()
 
@@ -667,6 +698,29 @@ func (m *Manager) ListUsers() []User {
 
 // ListAPIKeys returns all API keys (without key hashes)
 func (m *Manager) ListAPIKeys() []APIKey {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		keys, err := m.storageManager.store.ListAPIKeys("") // Empty tenant = all tenants for admin
+		if err != nil {
+			return nil
+		}
+		result := make([]APIKey, len(keys))
+		for i, k := range keys {
+			result[i] = APIKey{
+				ID:          k.ID,
+				Name:        k.Name,
+				KeyHash:     "", // Never expose hash
+				KeyPrefix:   k.KeyPrefix,
+				Permissions: k.Permissions,
+				CreatedAt:   k.CreatedAt,
+				ExpiresAt:   k.ExpiresAt,
+				LastUsed:    k.LastUsed,
+				CreatedBy:   k.CreatedBy,
+			}
+		}
+		return result
+	}
+
 	m.configMu.RLock()
 	defer m.configMu.RUnlock()
 
@@ -837,6 +891,11 @@ func (m *Manager) RequireRole(roles ...string) func(http.HandlerFunc) http.Handl
 
 // GetUserByID retrieves a user by ID
 func (m *Manager) GetUserByID(userID string) (*User, error) {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.GetUserByID(userID)
+	}
+
 	m.configMu.RLock()
 	defer m.configMu.RUnlock()
 
@@ -853,6 +912,11 @@ func (m *Manager) GetUserByID(userID string) (*User, error) {
 
 // GetUserByUsername retrieves a user by username
 func (m *Manager) GetUserByUsername(username string) (*User, error) {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.GetUserByUsername(username)
+	}
+
 	m.configMu.RLock()
 	defer m.configMu.RUnlock()
 
@@ -869,6 +933,11 @@ func (m *Manager) GetUserByUsername(username string) (*User, error) {
 
 // ChangeUserPassword changes a user's password (requires current password)
 func (m *Manager) ChangeUserPassword(userID, currentPassword, newPassword string) error {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.ChangeUserPassword(userID, currentPassword, newPassword)
+	}
+
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 
@@ -893,6 +962,11 @@ func (m *Manager) ChangeUserPassword(userID, currentPassword, newPassword string
 
 // CreateSessionForOIDC creates a session for an OIDC-authenticated user
 func (m *Manager) CreateSessionForOIDC(subject, email, displayName, role string) (*Session, error) {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.CreateSessionForOIDC(subject, email, displayName, role)
+	}
+
 	// Check if user exists by subject (stored as ID)
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
@@ -933,6 +1007,11 @@ func (m *Manager) CreateSessionForOIDC(subject, email, displayName, role string)
 
 // AddWebAuthnCredential adds a WebAuthn credential to a user
 func (m *Manager) AddWebAuthnCredential(userID string, cred WebAuthnCredential) error {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.AddWebAuthnCredential(userID, cred)
+	}
+
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 
@@ -948,6 +1027,11 @@ func (m *Manager) AddWebAuthnCredential(userID string, cred WebAuthnCredential) 
 
 // GetWebAuthnCredentials returns a user's WebAuthn credentials
 func (m *Manager) GetWebAuthnCredentials(userID string) ([]WebAuthnCredential, error) {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.GetWebAuthnCredentials(userID)
+	}
+
 	m.configMu.RLock()
 	defer m.configMu.RUnlock()
 
@@ -1148,6 +1232,11 @@ func (m *Manager) DeleteTenant(tenantID string) error {
 
 // ListUsersByTenant returns all users in a specific tenant
 func (m *Manager) ListUsersByTenant(tenantID string) []User {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.ListUsersByTenant(tenantID)
+	}
+
 	m.configMu.RLock()
 	defer m.configMu.RUnlock()
 
@@ -1166,6 +1255,11 @@ func (m *Manager) ListUsersByTenant(tenantID string) []User {
 
 // UpdateUser updates a user's email, display name, and role
 func (m *Manager) UpdateUser(userID, email, displayName, role string) (*User, error) {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.UpdateUser(userID, email, displayName, role)
+	}
+
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 
@@ -1229,6 +1323,11 @@ func (m *Manager) CanAccessZone(session *Session, zoneTenantID string) bool {
 
 // RemoveWebAuthnCredential removes a WebAuthn credential from a user
 func (m *Manager) RemoveWebAuthnCredential(userID, credentialID string) error {
+	// Use storage manager if available
+	if m.storageManager != nil {
+		return m.storageManager.RemoveWebAuthnCredential(userID, credentialID)
+	}
+
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 

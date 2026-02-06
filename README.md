@@ -305,7 +305,6 @@ docker-compose logs -f
 | 853 | TCP | DNS over TLS |
 | 8080 | TCP | Web UI / REST API (HTTP) |
 | 8443 | TCP | Web UI / REST API (HTTPS) |
-| 9443 | TCP | Cluster Sync (WebSocket) |
 
 ## Cluster Synchronization
 
@@ -319,11 +318,10 @@ Store this configuration in the `settings` store under key `sync`:
 {
   "enabled": true,
   "node_id": "dns1",
-  "listen_addr": ":9443",
   "shared_secret": "your-secure-shared-secret",
   "peers": [
-    {"id": "dns2", "address": "ws://dns2.example.com:9443/sync"},
-    {"id": "dns3", "address": "ws://dns3.example.com:9443/sync"}
+    {"id": "dns2", "address": "wss://dns2.example.com/sync"},
+    {"id": "dns3", "address": "wss://dns3.example.com/sync"}
   ],
   "tombstone_retention_days": 30
 }

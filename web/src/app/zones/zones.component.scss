@@ -19,6 +19,23 @@
   .header-actions {
     display: flex;
     gap: 12px;
+    align-items: center;
+  }
+}
+
+.tenant-filter {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #f1f5f9;
+  font-size: 0.875rem;
+  min-width: 150px;
+  
+  &:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
   }
 }
 

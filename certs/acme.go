@@ -1,6 +1,7 @@
 package certs
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -10,6 +11,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -77,12 +79,17 @@ type ACMEStorage interface {
 	SaveACMEAccountKey(key []byte) error
 }
 
+// CertUploader is an interface for uploading certificates
+type CertUploader interface {
+	UploadCertificate(certPEM, keyPEM []byte) error
+}
+
 // ACMEManager handles ACME certificate operations
 type ACMEManager struct {
 	mu             sync.RWMutex
 	config         ACMEConfig
 	state          ACMEState
-	certManager    *Manager
+	certManager    CertUploader
 	dnsProvider    DNSProvider
 	httpServer     *http.Server
 	httpChallenge  *http01.ProviderServer
@@ -94,7 +101,7 @@ type ACMEManager struct {
 }
 
 // NewACMEManager creates a new ACME manager
-func NewACMEManager(certManager *Manager) (*ACMEManager, error) {
+func NewACMEManager(certManager CertUploader) (*ACMEManager, error) {
 	m := &ACMEManager{
 		certManager:    certManager,
 		configFile:     "acme-config.json",
@@ -178,6 +185,20 @@ func (m *ACMEManager) GetState() ACMEState {
 	return m.state
 }
 
+// SetCertUploader sets the certificate uploader for received certificates
+func (m *ACMEManager) SetCertUploader(uploader CertUploader) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.certManager = uploader
+}
+
+// GetCertUploader returns the current certificate uploader
+func (m *ACMEManager) GetCertUploader() CertUploader {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.certManager
+}
+
 // SetDNSProvider sets the DNS provider for DNS-01 challenges
 func (m *ACMEManager) SetDNSProvider(provider DNSProvider) {
 	m.mu.Lock()
@@ -249,6 +270,54 @@ func (m *ACMEManager) getAccountKey() (crypto.PrivateKey, error) {
 	return key, nil
 }
 
+// createExternalDNSHTTPClient creates an HTTP client that uses external DNS servers
+// (1.1.1.1 and 8.8.8.8) instead of the system resolver. This is necessary because
+// when running as a DNS server, the system resolver may point to ourselves,
+// causing ACME lookups to fail.
+func createExternalDNSHTTPClient() *http.Client {
+	// Custom resolver using external DNS servers
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			// Use external DNS servers (Cloudflare and Google)
+			dialer := &net.Dialer{
+				Timeout: 10 * time.Second,
+			}
+			// Try Cloudflare first, then Google
+			for _, dns := range []string{"1.1.1.1:53", "8.8.8.8:53"} {
+				conn, err := dialer.DialContext(ctx, "udp", dns)
+				if err == nil {
+					return conn, nil
+				}
+			}
+			// Fall back to default if external DNS fails
+			return dialer.DialContext(ctx, network, address)
+		},
+	}
+
+	// Custom dialer that uses our resolver
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Resolver:  resolver,
+	}
+
+	// Custom transport with our dialer
+	transport := &http.Transport{
+		DialContext:           dialer.DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+	}
+
+	return &http.Client{
+		Transport: transport,
+		Timeout:   60 * time.Second,
+	}
+}
+
 // RequestCertificate requests a new certificate from ACME
 func (m *ACMEManager) RequestCertificate(email string, domains []string) error {
 	m.mu.Lock()
@@ -283,6 +352,10 @@ func (m *ACMEManager) RequestCertificate(email string, domains []string) error {
 		log.Printf("ACME: Using Let's Encrypt PRODUCTION environment")
 	}
 	config.Certificate.KeyType = certcrypto.EC256
+
+	// Create custom HTTP client with external DNS resolver
+	// This prevents the ACME client from querying our own DNS server
+	config.HTTPClient = createExternalDNSHTTPClient()
 
 	client, err := lego.NewClient(config)
 	if err != nil {

@@ -57,7 +57,6 @@ export class ClusterSyncComponent implements OnInit, OnDestroy {
     enabled: false,
     server_id: '',
     server_name: '',
-    listen_addr: ':9443',
     shared_secret: '',
     peers: [],
     tombstone_retention_days: 7
@@ -99,7 +98,7 @@ export class ClusterSyncComponent implements OnInit, OnDestroy {
     this.api.getSyncConfig().subscribe({
       next: (config) => {
         this.config = config;
-        this.configForm = { ...config };
+        this.configForm = { ...config, peers: config.peers || [] };
         this.loadStatus();
       },
       error: (err) => {
@@ -192,6 +191,19 @@ export class ClusterSyncComponent implements OnInit, OnDestroy {
       },
       error: (err) => {
         this.snackBar.open('Failed to trigger sync: ' + (err.error || err.message), 'Close', { duration: 5000 });
+      }
+    });
+  }
+
+  fullSync() {
+    this.snackBar.open('Starting full sync...', 'Close', { duration: 2000 });
+    this.api.fullSync().subscribe({
+      next: (res) => {
+        this.snackBar.open(`Full sync complete: ${res.items_synced} items synced`, 'Close', { duration: 5000 });
+        this.loadStatus();
+      },
+      error: (err) => {
+        this.snackBar.open('Full sync failed: ' + (err.error?.message || err.message), 'Close', { duration: 5000 });
       }
     });
   }

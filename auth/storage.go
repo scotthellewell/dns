@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 // StorageInterface defines the storage methods needed by auth manager
 type StorageInterface interface {
 	// User operations
+	GetUser(id string) (*storage.User, error)
 	GetUserByUsername(username string) (*storage.User, error)
 	UpdateUser(user *storage.User) error
 	ValidatePassword(username, password string) (*storage.User, error)
@@ -244,6 +246,43 @@ func (sm *StorageManager) InvalidateSession(sessionID string) {
 	sm.store.DeleteSession(sessionID)
 }
 
+// CreateSessionForOIDC creates a session for an OIDC-authenticated user
+func (sm *StorageManager) CreateSessionForOIDC(subject, email, displayName, role string) (*Session, error) {
+	// Check if user exists by subject (stored as ID) or email
+	user, err := sm.store.GetUser(subject)
+	if err != nil {
+		user, err = sm.store.GetUserByUsername(email)
+	}
+
+	if user != nil {
+		// Update last login
+		user.LastLogin = time.Now()
+		sm.store.UpdateUser(user)
+	} else {
+		// Create user if doesn't exist
+		username := email
+		if idx := strings.Index(email, "@"); idx > 0 {
+			username = email[:idx]
+		}
+
+		user = &storage.User{
+			ID:          subject,
+			Username:    username,
+			Email:       email,
+			DisplayName: displayName,
+			Role:        role,
+			TenantID:    MainTenantID, // OIDC users go to main tenant by default
+			CreatedAt:   time.Now(),
+			LastLogin:   time.Now(),
+		}
+		if err := sm.store.CreateUserWithPassword(user, ""); err != nil {
+			return nil, err
+		}
+	}
+
+	return sm.createSession(user, "oidc")
+}
+
 // CreateUser creates a new user
 func (sm *StorageManager) CreateUser(username, password, email, displayName, role, tenantID string) (*User, error) {
 	// Check if user exists
@@ -286,6 +325,28 @@ func (sm *StorageManager) CreateUser(username, password, email, displayName, rol
 	}, nil
 }
 
+// ListUsersByTenant returns all users in a specific tenant
+func (sm *StorageManager) ListUsersByTenant(tenantID string) []User {
+	storageUsers, err := sm.store.ListUsers(tenantID)
+	if err != nil {
+		return nil
+	}
+
+	var users []User
+	for _, u := range storageUsers {
+		users = append(users, User{
+			ID:          u.ID,
+			Username:    u.Username,
+			Email:       u.Email,
+			DisplayName: u.DisplayName,
+			Role:        u.Role,
+			TenantID:    u.TenantID,
+			CreatedAt:   u.CreatedAt,
+		})
+	}
+	return users
+}
+
 // UpdateUserPassword updates a user's password
 func (sm *StorageManager) UpdateUserPassword(userID, newPassword string) error {
 	return sm.store.UpdateUserPassword(userID, newPassword)
@@ -294,6 +355,133 @@ func (sm *StorageManager) UpdateUserPassword(userID, newPassword string) error {
 // DeleteUser removes a user
 func (sm *StorageManager) DeleteUser(userID string) error {
 	return sm.store.DeleteUser(userID)
+}
+
+// GetUserByID retrieves a user by ID
+func (sm *StorageManager) GetUserByID(userID string) (*User, error) {
+	u, err := sm.store.GetUser(userID)
+	if err != nil {
+		return nil, ErrUserNotFound
+	}
+	return &User{
+		ID:                  u.ID,
+		Username:            u.Username,
+		Email:               u.Email,
+		DisplayName:         u.DisplayName,
+		Role:                u.Role,
+		TenantID:            u.TenantID,
+		CreatedAt:           u.CreatedAt,
+		LastLogin:           u.LastLogin,
+		WebAuthnCredentials: convertWebAuthnCredentials(u.WebAuthnCredentials),
+	}, nil
+}
+
+// GetUserByUsername retrieves a user by username
+func (sm *StorageManager) GetUserByUsername(username string) (*User, error) {
+	u, err := sm.store.GetUserByUsername(username)
+	if err != nil {
+		return nil, ErrUserNotFound
+	}
+	return &User{
+		ID:                  u.ID,
+		Username:            u.Username,
+		Email:               u.Email,
+		DisplayName:         u.DisplayName,
+		Role:                u.Role,
+		TenantID:            u.TenantID,
+		CreatedAt:           u.CreatedAt,
+		LastLogin:           u.LastLogin,
+		WebAuthnCredentials: convertWebAuthnCredentials(u.WebAuthnCredentials),
+	}, nil
+}
+
+// UpdateUser updates a user's email, display name, and role
+func (sm *StorageManager) UpdateUser(userID, email, displayName, role string) (*User, error) {
+	u, err := sm.store.GetUser(userID)
+	if err != nil {
+		return nil, ErrUserNotFound
+	}
+	u.Email = email
+	u.DisplayName = displayName
+	u.Role = role
+	if err := sm.store.UpdateUser(u); err != nil {
+		return nil, err
+	}
+	return &User{
+		ID:          u.ID,
+		Username:    u.Username,
+		Email:       u.Email,
+		DisplayName: u.DisplayName,
+		Role:        u.Role,
+		TenantID:    u.TenantID,
+		CreatedAt:   u.CreatedAt,
+	}, nil
+}
+
+// AddWebAuthnCredential adds a WebAuthn credential to a user
+func (sm *StorageManager) AddWebAuthnCredential(userID string, cred WebAuthnCredential) error {
+	storageCred := &storage.WebAuthnCredential{
+		ID:              cred.ID,
+		Name:            cred.Name,
+		CredentialID:    cred.CredentialID,
+		PublicKey:       cred.PublicKey,
+		AttestationType: cred.AttestationType,
+		AAGUID:          cred.AAGUID,
+		SignCount:       cred.SignCount,
+		BackupEligible:  cred.BackupEligible,
+		BackupState:     cred.BackupState,
+		CreatedAt:       cred.CreatedAt,
+		LastUsed:        cred.LastUsed,
+	}
+	return sm.store.AddWebAuthnCredential(userID, storageCred)
+}
+
+// GetWebAuthnCredentials returns a user's WebAuthn credentials
+func (sm *StorageManager) GetWebAuthnCredentials(userID string) ([]WebAuthnCredential, error) {
+	u, err := sm.store.GetUser(userID)
+	if err != nil {
+		return nil, ErrUserNotFound
+	}
+	return convertWebAuthnCredentials(u.WebAuthnCredentials), nil
+}
+
+// RemoveWebAuthnCredential removes a WebAuthn credential from a user
+func (sm *StorageManager) RemoveWebAuthnCredential(userID, credentialID string) error {
+	return sm.store.RemoveWebAuthnCredential(userID, credentialID)
+}
+
+// ChangeUserPassword verifies the current password and updates to a new one
+func (sm *StorageManager) ChangeUserPassword(userID, currentPassword, newPassword string) error {
+	u, err := sm.store.GetUser(userID)
+	if err != nil {
+		return ErrUserNotFound
+	}
+	// Verify current password
+	if !CheckPassword(currentPassword, u.PasswordHash) {
+		return ErrInvalidCredentials
+	}
+	return sm.store.UpdateUserPassword(userID, newPassword)
+}
+
+// convertWebAuthnCredentials converts storage credentials to auth credentials
+func convertWebAuthnCredentials(creds []storage.WebAuthnCredential) []WebAuthnCredential {
+	result := make([]WebAuthnCredential, len(creds))
+	for i, c := range creds {
+		result[i] = WebAuthnCredential{
+			ID:              c.ID,
+			Name:            c.Name,
+			CredentialID:    c.CredentialID,
+			PublicKey:       c.PublicKey,
+			AttestationType: c.AttestationType,
+			AAGUID:          c.AAGUID,
+			SignCount:       c.SignCount,
+			BackupEligible:  c.BackupEligible,
+			BackupState:     c.BackupState,
+			CreatedAt:       c.CreatedAt,
+			LastUsed:        c.LastUsed,
+		}
+	}
+	return result
 }
 
 // CreateAPIKey creates a new API key

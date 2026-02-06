@@ -102,6 +102,8 @@ func (o *OpLog) ApplyRemote(entry *OpLogEntry) (bool, error) {
 	// Update our clock based on received HLC
 	o.clock.Update(entry.HLC)
 
+	var applied bool
+
 	err := o.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(oplogBucket)
 		if b == nil {
@@ -116,7 +118,8 @@ func (o *OpLog) ApplyRemote(entry *OpLogEntry) (bool, error) {
 		// Check if entry exists
 		existing := b.Get(key)
 		if existing != nil {
-			// Already have this entry
+			// Already have this entry - not applied
+			applied = false
 			return nil
 		}
 
@@ -125,10 +128,14 @@ func (o *OpLog) ApplyRemote(entry *OpLogEntry) (bool, error) {
 			return err
 		}
 
-		return b.Put(key, entryBytes)
+		if err := b.Put(key, entryBytes); err != nil {
+			return err
+		}
+		applied = true
+		return nil
 	})
 
-	return err == nil, err
+	return applied, err
 }
 
 // GetEntriesSince returns entries with HLC greater than the given HLC
@@ -229,6 +236,40 @@ func (o *OpLog) Count() (int64, error) {
 	})
 
 	return count, err
+}
+
+// Purge removes all entries from the oplog and resets peer state
+func (o *OpLog) Purge() (int64, error) {
+	var purged int64
+
+	err := o.db.Update(func(tx *bolt.Tx) error {
+		// Count existing entries
+		b := tx.Bucket(oplogBucket)
+		if b != nil {
+			stats := b.Stats()
+			purged = int64(stats.KeyN)
+		}
+
+		// Delete and recreate oplog bucket
+		if err := tx.DeleteBucket(oplogBucket); err != nil && err != bolt.ErrBucketNotFound {
+			return err
+		}
+		if _, err := tx.CreateBucket(oplogBucket); err != nil {
+			return err
+		}
+
+		// Delete and recreate peer state bucket
+		if err := tx.DeleteBucket(peerStateBucket); err != nil && err != bolt.ErrBucketNotFound {
+			return err
+		}
+		if _, err := tx.CreateBucket(peerStateBucket); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	return purged, err
 }
 
 // PruneTombstones removes delete entries older than the given duration

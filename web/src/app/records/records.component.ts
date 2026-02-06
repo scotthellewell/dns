@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService, DnsRecord, Zone, Delegation, GlueRecord, DsRecordData } from '../services/api.service';
 import { ToastService } from '../services/toast.service';
+import { AuthService, Tenant } from '../services/auth.service';
 
 @Component({
   selector: 'app-records',
@@ -13,10 +14,16 @@ import { ToastService } from '../services/toast.service';
 })
 export class RecordsComponent implements OnInit {
   private toast = inject(ToastService);
+  readonly auth = inject(AuthService);
   
   records: DnsRecord[] = [];
   filteredRecords: DnsRecord[] = [];
   zones: Zone[] = [];
+  filteredZones: Zone[] = [];
+  formZones: Zone[] = [];  // Zones filtered for the add/edit form
+  tenants: Tenant[] = [];
+  selectedTenant = '';
+  formTenant = '';  // Tenant selected in the add record form
   showForm = false;
   editingRecord: { record: DnsRecord; index: number } | null = null;
   
@@ -40,15 +47,87 @@ export class RecordsComponent implements OnInit {
   constructor(private api: ApiService, private cdr: ChangeDetectorRef) {}
 
   ngOnInit(): void {
+    this.loadTenants();
     this.loadZones();
     this.loadRecords();
     this.loadDelegations();
+  }
+
+  loadTenants(): void {
+    if (!this.auth.isSuperAdmin()) return;
+    
+    this.auth.getTenants().subscribe({
+      next: (tenants) => {
+        this.tenants = tenants;
+        // Default to main tenant
+        const mainTenant = tenants.find(t => t.is_main);
+        if (mainTenant && !this.selectedTenant) {
+          this.selectedTenant = mainTenant.id;
+          this.filterZonesByTenant();
+        }
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        console.error('Failed to load tenants', err);
+      }
+    });
+  }
+
+  onTenantFilterChange(): void {
+    this.filterZonesByTenant();
+    // Reset zone filter when tenant changes
+    this.selectedZone = '';
+    this.loadRecords();
+    this.loadDelegations();
+  }
+
+  filterZonesByTenant(): void {
+    if (!this.selectedTenant || !this.auth.isSuperAdmin()) {
+      this.filteredZones = this.zones;
+    } else {
+      this.filteredZones = this.zones.filter(z => z.tenant_id === this.selectedTenant);
+    }
+    this.cdr.detectChanges();
+  }
+
+  // Filter zones for the add/edit form based on formTenant
+  filterFormZones(): void {
+    if (!this.formTenant || !this.auth.isSuperAdmin()) {
+      this.formZones = this.zones;
+    } else {
+      this.formZones = this.zones.filter(z => z.tenant_id === this.formTenant);
+    }
+  }
+
+  onFormTenantChange(): void {
+    this.filterFormZones();
+    // Reset zone selection if current zone is not in filtered list
+    if (this.formData.zone && !this.formZones.find(z => z.name === this.formData.zone)) {
+      this.formData.zone = '';
+    }
+  }
+
+  // Get tenant name for a zone (for displaying in dropdown when "All Tenants" is selected)
+  getTenantNameForZone(zone: Zone): string {
+    if (!zone.tenant_id) return 'Unknown';
+    const tenant = this.tenants.find(t => t.id === zone.tenant_id);
+    return tenant?.name || zone.tenant_id;
+  }
+
+  // Get tenant name for a record (based on its zone)
+  getTenantNameForRecord(record: DnsRecord): string {
+    const zoneName = record.zone_name || record.zone;
+    if (!zoneName) return 'Unknown';
+    const zone = this.zones.find(z => z.name === zoneName);
+    if (!zone) return 'Unknown';
+    return this.getTenantNameForZone(zone);
   }
 
   loadZones(): void {
     this.api.getZones().subscribe({
       next: (zones) => {
         this.zones = zones;
+        this.filterZonesByTenant();
         this.cdr.detectChanges();
       },
       error: (err) => {
@@ -87,6 +166,15 @@ export class RecordsComponent implements OnInit {
   filterRecords(): void {
     let filtered = this.records;
     
+    // Filter by tenant (using zone names from filtered zones)
+    if (this.selectedTenant && this.auth.isSuperAdmin()) {
+      const tenantZoneNames = this.filteredZones.map(z => z.name);
+      filtered = filtered.filter(r => {
+        const zoneName = r.zone_name || r.zone;
+        return zoneName && tenantZoneNames.includes(zoneName);
+      });
+    }
+    
     // Filter by type (client-side since we get all records)
     if (this.selectedType) {
       filtered = filtered.filter(r => r.type === this.selectedType);
@@ -96,12 +184,6 @@ export class RecordsComponent implements OnInit {
   }
 
   onTypeFilterChange(): void {
-    // If Delegation is selected, open the delegation form
-    if (this.selectedType === 'Delegation') {
-      this.openAddForm('Delegation');
-      this.selectedType = ''; // Reset filter
-      return;
-    }
     this.filterRecords();
   }
 
@@ -111,12 +193,12 @@ export class RecordsComponent implements OnInit {
   }
 
   get forwardZones(): Zone[] {
-    return this.zones.filter(z => z.type === 'forward');
+    return this.filteredZones.filter(z => z.type === 'forward');
   }
 
-  // Record types for the form (without Delegation which has its own form)
+  // Record types for the form - includes Delegation which opens its own form
   get formRecordTypes(): string[] {
-    return this.recordTypes.filter(t => t !== 'Delegation');
+    return this.recordTypes;
   }
 
   getEmptyRecord(type: string): DnsRecord {
@@ -225,6 +307,9 @@ export class RecordsComponent implements OnInit {
     } else {
       this.formData = this.getEmptyRecord(type);
       this.editingRecord = null;
+      // Initialize form tenant to match page tenant selection
+      this.formTenant = this.selectedTenant;
+      this.filterFormZones();
       this.showForm = true;
       this.showDelegationForm = false;
     }
@@ -247,6 +332,12 @@ export class RecordsComponent implements OnInit {
 
   onFormTypeChange(): void {
     const type = this.formData.type;
+    // If Delegation is selected, switch to the delegation form
+    if (type === 'Delegation') {
+      this.showForm = false;
+      this.openAddForm('Delegation');
+      return;
+    }
     this.formData = { ...this.getEmptyRecord(type), type };
   }
 
@@ -281,12 +372,18 @@ export class RecordsComponent implements OnInit {
   }
 
   deleteRecord(record: DnsRecord): void {
-    const sameTypeRecords = this.records.filter(r => r.type === record.type);
-    const index = sameTypeRecords.indexOf(record);
-    
     if (!confirm(`Delete ${record.type} record for ${record.name || record.ip}?`)) return;
 
-    this.api.deleteRecord(record.type, index).subscribe({
+    // Use record ID if available (storage backend), otherwise fall back to index
+    let id: string | number;
+    if (record.id) {
+      id = record.id;
+    } else {
+      const sameTypeRecords = this.records.filter(r => r.type === record.type);
+      id = sameTypeRecords.indexOf(record);
+    }
+
+    this.api.deleteRecord(record.type, id).subscribe({
       next: () => {
         this.toast.success('Record deleted successfully');
         this.loadRecords();

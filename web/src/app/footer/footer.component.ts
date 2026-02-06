@@ -1,8 +1,9 @@
-import { Component } from '@angular/core';
+import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatIconModule } from '@angular/material/icon';
 import { MatButtonModule } from '@angular/material/button';
 import { MatDialogModule, MatDialog } from '@angular/material/dialog';
+import { VersionService } from '../services/version.service';
 
 @Component({
   selector: 'app-footer',
@@ -17,6 +18,7 @@ import { MatDialogModule, MatDialog } from '@angular/material/dialog';
   styleUrl: './footer.component.scss'
 })
 export class FooterComponent {
+  readonly versionService = inject(VersionService);
   currentYear = new Date().getFullYear();
   
   constructor(private dialog: MatDialog) {}

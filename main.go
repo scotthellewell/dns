@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/scott/dns/api"
@@ -19,6 +20,7 @@ import (
 	"github.com/scott/dns/server"
 	"github.com/scott/dns/storage"
 	"github.com/scott/dns/sync"
+	bolt "go.etcd.io/bbolt"
 )
 
 func main() {
@@ -87,23 +89,41 @@ func main() {
 		log.Printf("Authentication enabled")
 	}
 
-	// Initialize certificate manager with storage
+	// Initialize ACME manager first (needed for SNI manager)
 	certMgr := certs.NewManagerWithStorage(store)
+	var acmeMgr *certs.ACMEManager
 	if certMgr != nil {
-		log.Printf("Certificate manager initialized")
-		api.SetCertManager(certMgr)
-
-		// Initialize ACME manager for Let's Encrypt certificates
-		acmeMgr, err := certs.NewACMEManagerWithStorage(certMgr, store)
+		var err error
+		acmeMgr, err = certs.NewACMEManagerWithStorage(certMgr, store)
 		if err != nil {
 			log.Printf("Warning: Failed to initialize ACME manager: %v", err)
 		} else {
 			log.Printf("ACME manager initialized")
 			api.SetACMEManager(acmeMgr)
 			acmeMgr.SetDNSProvider(srv)
-			if acmeMgr.GetConfig().AutoRenew {
-				acmeMgr.StartAutoRenew()
-			}
+		}
+	}
+
+	// Initialize SNI-based certificate manager with automatic ACME provisioning
+	sniMgr := certs.NewSNIManager(store, acmeMgr)
+	if sniMgr != nil {
+		log.Printf("SNI certificate manager initialized")
+		api.SetCertManager(sniMgr)
+
+		// Update ACME manager to upload certificates to the SNI manager
+		// so the cache gets updated when new certs are obtained
+		if acmeMgr != nil {
+			acmeMgr.SetCertUploader(sniMgr)
+		}
+
+		// Preload existing certificates
+		if err := sniMgr.PreloadCertificates(); err != nil {
+			log.Printf("Warning: Failed to preload certificates: %v", err)
+		}
+
+		// Start auto-renewal if configured
+		if acmeMgr != nil && acmeMgr.GetConfig().AutoRenew {
+			acmeMgr.StartAutoRenew()
 		}
 	}
 
@@ -111,8 +131,8 @@ func main() {
 	portMgr := ports.NewManagerWithStorage(store)
 	if portMgr != nil {
 		portMgr.SetDNSHandler(srv)
-		if certMgr != nil {
-			portMgr.SetTLSProvider(certMgr)
+		if sniMgr != nil {
+			portMgr.SetTLSProvider(sniMgr)
 		}
 		api.SetPortManager(portMgr)
 	}
@@ -180,9 +200,21 @@ func createWebMux(apiHandler *api.Handler, authMgr *auth.Manager, store *storage
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+
+		// Set cache headers - aggressive caching for hashed files, no caching for index.html
+		if path == "/" || path == "/index.html" {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Expires", "0")
+		} else if strings.Contains(path, ".") && (strings.Contains(path, "-") || strings.HasPrefix(filepath.Base(path), "chunk-")) {
+			// Hashed files (main-HASH.js, chunk-HASH.js, styles-HASH.css) can be cached forever
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
+
 		if path != "/" && !hasFileExtension(path) {
 			fullPath := filepath.Join(webDir, path)
 			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 				http.ServeFile(w, r, filepath.Join(webDir, "index.html"))
 				return
 			}
@@ -199,18 +231,76 @@ func hasFileExtension(path string) bool {
 }
 
 // loadSyncConfig loads sync configuration from storage
+// Reads from the "config" bucket where the sync API saves its configuration
 func loadSyncConfig(store *storage.Store) *config.SyncConfig {
-	data, err := store.GetSetting("sync")
-	if err != nil {
-		return nil
-	}
-
 	var cfg config.SyncConfig
-	if err := json.Unmarshal([]byte(data), &cfg); err != nil {
-		log.Printf("Warning: Failed to parse sync config: %v", err)
+	var foundData bool
+
+	err := store.DB().View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("config"))
+		if bucket == nil {
+			return nil // No config bucket yet
+		}
+
+		data := bucket.Get([]byte("sync"))
+		if data == nil {
+			return nil // No sync config saved yet
+		}
+
+		foundData = true
+
+		// Parse the stored format
+		var stored struct {
+			Enabled                bool   `json:"enabled"`
+			NodeID                 string `json:"node_id"`
+			ServerName             string `json:"server_name"`
+			SharedSecret           string `json:"shared_secret"`
+			TombstoneRetentionDays int    `json:"tombstone_retention_days"`
+			Peers                  []struct {
+				ID                 string `json:"id"`
+				Address            string `json:"address"`
+				URL                string `json:"url"`
+				APIKey             string `json:"api_key"`
+				InsecureSkipVerify bool   `json:"insecure_skip_verify"`
+			} `json:"peers"`
+		}
+
+		if err := json.Unmarshal(data, &stored); err != nil {
+			return err
+		}
+
+		cfg.Enabled = stored.Enabled
+		cfg.NodeID = stored.NodeID
+		cfg.SharedSecret = stored.SharedSecret
+		cfg.TombstoneRetentionDays = stored.TombstoneRetentionDays
+
+		for _, p := range stored.Peers {
+			// Use URL if available, fall back to Address for compatibility
+			peerURL := p.URL
+			if peerURL == "" {
+				peerURL = p.Address
+			}
+			cfg.Peers = append(cfg.Peers, config.SyncPeerConfig{
+				ID:                 p.ID,
+				Address:            peerURL,
+				APIKey:             p.APIKey,
+				InsecureSkipVerify: p.InsecureSkipVerify,
+			})
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		log.Printf("Warning: Failed to load sync config: %v", err)
 		return nil
 	}
 
+	if !foundData {
+		return nil
+	}
+
+	log.Printf("[sync] Loaded config from database: enabled=%v, nodeID=%s, peers=%d", cfg.Enabled, cfg.NodeID, len(cfg.Peers))
 	return &cfg
 }
 
@@ -218,16 +308,21 @@ func loadSyncConfig(store *storage.Store) *config.SyncConfig {
 func initSyncManager(store *storage.Store, cfg *config.SyncConfig) *sync.Manager {
 	// Convert config
 	syncCfg := &sync.Config{
-		Enabled:      cfg.Enabled,
-		ServerID:     cfg.NodeID,
-		ListenAddr:   cfg.ListenAddr,
-		SharedSecret: cfg.SharedSecret,
+		Enabled:           cfg.Enabled,
+		ServerID:          cfg.NodeID,
+		SharedSecret:      cfg.SharedSecret,
+		BatchSize:         1000,
+		ReconnectInterval: 5 * time.Second,
+		PingInterval:      30 * time.Second,
 	}
 
 	// Add peers
 	for _, p := range cfg.Peers {
 		syncCfg.Peers = append(syncCfg.Peers, sync.PeerConfig{
-			URL: p.Address,
+			ID:                 p.ID,
+			URL:                p.Address,
+			APIKey:             p.APIKey,
+			InsecureSkipVerify: p.InsecureSkipVerify,
 		})
 	}
 
@@ -248,6 +343,9 @@ func initSyncManager(store *storage.Store, cfg *config.SyncConfig) *sync.Manager
 	// Set up apply callback to handle incoming changes
 	mgr.SetApplyCallback(createApplyCallback(store))
 
+	// Set up full sync provider to enumerate all data
+	mgr.SetFullSyncProvider(createFullSyncProvider(store))
+
 	// Set up storage hook to record changes
 	storage.SetSyncHook(func(entityType, entityID, tenantID, operation string, data interface{}) error {
 		return mgr.RecordChange(entityType, entityID, tenantID, operation, data)
@@ -265,13 +363,16 @@ func initSyncManager(store *storage.Store, cfg *config.SyncConfig) *sync.Manager
 // createApplyCallback creates a callback function to apply remote changes to local storage
 func createApplyCallback(store *storage.Store) sync.ApplyCallback {
 	return func(entry *sync.OpLogEntry) error {
-		// Skip if data is empty (tombstone/delete with no data)
-		if entry.Operation == sync.OpDelete {
-			return applyDelete(store, entry.EntityType, entry.EntityID)
-		}
+		// Wrap in WithSyncHookDisabled to prevent re-broadcasting received changes
+		return storage.WithSyncHookDisabled(func() error {
+			// Skip if data is empty (tombstone/delete with no data)
+			if entry.Operation == sync.OpDelete {
+				return applyDelete(store, entry.EntityType, entry.EntityID)
+			}
 
-		// Apply create or update
-		return applyCreateOrUpdate(store, entry)
+			// Apply create or update
+			return applyCreateOrUpdate(store, entry)
+		})
 	}
 }
 
@@ -364,5 +465,142 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 	default:
 		log.Printf("[sync] Unknown entity type: %s", entry.EntityType)
 		return nil
+	}
+}
+
+// createFullSyncProvider creates a callback that enumerates all data for full sync
+func createFullSyncProvider(store *storage.Store) sync.FullSyncProvider {
+	return func() ([]sync.FullSyncDataItem, error) {
+		var items []sync.FullSyncDataItem
+
+		// Get all tenants
+		tenants, err := store.ListTenants()
+		if err != nil {
+			log.Printf("[sync] Warning: failed to list tenants: %v", err)
+		} else {
+			for _, tenant := range tenants {
+				items = append(items, sync.FullSyncDataItem{
+					EntityType: sync.EntityTenant,
+					EntityID:   tenant.ID,
+					TenantID:   tenant.ID,
+					Data:       tenant,
+				})
+			}
+		}
+
+		// Get all users (for each tenant)
+		for _, tenant := range tenants {
+			users, err := store.ListUsers(tenant.ID)
+			if err != nil {
+				log.Printf("[sync] Warning: failed to list users for tenant %s: %v", tenant.ID, err)
+				continue
+			}
+			for _, user := range users {
+				// Create a sync-safe version (no password hash)
+				syncUser := struct {
+					ID          string `json:"id"`
+					Username    string `json:"username"`
+					TenantID    string `json:"tenant_id"`
+					Email       string `json:"email"`
+					DisplayName string `json:"display_name"`
+					Role        string `json:"role"`
+					CreatedAt   string `json:"created_at"`
+				}{
+					ID:          user.ID,
+					Username:    user.Username,
+					TenantID:    user.TenantID,
+					Email:       user.Email,
+					DisplayName: user.DisplayName,
+					Role:        user.Role,
+					CreatedAt:   user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+				}
+				items = append(items, sync.FullSyncDataItem{
+					EntityType: sync.EntityUser,
+					EntityID:   user.ID,
+					TenantID:   user.TenantID,
+					Data:       syncUser,
+				})
+			}
+		}
+
+		// Get all zones (for each tenant)
+		for _, tenant := range tenants {
+			zones, err := store.ListZones(tenant.ID)
+			if err != nil {
+				log.Printf("[sync] Warning: failed to list zones for tenant %s: %v", tenant.ID, err)
+				continue
+			}
+			for _, zone := range zones {
+				items = append(items, sync.FullSyncDataItem{
+					EntityType: sync.EntityZone,
+					EntityID:   zone.Name,
+					TenantID:   zone.TenantID,
+					Data:       zone,
+				})
+
+				// Get all records for this zone
+				records, err := store.GetAllZoneRecords(zone.Name)
+				if err != nil {
+					log.Printf("[sync] Warning: failed to list records for zone %s: %v", zone.Name, err)
+					continue
+				}
+				for _, record := range records {
+					items = append(items, sync.FullSyncDataItem{
+						EntityType: sync.EntityRecord,
+						EntityID:   record.ID,
+						TenantID:   zone.TenantID,
+						Data:       record,
+					})
+				}
+			}
+		}
+
+		// Get all DNSSEC keys
+		dnssecKeys, err := store.GetAllDNSSECKeys()
+		if err != nil {
+			log.Printf("[sync] Warning: failed to list DNSSEC keys: %v", err)
+		} else {
+			for _, keys := range dnssecKeys {
+				items = append(items, sync.FullSyncDataItem{
+					EntityType: sync.EntityDNSSECKeys,
+					EntityID:   keys.ZoneName,
+					TenantID:   "",
+					Data:       keys,
+				})
+			}
+		}
+
+		// Get all secondary zones
+		secondaryZones, err := store.ListSecondaryZones()
+		if err != nil {
+			log.Printf("[sync] Warning: failed to list secondary zones: %v", err)
+		} else {
+			for _, zone := range secondaryZones {
+				items = append(items, sync.FullSyncDataItem{
+					EntityType: sync.EntitySecondaryZone,
+					EntityID:   zone.Zone,
+					TenantID:   "",
+					Data:       zone,
+				})
+			}
+		}
+
+		// Get all settings
+		settings, err := store.ListSettings()
+		if err != nil {
+			log.Printf("[sync] Warning: failed to list settings: %v", err)
+		} else {
+			for key, value := range settings {
+				items = append(items, sync.FullSyncDataItem{
+					EntityType: sync.EntitySettings,
+					EntityID:   key,
+					TenantID:   "",
+					Data:       map[string]string{"key": key, "value": value},
+				})
+			}
+		}
+
+		log.Printf("[sync] Full sync provider collected %d items", len(items))
+		return items, nil
 	}
 }

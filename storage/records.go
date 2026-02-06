@@ -41,13 +41,21 @@ func (s *Store) CreateRecord(record *Record) error {
 		return fmt.Errorf("record data required")
 	}
 
+	// Generate ID if not provided
+	if record.ID == "" {
+		record.ID = generateID()
+	}
+
 	now := time.Now()
 	if record.CreatedAt.IsZero() {
 		record.CreatedAt = now
 	}
 	record.UpdatedAt = now
 
-	return s.db.Update(func(tx *bolt.Tx) error {
+	// Variables to capture for sync hook (called after transaction)
+	var tenantID string
+
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		// Verify zone exists
 		zonesBucket := tx.Bucket([]byte("zones"))
 		zoneData := zonesBucket.Get([]byte(record.Zone))
@@ -59,6 +67,9 @@ func (s *Store) CreateRecord(record *Record) error {
 		if err := json.Unmarshal(zoneData, &zone); err != nil {
 			return err
 		}
+
+		// Capture tenant ID for sync hook
+		tenantID = zone.TenantID
 
 		// Get records bucket
 		recordsBucket := tx.Bucket([]byte("records"))
@@ -105,11 +116,17 @@ func (s *Store) CreateRecord(record *Record) error {
 			}
 		}
 
-		// Record change for sync
-		recordChange(EntityTypeRecord, record.ID, zone.TenantID, OpCreate, record)
-
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	// Record change for sync (after transaction commits)
+	recordChange(EntityTypeRecord, record.ID, tenantID, OpCreate, record)
+
+	return nil
 }
 
 // GetRecords retrieves all records for a zone/name/type combination.
@@ -186,7 +203,7 @@ func (s *Store) UpdateRecord(record *Record) error {
 
 	record.UpdatedAt = time.Now()
 
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		recordsBucket := tx.Bucket([]byte("records"))
 		zonesBucket := tx.Bucket([]byte("zones"))
 
@@ -247,17 +264,23 @@ func (s *Store) UpdateRecord(record *Record) error {
 			}
 		}
 
-		// Record change for sync
-		recordChange(EntityTypeRecord, record.ID, "", OpUpdate, record)
-
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	// Record change for sync (after transaction commits)
+	recordChange(EntityTypeRecord, record.ID, "", OpUpdate, record)
+
+	return nil
 }
 
 // DeleteRecord deletes a specific record by ID from a record set.
 // For A/AAAA records, it deletes the associated PTR record.
 func (s *Store) DeleteRecord(zoneName, name, recordType, recordID string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		recordsBucket := tx.Bucket([]byte("records"))
 		zonesBucket := tx.Bucket([]byte("zones"))
 
@@ -325,11 +348,17 @@ func (s *Store) DeleteRecord(zoneName, name, recordType, recordID string) error 
 			}
 		}
 
-		// Record change for sync
-		recordChange(EntityTypeRecord, recordID, "", OpDelete, nil)
-
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	// Record change for sync (after transaction commits)
+	recordChange(EntityTypeRecord, recordID, "", OpDelete, nil)
+
+	return nil
 }
 
 // DeleteRecordsByType deletes all records of a specific type for a zone/name.

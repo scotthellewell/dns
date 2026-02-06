@@ -141,7 +141,6 @@ func (h *Handler) handleZonesStorage(w http.ResponseWriter, r *http.Request, ses
 				Name:     z.Name,
 				Type:     config.ZoneType(z.Type),
 				Subnet:   z.Subnet,
-				Domain:   z.Domain,
 				TTL:      z.TTL,
 			})
 		}
@@ -258,7 +257,6 @@ func (h *Handler) handleZoneStorage(w http.ResponseWriter, r *http.Request, sess
 			Name:     zone.Name,
 			Type:     config.ZoneType(zone.Type),
 			Subnet:   zone.Subnet,
-			Domain:   zone.Domain,
 			TTL:      zone.TTL,
 		})
 

@@ -1,4 +1,13 @@
 <footer class="app-footer">
+  <!-- Update notification bar -->
+  <div class="update-banner" *ngIf="versionService.updateAvailable()">
+    <mat-icon>system_update</mat-icon>
+    <span>A new version is available</span>
+    <button mat-flat-button color="primary" (click)="versionService.reload()">
+      Reload for latest changes
+    </button>
+  </div>
+  
   <div class="footer-content">
     <div class="copyright">
       <span>© {{ currentYear }} Quick Tech Results LLC. All rights reserved.</span>

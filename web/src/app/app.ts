@@ -11,6 +11,7 @@ import { MatMenuModule } from '@angular/material/menu';
 import { MatDividerModule } from '@angular/material/divider';
 import { FooterComponent } from './footer/footer.component';
 import { AuthService } from './services/auth.service';
+import { VersionService } from './services/version.service';
 
 @Component({
   selector: 'app-root',
@@ -33,6 +34,7 @@ import { AuthService } from './services/auth.service';
 })
 export class App implements OnInit {
   private authService = inject(AuthService);
+  private versionService = inject(VersionService);
   private router = inject(Router);
   
   title = 'DNS Server Admin';
@@ -46,6 +48,9 @@ export class App implements OnInit {
 
   ngOnInit() {
     this.authService.checkAuthStatus().subscribe();
+    
+    // Start checking for app updates
+    this.versionService.startChecking();
     
     // Check initial route
     this.isLoginPage.set(

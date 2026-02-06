@@ -29,7 +29,6 @@ type SyncConfigDTO struct {
 	Enabled                bool         `json:"enabled"`
 	ServerID               string       `json:"server_id"`
 	ServerName             string       `json:"server_name"`
-	ListenAddr             string       `json:"listen_addr"`
 	SharedSecret           string       `json:"shared_secret,omitempty"`
 	Peers                  []PeerConfig `json:"peers"`
 	TombstoneRetentionDays int          `json:"tombstone_retention_days"`
@@ -54,7 +53,6 @@ func (h *APIHandler) getConfig(w http.ResponseWriter, r *http.Request) {
 		Enabled:                cfg.Enabled,
 		ServerID:               cfg.ServerID,
 		ServerName:             cfg.ServerName,
-		ListenAddr:             cfg.ListenAddr,
 		Peers:                  cfg.Peers,
 		TombstoneRetentionDays: int(cfg.TombstoneRetention / (24 * time.Hour)),
 	}
@@ -80,7 +78,6 @@ func (h *APIHandler) updateConfig(w http.ResponseWriter, r *http.Request) {
 		Enabled:            dto.Enabled,
 		ServerID:           dto.ServerID,
 		ServerName:         dto.ServerName,
-		ListenAddr:         dto.ListenAddr,
 		Peers:              dto.Peers,
 		TombstoneRetention: time.Duration(dto.TombstoneRetentionDays) * 24 * time.Hour,
 	}
@@ -135,7 +132,6 @@ func (h *APIHandler) saveConfigToDB(cfg *Config) error {
 			"enabled":                  cfg.Enabled,
 			"node_id":                  cfg.ServerID,
 			"server_name":              cfg.ServerName,
-			"listen_addr":              cfg.ListenAddr,
 			"shared_secret":            cfg.SharedSecret,
 			"tombstone_retention_days": int(cfg.TombstoneRetention / (24 * time.Hour)),
 			"peers":                    make([]map[string]interface{}, len(cfg.Peers)),
@@ -143,8 +139,11 @@ func (h *APIHandler) saveConfigToDB(cfg *Config) error {
 
 		for i, p := range cfg.Peers {
 			storeCfg["peers"].([]map[string]interface{})[i] = map[string]interface{}{
-				"id":      p.URL, // Use URL as ID for now
-				"address": p.URL,
+				"id":                   p.ID,
+				"address":              p.URL,
+				"url":                  p.URL,
+				"api_key":              p.APIKey,
+				"insecure_skip_verify": p.InsecureSkipVerify,
 			}
 		}
 
@@ -263,6 +262,47 @@ func (h *APIHandler) HandleForceSync(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "sync_triggered"})
 }
 
+// HandleFullSync triggers a full sync that broadcasts all local data to connected peers
+func (h *APIHandler) HandleFullSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	count, err := h.manager.FullSync()
+	if err != nil {
+		http.Error(w, "Full sync failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":      "full_sync_complete",
+		"items_synced": count,
+	})
+}
+
+// HandlePurge clears the entire oplog and peer state
+func (h *APIHandler) HandlePurge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	purged, err := h.manager.oplog.Purge()
+	if err != nil {
+		http.Error(w, "Failed to purge oplog: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"purged":  purged,
+		"message": "Oplog and peer state cleared",
+	})
+}
+
 // RegisterRoutesWithAuth registers sync API routes with authentication on the given mux
 func (h *APIHandler) RegisterRoutesWithAuth(mux *http.ServeMux, authMiddleware func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("/api/sync/status", authMiddleware(h.HandleStatus))
@@ -270,6 +310,8 @@ func (h *APIHandler) RegisterRoutesWithAuth(mux *http.ServeMux, authMiddleware f
 	mux.HandleFunc("/api/sync/config/generate-secret", authMiddleware(h.HandleGenerateSecret))
 	mux.HandleFunc("/api/sync/peers", authMiddleware(h.HandlePeers))
 	mux.HandleFunc("/api/sync/force", authMiddleware(h.HandleForceSync))
+	mux.HandleFunc("/api/sync/full-sync", authMiddleware(h.HandleFullSync))
+	mux.HandleFunc("/api/sync/purge", authMiddleware(h.HandlePurge))
 
 	// WebSocket endpoint for peer sync (no auth middleware, uses shared secret)
 	mux.HandleFunc("/sync", h.manager.HandleWebSocket)
@@ -284,6 +326,8 @@ func RegisterRoutes(mux *http.ServeMux, mgr *Manager, corsMiddleware func(http.H
 	mux.HandleFunc("/api/sync/config/generate-secret", corsMiddleware(handler.HandleGenerateSecret))
 	mux.HandleFunc("/api/sync/peers", corsMiddleware(handler.HandlePeers))
 	mux.HandleFunc("/api/sync/force", corsMiddleware(handler.HandleForceSync))
+	mux.HandleFunc("/api/sync/full-sync", corsMiddleware(handler.HandleFullSync))
+	mux.HandleFunc("/api/sync/purge", corsMiddleware(handler.HandlePurge))
 	// WebSocket endpoint for peer sync
 	mux.HandleFunc("/sync", mgr.HandleWebSocket)
 }

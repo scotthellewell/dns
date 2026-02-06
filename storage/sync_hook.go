@@ -2,6 +2,7 @@ package storage
 
 import (
 	"log"
+	"sync/atomic"
 
 	dnssync "github.com/scott/dns/sync"
 )
@@ -12,6 +13,10 @@ type SyncHook func(entityType, entityID, tenantID, operation string, data interf
 var (
 	// Global sync hook - set by main when sync is enabled
 	syncHook SyncHook
+
+	// skipSyncHook is used to disable the sync hook when applying remote changes
+	// to prevent changes from being broadcast back to the source
+	skipSyncHook atomic.Bool
 )
 
 // SetSyncHook sets the global sync hook function
@@ -19,12 +24,28 @@ func SetSyncHook(hook SyncHook) {
 	syncHook = hook
 }
 
+// WithSyncHookDisabled runs the given function with the sync hook disabled.
+// This is used when applying remote changes to prevent re-broadcasting.
+func WithSyncHookDisabled(fn func() error) error {
+	skipSyncHook.Store(true)
+	defer skipSyncHook.Store(false)
+	return fn()
+}
+
 // recordChange records a change for synchronization if sync is enabled
 func recordChange(entityType, entityID, tenantID, operation string, data interface{}) {
 	if syncHook == nil {
+		log.Printf("[storage] sync hook not set, skipping change: %s %s %s", entityType, entityID, operation)
 		return
 	}
 
+	// Skip if we're in the middle of applying a remote change
+	if skipSyncHook.Load() {
+		log.Printf("[storage] sync hook disabled (applying remote), skipping: %s %s %s", entityType, entityID, operation)
+		return
+	}
+
+	log.Printf("[storage] recording change for sync: %s %s %s", entityType, entityID, operation)
 	if err := syncHook(entityType, entityID, tenantID, operation, data); err != nil {
 		log.Printf("[storage] sync hook error: %v", err)
 	}

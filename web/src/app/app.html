@@ -31,11 +31,11 @@
         <mat-icon matListItemIcon>swap_horiz</mat-icon>
         <span matListItemTitle>Zone Transfer</span>
       </a>
-      <a mat-list-item routerLink="/recursion" routerLinkActive="active">
-        <mat-icon matListItemIcon>account_tree</mat-icon>
-        <span matListItemTitle>Recursion</span>
-      </a>
-      @if (isAdmin()) {
+      @if (isSuperAdmin()) {
+        <a mat-list-item routerLink="/recursion" routerLinkActive="active">
+          <mat-icon matListItemIcon>account_tree</mat-icon>
+          <span matListItemTitle>Recursion</span>
+        </a>
         <a mat-list-item routerLink="/network" routerLinkActive="active">
           <mat-icon matListItemIcon>router</mat-icon>
           <span matListItemTitle>Network</span>
@@ -44,11 +44,15 @@
           <mat-icon matListItemIcon>cloud_sync</mat-icon>
           <span matListItemTitle>Cluster Sync</span>
         </a>
-      }
-      @if (isSuperAdmin()) {
         <a mat-list-item routerLink="/tenants" routerLinkActive="active">
           <mat-icon matListItemIcon>business</mat-icon>
           <span matListItemTitle>Tenants</span>
+        </a>
+      }
+      @if (isAdmin()) {
+        <a mat-list-item routerLink="/users" routerLinkActive="active">
+          <mat-icon matListItemIcon>group</mat-icon>
+          <span matListItemTitle>Users</span>
         </a>
       }
       

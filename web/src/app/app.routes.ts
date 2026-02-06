@@ -12,6 +12,7 @@ import { ApiKeysComponent } from './api-keys/api-keys.component';
 import { SetupComponent } from './setup/setup.component';
 import { TenantsComponent } from './tenants/tenants.component';
 import { ClusterSyncComponent } from './cluster-sync/cluster-sync.component';
+import { UsersComponent } from './users/users.component';
 import { authGuard, loginGuard, adminGuard, setupGuard, superAdminGuard } from './guards/auth.guard';
 
 export const routes: Routes = [
@@ -24,10 +25,11 @@ export const routes: Routes = [
   { path: 'records', component: RecordsComponent, canActivate: [authGuard] },
   { path: 'secondary-zones', component: SecondaryZonesComponent, canActivate: [authGuard] },
   { path: 'transfer', component: TransferComponent, canActivate: [authGuard] },
-  { path: 'recursion', component: RecursionComponent, canActivate: [authGuard] },
-  { path: 'network', component: NetworkComponent, canActivate: [adminGuard] },
-  { path: 'cluster-sync', component: ClusterSyncComponent, canActivate: [adminGuard] },
+  { path: 'recursion', component: RecursionComponent, canActivate: [superAdminGuard] },
+  { path: 'network', component: NetworkComponent, canActivate: [superAdminGuard] },
+  { path: 'cluster-sync', component: ClusterSyncComponent, canActivate: [superAdminGuard] },
   { path: 'tenants', component: TenantsComponent, canActivate: [superAdminGuard] },
+  { path: 'users', component: UsersComponent, canActivate: [adminGuard] },
   { path: 'profile', component: ProfileComponent, canActivate: [authGuard] },
   { path: 'api-keys', component: ApiKeysComponent, canActivate: [authGuard] },
 ];

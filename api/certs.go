@@ -9,24 +9,24 @@ import (
 	"github.com/scott/dns/certs"
 )
 
-// CertManager interface for certificate management
-type CertManager interface {
+// CertManagerInterface defines the interface for certificate managers
+// Both certs.Manager and certs.SNIManager implement this
+type CertManagerInterface interface {
 	GetConfig() certs.Config
 	GetCertificatePEM() ([]byte, error)
-	GenerateSelfSigned(commonName string, dnsNames []string, ipAddresses []string) error
 	UploadCertificate(certPEM, keyPEM []byte) error
 	IsExpired() bool
-	IsExpiringSoon(within interface{}) bool
+	IsExpiringSoon(within time.Duration) bool
 }
 
 // certManager holds reference to the certificate manager
-var certManager *certs.Manager
+var certManager CertManagerInterface
 
 // acmeManager holds reference to the ACME manager
 var acmeManager *certs.ACMEManager
 
 // SetCertManager sets the certificate manager for API handlers
-func SetCertManager(cm *certs.Manager) {
+func SetCertManager(cm CertManagerInterface) {
 	certManager = cm
 }
 
@@ -91,7 +91,7 @@ func handleCerts(w http.ResponseWriter, r *http.Request) {
 			DNSNames:       config.DNSNames,
 			IPAddresses:    config.IPAddresses,
 			IsExpired:      certManager.IsExpired(),
-			IsExpiringSoon: certManager.IsExpiringSoon(30 * 24 * 60 * 60 * 1e9), // 30 days in nanoseconds
+			IsExpiringSoon: certManager.IsExpiringSoon(30 * 24 * time.Hour), // 30 days
 		}
 		
 		w.Header().Set("Content-Type", "application/json")
@@ -105,6 +105,11 @@ func handleCerts(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// SelfSignedGenerator is an optional interface for managers that support self-signed cert generation
+type SelfSignedGenerator interface {
+	GenerateSelfSigned(commonName string, dnsNames []string, ipAddresses []string) error
+}
+
 // GenerateCertRequest contains parameters for generating a self-signed certificate
 type GenerateCertRequest struct {
 	CommonName  string   `json:"common_name"`
@@ -116,6 +121,12 @@ type GenerateCertRequest struct {
 func handleCertsGenerate(w http.ResponseWriter, r *http.Request) {
 	if certManager == nil {
 		http.Error(w, "Certificate manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	generator, ok := certManager.(SelfSignedGenerator)
+	if !ok {
+		http.Error(w, "Self-signed certificate generation not supported with SNI manager. Use ACME or upload a certificate.", http.StatusNotImplemented)
 		return
 	}
 
@@ -138,7 +149,7 @@ func handleCertsGenerate(w http.ResponseWriter, r *http.Request) {
 			req.IPAddresses = []string{"127.0.0.1", "::1"}
 		}
 
-		if err := certManager.GenerateSelfSigned(req.CommonName, req.DNSNames, req.IPAddresses); err != nil {
+		if err := generator.GenerateSelfSigned(req.CommonName, req.DNSNames, req.IPAddresses); err != nil {
 			http.Error(w, "Failed to generate certificate: "+err.Error(), http.StatusInternalServerError)
 			return
 		}

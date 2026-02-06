@@ -2,9 +2,13 @@
   <div class="page-header">
     <h1>DNS Records</h1>
     <div class="header-actions">
+      <select *ngIf="auth.isSuperAdmin()" [(ngModel)]="selectedTenant" (change)="onTenantFilterChange()" class="tenant-filter">
+        <option value="">All Tenants</option>
+        <option *ngFor="let tenant of tenants" [value]="tenant.id">{{ tenant.name }}</option>
+      </select>
       <select [(ngModel)]="selectedZone" (change)="onZoneFilterChange()" class="zone-filter">
         <option value="">All Zones</option>
-        <option *ngFor="let zone of zones" [value]="zone.name">{{ zone.name }}</option>
+        <option *ngFor="let zone of filteredZones" [value]="zone.name">{{ zone.name }}</option>
       </select>
       <select [(ngModel)]="selectedType" (change)="onTypeFilterChange()">
         <option value="">All Types</option>
@@ -20,6 +24,7 @@
         <tr>
           <th>Type</th>
           <th>Zone</th>
+          <th *ngIf="!selectedTenant && auth.isSuperAdmin()">Tenant</th>
           <th>Record</th>
           <th>TTL</th>
           <th>Actions</th>
@@ -28,7 +33,8 @@
       <tbody>
         <tr *ngFor="let record of filteredRecords">
           <td><span class="type-badge" [attr.data-type]="record.type">{{ record.type }}</span></td>
-          <td><code class="zone-name">{{ record.zone || '(none)' }}</code></td>
+          <td><code class="zone-name">{{ record.zone_name || record.zone || '(none)' }}</code></td>
+          <td *ngIf="!selectedTenant && auth.isSuperAdmin()">{{ getTenantNameForRecord(record) }}</td>
           <td><code>{{ getRecordSummary(record) }}</code></td>
           <td>{{ record.ttl }}s</td>
           <td class="actions">
@@ -99,12 +105,24 @@
       <button class="close-btn" (click)="closeForm()">×</button>
     </div>
     <div class="modal-body">
+      <!-- Tenant selection for super admins (new records only) -->
+      <div class="form-group" *ngIf="!editingRecord && auth.isSuperAdmin()">
+        <label for="formTenant">Tenant</label>
+        <select id="formTenant" [(ngModel)]="formTenant" (change)="onFormTenantChange()">
+          <option value="">All Tenants</option>
+          <option *ngFor="let tenant of tenants" [value]="tenant.id">{{ tenant.name }}</option>
+        </select>
+        <small>Filter zones by tenant</small>
+      </div>
+
       <!-- Zone selection for new records -->
       <div class="form-group" *ngIf="!editingRecord">
         <label for="zone">Zone</label>
-        <select id="zone" [(ngModel)]="formData.zone">
-          <option value="">No Zone (Legacy)</option>
-          <option *ngFor="let zone of zones" [value]="zone.name">{{ zone.name }}</option>
+        <select id="zone" [(ngModel)]="formData.zone" required>
+          <option value="" disabled>Select a zone</option>
+          <option *ngFor="let zone of formZones" [value]="zone.name">
+            {{ zone.name }}{{ !formTenant ? ' (' + getTenantNameForZone(zone) + ')' : '' }}
+          </option>
         </select>
         <small>Select the zone this record belongs to</small>
       </div>

@@ -44,60 +44,54 @@ export interface TenantUsersDialogData {
 
           <div *ngIf="showCreateForm" class="create-form">
             <h3>Create New User</h3>
-            <form #createForm="ngForm" (ngSubmit)="createUser()">
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="username">Username *</label>
-                  <input type="text" id="username" name="username" 
-                         [(ngModel)]="newUser.username" required
-                         placeholder="Enter username">
-                </div>
-                <div class="form-group">
-                  <label for="email">Email</label>
-                  <input type="email" id="email" name="email" 
-                         [(ngModel)]="newUser.email"
-                         placeholder="user@example.com">
-                </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="new_username">Username *</label>
+                <input type="text" id="new_username" #usernameInput
+                       placeholder="Enter username">
               </div>
+              <div class="form-group">
+                <label for="new_email">Email</label>
+                <input type="email" id="new_email" #emailInput
+                       placeholder="user@example.com">
+              </div>
+            </div>
 
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="display_name">Display Name</label>
-                  <input type="text" id="display_name" name="display_name" 
-                         [(ngModel)]="newUser.display_name"
-                         placeholder="John Doe">
-                </div>
-                <div class="form-group">
-                  <label for="role">Role *</label>
-                  <select id="role" name="role" [(ngModel)]="newUser.role" required>
-                    <option *ngIf="data.tenant.is_main" value="super_admin">Super Admin</option>
-                    <option value="admin">Tenant Admin</option>
-                    <option value="user">User</option>
-                    <option value="readonly">Read Only</option>
-                  </select>
-                </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="new_display_name">Display Name</label>
+                <input type="text" id="new_display_name" #displayNameInput
+                       placeholder="John Doe">
               </div>
+              <div class="form-group">
+                <label for="new_role">Role *</label>
+                <select id="new_role" #roleSelect>
+                  <option *ngIf="data.tenant.is_main" value="super_admin">Super Admin</option>
+                  <option value="admin">Tenant Admin</option>
+                  <option value="user" selected>User</option>
+                  <option value="readonly">Read Only</option>
+                </select>
+              </div>
+            </div>
 
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="password">Password *</label>
-                  <input type="password" id="password" name="password" 
-                         [(ngModel)]="newUser.password" required minlength="8"
-                         placeholder="Minimum 8 characters">
-                </div>
-                <div class="form-group">
-                  <label for="confirm_password">Confirm Password *</label>
-                  <input type="password" id="confirm_password" name="confirm_password" 
-                         [(ngModel)]="newUser.confirm_password" required
-                         placeholder="Re-enter password">
-                </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="new_password">Password *</label>
+                <input type="password" id="new_password" #passwordInput
+                       placeholder="Minimum 8 characters">
               </div>
+              <div class="form-group">
+                <label for="new_confirm_password">Confirm Password *</label>
+                <input type="password" id="new_confirm_password" #confirmPasswordInput
+                       placeholder="Re-enter password">
+              </div>
+            </div>
 
-              <div class="form-actions">
-                <button type="submit" class="btn btn-primary"
-                        [disabled]="createForm.invalid || newUser.password !== newUser.confirm_password || creating()">Create User</button>
-              </div>
-            </form>
+            <div class="form-actions">
+              <button type="button" class="btn btn-primary" 
+                      (click)="createUserFromInputs(usernameInput.value, emailInput.value, displayNameInput.value, roleSelect.value, passwordInput.value, confirmPasswordInput.value)"
+                      [disabled]="creating()">Create User</button>
+            </div>
           </div>
 
           <div *ngIf="users().length === 0 && !showCreateForm" class="empty-state">
@@ -127,19 +121,60 @@ export interface TenantUsersDialogData {
                     </span>
                   </td>
                   <td class="actions">
+                    <button class="btn btn-sm" (click)="startEditUser(user)" title="Edit User">
+                      ✏️ Edit
+                    </button>
                     <button class="btn btn-sm" (click)="resetPassword(user)" title="Reset Password">
                       🔑 Reset
                     </button>
                     <button class="btn btn-sm btn-danger" 
                             (click)="deleteUser(user)"
-                            [disabled]="user.role === 'super_admin' && isSingleSuperAdmin()"
-                            title="Delete User">
+                            [disabled]="isCurrentUser(user) || (user.role === 'super_admin' && isSingleSuperAdmin())"
+                            [title]="isCurrentUser(user) ? 'Cannot delete yourself' : 'Delete User'">
                       Delete
                     </button>
                   </td>
                 </tr>
               </tbody>
             </table>
+          </div>
+
+          <!-- Edit User Form -->
+          <div *ngIf="editingUser" class="edit-form">
+            <h3>Edit User: {{ editingUser.username }}</h3>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="edit_display_name">Display Name</label>
+                <input type="text" id="edit_display_name" #editDisplayNameInput
+                       [value]="editingUser.display_name || ''"
+                       placeholder="John Doe">
+              </div>
+              <div class="form-group">
+                <label for="edit_email">Email</label>
+                <input type="email" id="edit_email" #editEmailInput
+                       [value]="editingUser.email || ''"
+                       placeholder="user@example.com">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="edit_role">Role *</label>
+                <select id="edit_role" #editRoleSelect [value]="editingUser.role">
+                  <option *ngIf="data.tenant.is_main" value="super_admin" [selected]="editingUser.role === 'super_admin'">Super Admin</option>
+                  <option value="admin" [selected]="editingUser.role === 'admin'">Tenant Admin</option>
+                  <option value="user" [selected]="editingUser.role === 'user'">User</option>
+                  <option value="readonly" [selected]="editingUser.role === 'readonly'">Read Only</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button type="button" class="btn" (click)="cancelEdit()">Cancel</button>
+              <button type="button" class="btn btn-primary" 
+                      (click)="saveUser(editDisplayNameInput.value, editEmailInput.value, editRoleSelect.value)"
+                      [disabled]="saving()">Save Changes</button>
+            </div>
           </div>
         </ng-container>
       </div>
@@ -245,7 +280,7 @@ export interface TenantUsersDialogData {
       margin-bottom: 16px;
     }
 
-    .create-form {
+    .create-form, .edit-form {
       background: #0f172a;
       padding: 16px;
       border-radius: 8px;
@@ -258,6 +293,11 @@ export interface TenantUsersDialogData {
         color: #f1f5f9;
         font-weight: 500;
       }
+    }
+
+    .edit-form {
+      margin-top: 16px;
+      border-color: #3b82f6;
     }
 
     .form-row {
@@ -304,6 +344,7 @@ export interface TenantUsersDialogData {
     .form-actions {
       display: flex;
       justify-content: flex-end;
+      gap: 8px;
       margin-top: 8px;
     }
 
@@ -440,7 +481,9 @@ export class TenantUsersDialogComponent implements OnInit {
   users = signal<User[]>([]);
   loading = signal(false);
   creating = signal(false);
+  saving = signal(false);
   showCreateForm = false;
+  editingUser: User | null = null;
 
   newUser = {
     username: '',
@@ -459,6 +502,50 @@ export class TenantUsersDialogComponent implements OnInit {
     this.dialogRef.close();
   }
 
+  isCurrentUser(user: User): boolean {
+    const currentUser = this.authService.currentUser();
+    return currentUser?.id === user.id;
+  }
+
+  startEditUser(user: User) {
+    this.editingUser = { ...user };
+    this.showCreateForm = false;
+  }
+
+  cancelEdit() {
+    this.editingUser = null;
+  }
+
+  saveUser(displayName: string, email: string, role: string) {
+    if (!this.editingUser) return;
+
+    this.saving.set(true);
+    const payload = {
+      display_name: displayName,
+      email: email,
+      role: role
+    };
+
+    this.http.put('/api/auth/users/' + this.editingUser.id, payload).subscribe({
+      next: () => {
+        this.snackBar.open('User updated successfully', 'Dismiss', { duration: 3000 });
+        this.saving.set(false);
+        this.editingUser = null;
+        this.loadUsers();
+      },
+      error: (err: any) => {
+        this.saving.set(false);
+        let message = 'Failed to update user';
+        if (typeof err.error === 'string') {
+          message = err.error;
+        } else if (err.error?.message) {
+          message = err.error.message;
+        }
+        this.snackBar.open(message, 'Dismiss', { duration: 5000 });
+      }
+    });
+  }
+
   loadUsers() {
     this.loading.set(true);
     this.authService.getTenantUsers(this.data.tenant.id).subscribe({
@@ -473,20 +560,71 @@ export class TenantUsersDialogComponent implements OnInit {
     });
   }
 
+  createUserFromInputs(username: string, email: string, displayName: string, role: string, password: string, confirmPassword: string) {
+    if (password !== confirmPassword) {
+      this.snackBar.open('Passwords do not match', 'Dismiss', { duration: 3000 });
+      return;
+    }
+
+    if (!username || !password) {
+      this.snackBar.open('Username and password are required', 'Dismiss', { duration: 3000 });
+      return;
+    }
+
+    this.creating.set(true);
+    const payload = {
+      username: username,
+      email: email || undefined,
+      display_name: displayName || undefined,
+      role: role,
+      password: password
+    };
+    console.log('Creating user with payload:', payload);
+    
+    this.http.post('/api/auth/tenants/' + this.data.tenant.id + '/users', payload).subscribe({
+      next: () => {
+        this.snackBar.open('User created successfully', 'Dismiss', { duration: 3000 });
+        this.creating.set(false);
+        this.showCreateForm = false;
+        this.loadUsers();
+      },
+      error: (err: any) => {
+        this.creating.set(false);
+        let message = 'Failed to create user';
+        if (typeof err.error === 'string') {
+          message = err.error;
+        } else if (err.error?.message) {
+          message = err.error.message;
+        } else if (err.message) {
+          message = err.message;
+        }
+        this.snackBar.open(message, 'Dismiss', { duration: 5000 });
+      }
+    });
+  }
+
   createUser() {
     if (this.newUser.password !== this.newUser.confirm_password) {
       this.snackBar.open('Passwords do not match', 'Dismiss', { duration: 3000 });
       return;
     }
 
+    if (!this.newUser.username || !this.newUser.password) {
+      this.snackBar.open('Username and password are required', 'Dismiss', { duration: 3000 });
+      return;
+    }
+
     this.creating.set(true);
-    this.http.post('/api/auth/tenants/' + this.data.tenant.id + '/users', {
+    const payload = {
       username: this.newUser.username,
       email: this.newUser.email || undefined,
       display_name: this.newUser.display_name || undefined,
       role: this.newUser.role,
       password: this.newUser.password
-    }).subscribe({
+    };
+    console.log('Creating user with payload:', payload);
+    
+    this.http.post('/api/auth/tenants/' + this.data.tenant.id + '/users', payload).subscribe({
       next: () => {
         this.snackBar.open('User created successfully', 'Dismiss', { duration: 3000 });
         this.creating.set(false);
@@ -494,9 +632,16 @@ export class TenantUsersDialogComponent implements OnInit {
         this.resetNewUser();
         this.loadUsers();
       },
-      error: (err: { error?: string }) => {
+      error: (err: any) => {
         this.creating.set(false);
-        const message = err.error || 'Failed to create user';
+        let message = 'Failed to create user';
+        if (typeof err.error === 'string') {
+          message = err.error;
+        } else if (err.error?.message) {
+          message = err.error.message;
+        } else if (err.message) {
+          message = err.message;
+        }
         this.snackBar.open(message, 'Dismiss', { duration: 5000 });
       }
     });

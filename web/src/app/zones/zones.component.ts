@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService, Zone, ZoneType, DnssecZone, DnssecKeyImport } from '../services/api.service';
 import { ToastService } from '../services/toast.service';
+import { AuthService, Tenant } from '../services/auth.service';
 
 @Component({
   selector: 'app-zones',
@@ -13,10 +14,14 @@ import { ToastService } from '../services/toast.service';
 })
 export class ZonesComponent implements OnInit {
   private toast = inject(ToastService);
+  readonly auth = inject(AuthService);
   
   @ViewChild('keyFileInput') keyFileInput!: ElementRef<HTMLInputElement>;
   
   zones: Zone[] = [];
+  filteredZones: Zone[] = [];
+  tenants: Tenant[] = [];
+  selectedTenant = '';
   dnssecZones: Map<string, DnssecZone> = new Map();
   showForm = false;
   saving = false;
@@ -40,7 +45,6 @@ export class ZonesComponent implements OnInit {
     name: '',
     type: 'forward',
     subnet: '',
-    domain: '',
     strip_prefix: false,
     ttl: 3600
   };
@@ -48,14 +52,49 @@ export class ZonesComponent implements OnInit {
   constructor(private api: ApiService, private cdr: ChangeDetectorRef) {}
 
   ngOnInit(): void {
+    this.loadTenants();
     this.loadZones();
     this.loadDnssecConfig();
+  }
+
+  loadTenants(): void {
+    if (!this.auth.isSuperAdmin()) return;
+    
+    this.auth.getTenants().subscribe({
+      next: (tenants) => {
+        this.tenants = tenants;
+        // Default to main tenant
+        const mainTenant = tenants.find(t => t.is_main);
+        if (mainTenant && !this.selectedTenant) {
+          this.selectedTenant = mainTenant.id;
+          this.filterZones();
+        }
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        console.error('Failed to load tenants', err);
+      }
+    });
+  }
+
+  onTenantFilterChange(): void {
+    this.filterZones();
+  }
+
+  filterZones(): void {
+    if (!this.selectedTenant || !this.auth.isSuperAdmin()) {
+      this.filteredZones = this.zones;
+    } else {
+      this.filteredZones = this.zones.filter(z => z.tenant_id === this.selectedTenant);
+    }
+    this.cdr.detectChanges();
   }
 
   loadZones(): void {
     this.api.getZones().subscribe({
       next: (zones) => {
         this.zones = zones;
+        this.filterZones();
         this.cdr.detectChanges();
       },
       error: (err) => {
@@ -86,11 +125,11 @@ export class ZonesComponent implements OnInit {
   }
 
   get forwardZones(): Zone[] {
-    return this.zones.filter(z => z.type === 'forward');
+    return this.filteredZones.filter(z => z.type === 'forward');
   }
 
   get reverseZones(): Zone[] {
-    return this.zones.filter(z => z.type === 'reverse');
+    return this.filteredZones.filter(z => z.type === 'reverse');
   }
 
   openAddForm(type: ZoneType = 'forward'): void {
@@ -98,7 +137,6 @@ export class ZonesComponent implements OnInit {
       name: '',
       type: type,
       subnet: '',
-      domain: '',
       strip_prefix: false,
       ttl: 3600
     };

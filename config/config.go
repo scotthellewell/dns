@@ -374,8 +374,6 @@ type SyncConfig struct {
 	Enabled bool `json:"enabled"`
 	// NodeID is the unique identifier for this node in the cluster
 	NodeID string `json:"node_id"`
-	// ListenAddr is the address to listen for sync connections (e.g., ":8444")
-	ListenAddr string `json:"listen_addr"`
 	// SharedSecret is the HMAC secret used for peer authentication
 	SharedSecret string `json:"shared_secret"`
 	// Peers is the list of peer nodes to synchronize with
@@ -392,6 +390,10 @@ type SyncPeerConfig struct {
 	ID string `json:"id"`
 	// Address is the WebSocket address of the peer (e.g., "ws://peer1.example.com:8444/sync")
 	Address string `json:"address"`
+	// APIKey is the API key for authenticating with this peer
+	APIKey string `json:"api_key,omitempty"`
+	// InsecureSkipVerify skips TLS certificate verification (for self-signed certs)
+	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
 }
 
 // Config holds the complete server configuration

@@ -319,7 +319,7 @@ func (m *Manager) handleUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check permission - must be super_admin, tenant_admin, or legacy admin
+	// Check permission - must be super_admin or tenant_admin
 	canManageUsers := session.IsSuperAdmin || session.Role == RoleTenantAdmin || session.Role == "admin"
 	if !canManageUsers {
 		http.Error(w, "Forbidden", http.StatusForbidden)
@@ -404,7 +404,7 @@ func (m *Manager) handleUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check permission - must be super_admin, tenant_admin, or legacy admin
+	// Check permission - must be super_admin or tenant_admin
 	canManageUsers := session.IsSuperAdmin || session.Role == RoleTenantAdmin || session.Role == "admin"
 	if !canManageUsers {
 		http.Error(w, "Forbidden", http.StatusForbidden)
@@ -442,6 +442,12 @@ func (m *Manager) handleUser(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(user)
 
 	case "DELETE":
+		// Prevent deleting yourself
+		if userID == session.UserID {
+			http.Error(w, "Cannot delete your own account", http.StatusBadRequest)
+			return
+		}
+
 		if err := m.DeleteUser(userID); err != nil {
 			if err == ErrUserNotFound {
 				http.Error(w, "User not found", http.StatusNotFound)
@@ -536,11 +542,11 @@ func (m *Manager) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Non-admin users can only create readonly keys
-		if session.Role != "admin" {
+		if session.Role != "admin" && !session.IsSuperAdmin {
 			req.Permissions = []string{"read"}
 		}
 
-		apiKey, rawKey, err := m.CreateAPIKey(req.Name, req.Permissions, req.ExpiresAt, session.UserID)
+		apiKey, rawKey, err := m.CreateAPIKey(req.Name, req.Permissions, session.TenantID, req.ExpiresAt, session.UserID)
 		if err != nil {
 			http.Error(w, "Failed to create API key", http.StatusInternalServerError)
 			return
@@ -799,6 +805,8 @@ func (m *Manager) handleTenant(w http.ResponseWriter, r *http.Request) {
 
 // handleTenantUsers handles listing and creating users for a specific tenant
 func (m *Manager) handleTenantUsers(w http.ResponseWriter, r *http.Request, tenantID string) {
+	log.Printf("[DEBUG] handleTenantUsers called with tenantID='%s' method=%s", tenantID, r.Method)
+	
 	switch r.Method {
 	case "GET":
 		users := m.ListUsersByTenant(tenantID)
@@ -809,6 +817,7 @@ func (m *Manager) handleTenantUsers(w http.ResponseWriter, r *http.Request, tena
 		// Verify tenant exists
 		_, err := m.GetTenant(tenantID)
 		if err != nil {
+			log.Printf("[DEBUG] GetTenant('%s') failed: %v", tenantID, err)
 			http.Error(w, "Tenant not found", http.StatusNotFound)
 			return
 		}

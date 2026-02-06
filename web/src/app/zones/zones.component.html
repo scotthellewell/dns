@@ -2,6 +2,10 @@
   <div class="page-header">
     <h1>DNS Zones</h1>
     <div class="header-actions">
+      <select *ngIf="auth.isSuperAdmin()" [(ngModel)]="selectedTenant" (change)="onTenantFilterChange()" class="tenant-filter">
+        <option value="">All Tenants</option>
+        <option *ngFor="let tenant of tenants" [value]="tenant.id">{{ tenant.name }}</option>
+      </select>
       <button class="btn btn-primary" (click)="openAddForm('forward')">+ Add Forward Zone</button>
       <button class="btn btn-secondary" (click)="openAddForm('reverse')">+ Add Reverse Zone</button>
     </div>
@@ -53,7 +57,6 @@
           <tr>
             <th>Zone Name</th>
             <th>Subnet</th>
-            <th>Domain</th>
             <th>Strip Prefix</th>
             <th>TTL</th>
             <th>DNSSEC</th>
@@ -64,7 +67,6 @@
           <tr *ngFor="let zone of reverseZones">
             <td><code>{{ zone.name }}</code></td>
             <td><code>{{ zone.subnet }}</code></td>
-            <td>{{ zone.domain }}</td>
             <td>{{ zone.strip_prefix ? 'Yes' : 'No' }}</td>
             <td>{{ zone.ttl }}s</td>
             <td>
@@ -110,13 +112,6 @@
           <input type="text" id="subnet" [(ngModel)]="formData.subnet" 
                  placeholder="e.g., 192.168.1.0/24 or 2001:db8::/32">
           <small>IPv4 or IPv6 subnet in CIDR notation</small>
-        </div>
-
-        <div class="form-group">
-          <label for="domain">Domain</label>
-          <input type="text" id="domain" [(ngModel)]="formData.domain" 
-                 placeholder="e.g., ip4.example.com">
-          <small>Domain suffix for generated hostnames</small>
         </div>
 
         <div class="form-group checkbox">

@@ -47,7 +47,7 @@ func New(cfg *config.ParsedConfig, rawCfg *config.Config, configPath string, onU
 	tmpDir, err := os.MkdirTemp("", "dns-ephemeral-*")
 	if err != nil {
 		log.Printf("Warning: failed to create ephemeral storage dir: %v", err)
-		// Fall back to handler without storage (legacy behavior)
+		// Fall back to handler without storage
 		return &Handler{
 			config:         cfg,
 			rawConfig:      rawCfg,
@@ -374,7 +374,6 @@ type ZoneResponse struct {
 	Name        string          `json:"name"`             // Zone name (e.g., "example.com" or "168.192.in-addr.arpa")
 	Type        config.ZoneType `json:"type"`             // "forward" or "reverse"
 	Subnet      string          `json:"subnet,omitempty"` // For reverse zones
-	Domain      string          `json:"domain,omitempty"` // For reverse zones (legacy)
 	StripPrefix bool            `json:"strip_prefix"`
 	TTL         uint32          `json:"ttl"`
 }
@@ -476,7 +475,6 @@ func (h *Handler) handleZones(w http.ResponseWriter, r *http.Request) {
 				Name:        getEffectiveZoneName(z),
 				Type:        getEffectiveZoneType(z),
 				Subnet:      z.Subnet,
-				Domain:      z.Domain,
 				StripPrefix: z.StripPrefix,
 				TTL:         z.TTL,
 			})
@@ -576,7 +574,6 @@ func (h *Handler) handleZone(w http.ResponseWriter, r *http.Request) {
 			Name:        getEffectiveZoneName(zone),
 			Type:        getEffectiveZoneType(zone),
 			Subnet:      zone.Subnet,
-			Domain:      zone.Domain,
 			StripPrefix: zone.StripPrefix,
 			TTL:         zone.TTL,
 		})
