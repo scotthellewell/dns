@@ -107,6 +107,7 @@ type Zone struct {
 	Type         ZoneType   `json:"type"`
 	Subnet       string     `json:"subnet,omitempty"`
 	Domain       string     `json:"domain,omitempty"`
+	StripPrefix  bool       `json:"strip_prefix,omitempty"`
 	Status       ZoneStatus `json:"status"`
 	StatusReason string     `json:"status_reason,omitempty"`
 	Serial       uint32     `json:"serial"`
@@ -307,6 +308,17 @@ type SecondaryZone struct {
 	DNSSECKeyURL   string `json:"dnssec_key_url,omitempty"`   // URL of primary server's key endpoint
 }
 
+// SecondaryZoneCache holds the cached records from a zone transfer.
+// This allows the server to serve the zone immediately on restart without
+// needing to perform a full AXFR.
+type SecondaryZoneCache struct {
+	Zone      string    `json:"zone"`
+	Serial    uint32    `json:"serial"`
+	Records   []string  `json:"records"` // Wire format base64 encoded DNS RRs
+	LastSync  time.Time `json:"last_sync"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // View represents a DNS view for split-horizon.
 type View struct {
 	ID         string   `json:"id"`
@@ -349,6 +361,13 @@ type DNSSECKeys struct {
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
+
+// Getter methods for DNSSECKeys to implement server.DNSSECKeyData interface
+func (k *DNSSECKeys) GetZoneName() string  { return k.ZoneName }
+func (k *DNSSECKeys) GetAlgorithm() string { return k.Algorithm }
+func (k *DNSSECKeys) GetKSKPrivate() string { return k.KSKPrivate }
+func (k *DNSSECKeys) GetZSKPrivate() string { return k.ZSKPrivate }
+func (k *DNSSECKeys) IsEnabled() bool       { return k.Enabled }
 
 // AuditEntry represents an audit log entry.
 type AuditEntry struct {

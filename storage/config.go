@@ -18,6 +18,7 @@ const (
 	ConfigKeyWebAuthn    = "webauthn"
 	ConfigKeyACME        = "acme"
 	ConfigKeyACMEAcctKey = "acme_account_key"
+	ConfigKeyACMEState   = "acme_state"
 )
 
 // GetServerConfig retrieves the server configuration.
@@ -359,6 +360,38 @@ func (s *Store) SaveACMEAccountKey(key []byte) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("config"))
 		return bucket.Put([]byte(ConfigKeyACMEAcctKey), key)
+	})
+}
+
+// GetACMEState retrieves the ACME state.
+func (s *Store) GetACMEState() (*ACMEState, error) {
+	var state ACMEState
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("config"))
+		data := bucket.Get([]byte(ConfigKeyACMEState))
+		if data == nil {
+			return ErrNotFound
+		}
+		return json.Unmarshal(data, &state)
+	})
+
+	if err == ErrNotFound {
+		return &ACMEState{}, nil
+	}
+
+	return &state, err
+}
+
+// SaveACMEState saves the ACME state.
+func (s *Store) SaveACMEState(state *ACMEState) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("config"))
+		data, err := json.Marshal(state)
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(ConfigKeyACMEState), data)
 	})
 }
 

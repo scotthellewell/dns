@@ -2,12 +2,10 @@
   <div class="page-header">
     <h1>DNS Zones</h1>
     <div class="header-actions">
-      <select *ngIf="auth.isSuperAdmin()" [(ngModel)]="selectedTenant" (change)="onTenantFilterChange()" class="tenant-filter">
-        <option value="">All Tenants</option>
-        <option *ngFor="let tenant of tenants" [value]="tenant.id">{{ tenant.name }}</option>
-      </select>
+      <button class="btn btn-outline" (click)="openImportForm()">📥 Import Zone</button>
       <button class="btn btn-primary" (click)="openAddForm('forward')">+ Add Forward Zone</button>
       <button class="btn btn-secondary" (click)="openAddForm('reverse')">+ Add Reverse Zone</button>
+      <button class="btn btn-secondary" (click)="openAddSecondaryForm()">+ Add Secondary Zone</button>
     </div>
   </div>
 
@@ -89,6 +87,46 @@
     </div>
   </section>
 
+  <!-- Secondary Zones Section -->
+  <section class="zone-section">
+    <h2>Secondary Zones</h2>
+    <p class="section-subtitle">Zones replicated from primary DNS servers</p>
+    <div class="zones-table" *ngIf="secondaryZones.length > 0">
+      <table>
+        <thead>
+          <tr>
+            <th>Zone</th>
+            <th>Primary Server</th>
+            <th>Refresh Interval</th>
+            <th>TSIG Key</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let zone of secondaryZones">
+            <td><code>{{ zone.zone }}</code></td>
+            <td><code>{{ zone.primary }}</code></td>
+            <td>{{ zone.refresh_interval }}s</td>
+            <td>
+              <span class="badge" [class.badge-success]="zone.tsig_key" [class.badge-muted]="!zone.tsig_key">
+                {{ zone.tsig_key ? 'Configured' : 'None' }}
+              </span>
+            </td>
+            <td class="actions">
+              <button class="btn btn-sm" (click)="triggerZoneTransfer(zone)" title="Trigger Transfer">🔄</button>
+              <button class="btn btn-sm" (click)="openEditSecondaryForm(zone)">Edit</button>
+              <button class="btn btn-sm btn-danger" (click)="deleteSecondaryZone(zone)">Delete</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div *ngIf="secondaryZones.length === 0" class="empty-state">
+      <p>No secondary zones configured.</p>
+      <p>Add a secondary zone to replicate DNS data from a primary server.</p>
+    </div>
+  </section>
+
   <!-- Modal Form -->
   <div class="modal-backdrop" *ngIf="showForm" (click)="closeForm()"></div>
   <div class="modal" *ngIf="showForm">
@@ -112,6 +150,13 @@
           <input type="text" id="subnet" [(ngModel)]="formData.subnet" 
                  placeholder="e.g., 192.168.1.0/24 or 2001:db8::/32">
           <small>IPv4 or IPv6 subnet in CIDR notation</small>
+        </div>
+
+        <div class="form-group">
+          <label for="domain">Domain (for PTR records)</label>
+          <input type="text" id="domain" [(ngModel)]="formData.domain" 
+                 placeholder="e.g., example.com">
+          <small>The domain suffix for generated PTR hostnames (e.g., "host.example.com")</small>
         </div>
 
         <div class="form-group checkbox">
@@ -247,5 +292,197 @@
   </div>
   <div class="modal-footer">
     <button class="btn btn-primary" (click)="closeDsModal()">Close</button>
+  </div>
+</div>
+
+<!-- Secondary Zone Modal Form -->
+<div class="modal-backdrop" *ngIf="showSecondaryForm" (click)="closeSecondaryForm()"></div>
+<div class="modal" *ngIf="showSecondaryForm">
+  <div class="modal-header">
+    <h2>{{ editingSecondaryZone ? 'Edit' : 'Add' }} Secondary Zone</h2>
+    <button class="close-btn" (click)="closeSecondaryForm()">×</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-group">
+      <label for="sec-zone">Zone Name</label>
+      <input type="text" id="sec-zone" [(ngModel)]="secondaryFormData.zone" 
+             placeholder="example.com" [disabled]="!!editingSecondaryZone">
+      <small>The zone to replicate (e.g., example.com)</small>
+    </div>
+
+    <div class="form-group">
+      <label for="sec-primary">Primary Server</label>
+      <input type="text" id="sec-primary" [(ngModel)]="secondaryFormData.primary" 
+             placeholder="192.168.1.1:53">
+      <small>Address of the primary DNS server (IP:port)</small>
+    </div>
+
+    <div class="form-group">
+      <label for="sec-refresh">Refresh Interval (seconds)</label>
+      <input type="number" id="sec-refresh" [(ngModel)]="secondaryFormData.refresh_interval" min="60">
+      <small>How often to check for zone updates</small>
+    </div>
+
+    <div class="form-group">
+      <label for="sec-tsig">TSIG Key Name (optional)</label>
+      <input type="text" id="sec-tsig" [(ngModel)]="secondaryFormData.tsig_key" 
+             placeholder="transfer-key">
+      <small>Name of the TSIG key for authenticated transfers</small>
+    </div>
+
+    <div class="dnssec-section">
+      <h3>DNSSEC Key Sharing</h3>
+      <p class="section-description">
+        For reverse zones with dynamic records (like IPv6 PTR), import DNSSEC keys from the primary server
+        to sign records locally on this secondary.
+      </p>
+
+      <div class="form-group">
+        <label for="sec-key-url">DNSSEC Key URL (optional)</label>
+        <input type="text" id="sec-key-url" [(ngModel)]="secondaryFormData.dnssec_key_url" 
+               placeholder="https://primary.example.com/api/dnssec/keys/zone">
+        <small>URL to fetch DNSSEC keys from primary server</small>
+      </div>
+
+      <div class="form-group">
+        <label for="sec-key-token">DNSSEC Key Token (optional)</label>
+        <input type="password" id="sec-key-token" [(ngModel)]="secondaryFormData.dnssec_key_token" 
+               placeholder="Bearer token">
+        <small>Authentication token for key retrieval</small>
+      </div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn" (click)="closeSecondaryForm()">Cancel</button>
+    <button class="btn btn-primary" (click)="saveSecondaryZone()">Save</button>
+  </div>
+</div>
+
+<!-- Zone Import Modal -->
+<div class="modal import-modal" *ngIf="showImportForm">
+  <div class="modal-header">
+    <h2>Import Zone from Zone File</h2>
+    <button class="close-btn" (click)="closeImportForm()">×</button>
+  </div>
+  <div class="modal-body">
+    <div class="import-intro" *ngIf="!importPreview">
+      <p>
+        Import a DNS zone from a <strong>BIND zone file</strong>. This format is supported by most DNS providers
+        including GoDaddy, AWS Route53, Azure DNS, Cloudflare, and others.
+      </p>
+      
+      <div class="provider-help">
+        <h4>How to export from your current provider:</h4>
+        <ul>
+          <li><strong>GoDaddy:</strong> DNS → Zone File → Export</li>
+          <li><strong>AWS Route53:</strong> Hosted Zone → Export to BIND format</li>
+          <li><strong>Azure DNS:</strong> Export zone file from the portal or CLI</li>
+          <li><strong>Cloudflare:</strong> DNS → Advanced → Export DNS Records</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="import-zone-name">Zone Name</label>
+      <input type="text" id="import-zone-name" [(ngModel)]="importFormData.zoneName" 
+             placeholder="example.com" [disabled]="!!importPreview">
+      <small>The domain name for this zone (e.g., example.com)</small>
+    </div>
+
+    <div class="form-group" *ngIf="!importPreview">
+      <label for="import-file">Zone File</label>
+      <div class="file-upload">
+        <input type="file" id="import-file" #fileInput (change)="onFileSelected($event)" accept=".txt,.zone,.db">
+        <button class="btn btn-sm" (click)="fileInput.click()">Choose File</button>
+        <span class="file-name">{{ selectedFileName || 'No file selected' }}</span>
+      </div>
+      <small>Upload a BIND zone file (.txt, .zone, or .db)</small>
+    </div>
+
+    <div class="form-group" *ngIf="!importPreview">
+      <label for="import-content">Or paste zone file content</label>
+      <textarea id="import-content" [(ngModel)]="importFormData.zoneFile" rows="10"
+                placeholder="$TTL 3600
+@       IN      SOA     ns1.example.com. admin.example.com. (
+                        2024010101      ; Serial
+                        3600            ; Refresh
+                        600             ; Retry
+                        604800          ; Expire
+                        3600 )          ; Minimum TTL
+
+@       IN      NS      ns1.example.com.
+@       IN      NS      ns2.example.com.
+@       IN      A       192.168.1.1
+www     IN      A       192.168.1.2
+mail    IN      MX  10  mail.example.com."></textarea>
+    </div>
+
+    <!-- Preview Section -->
+    <div class="import-preview" *ngIf="importPreview">
+      <h3>Preview Import</h3>
+      
+      <div class="preview-summary">
+        <div class="summary-item">
+          <strong>Zone:</strong> {{ importPreview.zone?.name }}
+        </div>
+        <div class="summary-item">
+          <strong>Records:</strong> {{ importPreview.record_count }}
+        </div>
+        <div class="summary-item" *ngIf="importPreview.zone?.ttl">
+          <strong>Default TTL:</strong> {{ importPreview.zone?.ttl }}s
+        </div>
+      </div>
+
+      <div class="preview-warnings" *ngIf="importPreview.warnings?.length">
+        <h4>⚠️ Warnings</h4>
+        <ul>
+          <li *ngFor="let warning of importPreview.warnings">{{ warning }}</li>
+        </ul>
+      </div>
+
+      <div class="preview-errors" *ngIf="importPreview.errors?.length">
+        <h4>❌ Errors (these records will be skipped)</h4>
+        <ul>
+          <li *ngFor="let error of importPreview.errors">{{ error }}</li>
+        </ul>
+      </div>
+
+      <div class="preview-records">
+        <h4>Records to Import</h4>
+        <table class="preview-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Type</th>
+              <th>TTL</th>
+              <th>Data</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let record of importPreview.records" [class.soa-record]="record.type === 'SOA'">
+              <td><code>{{ record.name }}</code></td>
+              <td><span class="record-type">{{ record.type }}</span></td>
+              <td>{{ record.ttl }}s</td>
+              <td><code>{{ record.raw_data || (record.data | json) }}</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="record-note" *ngIf="hasSoaRecord()">
+          <em>SOA records are used for zone configuration and won't be imported as separate records.</em>
+        </p>
+      </div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn" (click)="closeImportForm()">Cancel</button>
+    <button class="btn btn-secondary" *ngIf="importPreview" (click)="importPreview = null">← Back</button>
+    <button class="btn btn-primary" *ngIf="!importPreview" (click)="previewImport()" 
+            [disabled]="!importFormData.zoneName || !importFormData.zoneFile || importLoading">
+      {{ importLoading ? 'Analyzing...' : 'Preview Import' }}
+    </button>
+    <button class="btn btn-primary" *ngIf="importPreview" (click)="executeImport()" 
+            [disabled]="importLoading">
+      {{ importLoading ? 'Importing...' : 'Import Zone' }}
+    </button>
   </div>
 </div>

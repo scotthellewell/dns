@@ -131,6 +131,31 @@ export class SecondaryZonesComponent implements OnInit {
     }
   }
 
+  convertToPrimary(zone: SecondaryZone) {
+    const message = `Convert ${zone.zone} to a primary zone?\n\nThis will:\n• Create a new primary zone with all current records\n• Delete the secondary zone configuration\n• You will manage this zone directly instead of syncing from ${zone.primaries?.[0] || 'the primary server'}`;
+    
+    if (confirm(message)) {
+      this.api.convertSecondaryToPrimary(zone.zone).subscribe({
+        next: (result) => {
+          this.snackBar.open(
+            `Zone converted successfully! ${result.records_created} records created.`,
+            'Close',
+            { duration: 5000 }
+          );
+          this.loadZones();
+        },
+        error: (err) => {
+          this.snackBar.open(
+            'Failed to convert zone: ' + (err.error?.error || err.message),
+            'Close',
+            { duration: 5000 }
+          );
+          console.error(err);
+        }
+      });
+    }
+  }
+
   triggerTransfer(zone: SecondaryZone) {
     // TODO: Implement manual zone transfer trigger
     this.snackBar.open('Zone transfer triggered for ' + zone.zone, 'Close', { duration: 3000 });

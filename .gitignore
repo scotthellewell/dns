@@ -57,3 +57,4 @@ web/test-results/
 
 # Playwright
 playwright/.cache/
+.credentials

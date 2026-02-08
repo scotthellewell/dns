@@ -374,6 +374,8 @@ type SyncConfig struct {
 	Enabled bool `json:"enabled"`
 	// NodeID is the unique identifier for this node in the cluster
 	NodeID string `json:"node_id"`
+	// ServerName is a friendly name for this server in the cluster
+	ServerName string `json:"server_name"`
 	// SharedSecret is the HMAC secret used for peer authentication
 	SharedSecret string `json:"shared_secret"`
 	// Peers is the list of peer nodes to synchronize with

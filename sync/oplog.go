@@ -383,6 +383,26 @@ func (o *OpLog) CurrentHLC() HybridLogicalClock {
 	return o.clock.Current()
 }
 
+// ReplayAllEntries iterates over all entries in the oplog and calls the callback
+// for each one. This is useful for re-applying entries that were stored but not
+// processed (e.g., when a new entity type handler is added).
+func (o *OpLog) ReplayAllEntries(callback func(entry *OpLogEntry) error) error {
+	return o.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(oplogBucket)
+		if b == nil {
+			return nil
+		}
+
+		return b.ForEach(func(k, v []byte) error {
+			var entry OpLogEntry
+			if err := json.Unmarshal(v, &entry); err != nil {
+				return nil // Skip malformed entries
+			}
+			return callback(&entry)
+		})
+	})
+}
+
 // makeKey creates a sortable key from an HLC and operation ID
 func (o *OpLog) makeKey(hlc HybridLogicalClock, opID string) []byte {
 	// Format: physical (16 hex) + logical (8 hex) + serverID + opID

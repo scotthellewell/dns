@@ -1,9 +1,11 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, inject } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, inject, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ApiService, ServerStatus, PortsConfig } from '../services/api.service';
+import { ApiService, ServerStatus, PortsConfig, ClusterStatus } from '../services/api.service';
 import { ToastService } from '../services/toast.service';
-import { interval, Subscription, forkJoin } from 'rxjs';
-import { switchMap } from 'rxjs/operators';
+import { AuthService } from '../services/auth.service';
+import { TenantContextService } from '../services/tenant-context.service';
+import { interval, Subscription, forkJoin, of } from 'rxjs';
+import { switchMap, catchError } from 'rxjs/operators';
 
 @Component({
   selector: 'app-dashboard',
@@ -14,22 +16,40 @@ import { switchMap } from 'rxjs/operators';
 })
 export class DashboardComponent implements OnInit, OnDestroy {
   private toast = inject(ToastService);
+  private authService = inject(AuthService);
+  readonly tenantContext = inject(TenantContextService);
   
   status: ServerStatus | null = null;
   portsConfig: PortsConfig | null = null;
+  clusterStatus: ClusterStatus | null = null;
   private subscription?: Subscription;
   private hasShownError = false;
 
-  constructor(private api: ApiService, private cdr: ChangeDetectorRef) {}
+  constructor(private api: ApiService, private cdr: ChangeDetectorRef) {
+    // React to tenant context changes
+    effect(() => {
+      const tenantId = this.tenantContext.currentTenantId();
+      this.loadStatus();
+    });
+  }
 
   ngOnInit(): void {
     this.loadStatus();
     // Refresh every 5 seconds
     this.subscription = interval(5000).pipe(
-      switchMap(() => this.api.getStatus())
+      switchMap(() => {
+        const tenantId = this.authService.isSuperAdmin() ? this.tenantContext.currentTenantId() : undefined;
+        const shouldLoadCluster = this.authService.isSuperAdmin() && this.tenantContext.isMainTenantSelected();
+        
+        return forkJoin({
+          status: this.api.getStatus(tenantId),
+          cluster: shouldLoadCluster ? this.api.getSyncStatus().pipe(catchError(() => of(null))) : of(null)
+        });
+      })
     ).subscribe({
-      next: (status) => {
-        this.status = status;
+      next: (result) => {
+        this.status = result.status;
+        this.clusterStatus = result.cluster;
         this.hasShownError = false;
         this.cdr.detectChanges();
       },
@@ -49,13 +69,18 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   loadStatus(): void {
+    const tenantId = this.authService.isSuperAdmin() ? this.tenantContext.currentTenantId() : undefined;
+    const shouldLoadCluster = this.authService.isSuperAdmin() && this.tenantContext.isMainTenantSelected();
+    
     forkJoin({
-      status: this.api.getStatus(),
-      ports: this.api.getPorts()
+      status: this.api.getStatus(tenantId),
+      ports: this.api.getPorts(),
+      cluster: shouldLoadCluster ? this.api.getSyncStatus().pipe(catchError(() => of(null))) : of(null)
     }).subscribe({
       next: (result) => {
         this.status = result.status;
         this.portsConfig = result.ports;
+        this.clusterStatus = result.cluster;
         this.cdr.detectChanges();
       },
       error: (err) => {
@@ -63,6 +88,19 @@ export class DashboardComponent implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       }
     });
+  }
+
+  get showClusterStats(): boolean {
+    return this.authService.isSuperAdmin() && this.tenantContext.isMainTenantSelected() && !!this.clusterStatus;
+  }
+
+  getConnectedPeers(): number {
+    if (!this.clusterStatus?.peers) return 0;
+    return this.clusterStatus.peers.filter(p => p.connected).length;
+  }
+
+  getTotalPeers(): number {
+    return this.clusterStatus?.peers?.length || 0;
   }
 
   getDnsAddress(): string {

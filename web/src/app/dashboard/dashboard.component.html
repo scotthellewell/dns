@@ -1,6 +1,85 @@
 <div class="dashboard">
   <h1>DNS Server Dashboard</h1>
 
+  <!-- Cluster Overview (Main Tenant Only) -->
+  <div *ngIf="showClusterStats && clusterStatus" class="cluster-section">
+    <h2>Cluster Overview</h2>
+    <div class="cluster-grid">
+      <div class="cluster-card this-server">
+        <div class="server-header">
+          <div class="server-badge current">This Server</div>
+          <div class="server-name">{{ clusterStatus.server_name }}</div>
+        </div>
+        <div class="server-stats">
+          <div class="server-stat">
+            <span class="stat-icon">●</span>
+            <span class="stat-value running">Online</span>
+          </div>
+          <div class="server-stat" *ngIf="status">
+            <span class="stat-label">Uptime:</span>
+            <span class="stat-value">{{ status.uptime }}</span>
+          </div>
+          <div class="server-stat" *ngIf="status">
+            <span class="stat-label">Queries:</span>
+            <span class="stat-value">{{ status.total_queries | number }}</span>
+          </div>
+          <div class="server-stat">
+            <span class="stat-label">OpLog:</span>
+            <span class="stat-value">{{ clusterStatus.oplog_entries | number }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div *ngFor="let peer of clusterStatus.peers" class="cluster-card peer-server">
+        <div class="server-header">
+          <div class="server-badge" [class.connected]="peer.connected" [class.disconnected]="!peer.connected">
+            {{ peer.connected ? 'Connected' : 'Disconnected' }}
+          </div>
+          <div class="server-name">{{ peer.server_name || peer.server_id }}</div>
+        </div>
+        <div class="server-stats">
+          <div class="server-stat">
+            <span class="stat-icon" [class.online]="peer.connected" [class.offline]="!peer.connected">●</span>
+            <span class="stat-value" [class.running]="peer.connected" [class.stopped]="!peer.connected">
+              {{ peer.connected ? 'Online' : 'Offline' }}
+            </span>
+          </div>
+          <div class="server-stat" *ngIf="peer.connected">
+            <span class="stat-label">Last Sync:</span>
+            <span class="stat-value">{{ peer.last_sync_time | date:'short' }}</span>
+          </div>
+          <div class="server-stat" *ngIf="peer.connected">
+            <span class="stat-label">Pending Ops:</span>
+            <span class="stat-value">{{ peer.pending_ops }}</span>
+          </div>
+          <div class="server-stat" *ngIf="!peer.connected && peer.last_error">
+            <span class="stat-label error">Error:</span>
+            <span class="stat-value error">{{ peer.last_error }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cluster-summary">
+      <span class="summary-item">
+        <strong>Cluster Status:</strong>
+        <span class="status-badge" [class.healthy]="getConnectedPeers() === getTotalPeers()" 
+              [class.degraded]="getConnectedPeers() > 0 && getConnectedPeers() < getTotalPeers()"
+              [class.offline]="getConnectedPeers() === 0 && getTotalPeers() > 0">
+          {{ getConnectedPeers() === getTotalPeers() ? 'Healthy' : getConnectedPeers() === 0 ? 'Degraded' : 'Partial' }}
+        </span>
+      </span>
+      <span class="summary-item">
+        <strong>Connected Peers:</strong> {{ getConnectedPeers() }}/{{ getTotalPeers() }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Local Server Stats -->
+  <div *ngIf="showClusterStats" class="section-header">
+    <h2>This Server Statistics</h2>
+  </div>
+
   <div *ngIf="status" class="stats-grid">
     <div class="stat-card status">
       <div class="stat-icon">●</div>

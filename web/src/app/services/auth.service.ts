@@ -44,12 +44,20 @@ export interface APIKey {
   id: string;
   name: string;
   key?: string; // Only returned on creation
-  prefix: string;
+  key_prefix: string;
+  tenant_id: string;
   permissions: string[];
+  role?: string;
   created_at: string;
   expires_at?: string;
   last_used?: string;
   created_by: string;
+}
+
+export interface APIKeyRole {
+  value: string;
+  label: string;
+  description: string;
 }
 
 export interface WebAuthnCredential {
@@ -224,14 +232,24 @@ export class AuthService {
   }
 
   /**
-   * Create a new API key
+   * Get available roles for API key creation
    */
-  createAPIKey(name: string, permissions: string[], expiresAt?: Date): Observable<APIKey & { key: string }> {
-    return this.http.post<APIKey & { key: string }>(`${this.baseUrl}/apikeys`, {
-      name,
-      permissions,
-      expires_at: expiresAt?.toISOString()
-    });
+  getAPIKeyRoles(): Observable<APIKeyRole[]> {
+    return this.http.get<APIKeyRole[]>(`${this.baseUrl}/apikeys/roles`);
+  }
+
+  /**
+   * Create a new API key with a role
+   */
+  createAPIKey(name: string, role: string, tenantId?: string, expiresAt?: Date): Observable<APIKey & { key: string }> {
+    const body: any = { name, role };
+    if (tenantId) {
+      body.tenant_id = tenantId;
+    }
+    if (expiresAt) {
+      body.expires_at = expiresAt.toISOString();
+    }
+    return this.http.post<APIKey & { key: string }>(`${this.baseUrl}/apikeys`, body);
   }
 
   /**

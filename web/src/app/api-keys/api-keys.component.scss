@@ -3,16 +3,34 @@
 }
 
 .section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
   margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 16px;
 
-  h2 {
-    margin: 0;
-    font-weight: 500;
+  .header-content {
+    h2 {
+      margin: 0;
+      font-weight: 500;
+    }
+
+    .section-desc {
+      margin: 4px 0 0;
+      color: rgba(0, 0, 0, 0.6);
+    }
   }
 
-  .section-desc {
-    margin: 4px 0 0;
-    color: rgba(0, 0, 0, 0.6);
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+
+    .tenant-filter {
+      width: 180px;
+      margin-bottom: -1.25em; // Offset mat-form-field margin
+    }
   }
 }
 
@@ -65,24 +83,6 @@
   }
 }
 
-.create-key-card {
-  margin-bottom: 16px;
-}
-
-.create-key-form {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-
-  .key-name-field {
-    flex: 1;
-  }
-
-  button {
-    margin-top: 4px;
-  }
-}
-
 .loading-container {
   display: flex;
   justify-content: center;
@@ -131,6 +131,50 @@
   background: rgba(0, 0, 0, 0.05);
   padding: 4px 8px;
   border-radius: 4px;
+}
+
+.role-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: capitalize;
+  
+  &.role-super_admin, &.role-super-admin {
+    background: #e8f5e9;
+    color: #2e7d32;
+  }
+  
+  &.role-admin {
+    background: #e3f2fd;
+    color: #1565c0;
+  }
+  
+  &.role-readonly, &.role-read-only {
+    background: #f5f5f5;
+    color: #616161;
+  }
+}
+
+.tenant-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  background: #f3e5f5;
+  color: #7b1fa2;
+}
+
+.filter-bar {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+  
+  .tenant-filter {
+    min-width: 200px;
+  }
 }
 
 .info-box {
@@ -199,6 +243,11 @@
 
   .key-prefix {
     background: rgba(255, 255, 255, 0.1);
+  }
+
+  .tenant-badge {
+    background: #4a1a5c;
+    color: #ce93d8;
   }
 
   .info-box {

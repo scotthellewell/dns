@@ -68,6 +68,14 @@ func (m *mockStorage) SaveACMEAccountKey(key []byte) error {
 	return nil
 }
 
+func (m *mockStorage) GetACMEState() (*storage.ACMEState, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) SaveACMEState(state *storage.ACMEState) error {
+	return nil
+}
+
 func TestNewSNIManager(t *testing.T) {
 	store := newMockStorage()
 	mgr := NewSNIManager(store, nil)

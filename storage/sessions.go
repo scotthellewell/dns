@@ -21,9 +21,16 @@ func (s *Store) CreateSession(session *Session) error {
 		session.ExpiresAt = session.CreatedAt.Add(24 * time.Hour)
 	}
 
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		return putJSON(tx, BucketSessions, session.ID, session)
 	})
+
+	if err == nil {
+		// Record change for sync so sessions work across all cluster servers
+		recordChange(EntityTypeSession, session.ID, session.TenantID, OpCreate, session)
+	}
+
+	return err
 }
 
 // GetSession retrieves a session by ID.
@@ -48,9 +55,16 @@ func (s *Store) GetSession(id string) (*Session, error) {
 
 // DeleteSession deletes a session.
 func (s *Store) DeleteSession(id string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		return delete(tx, BucketSessions, id)
 	})
+
+	if err == nil {
+		// Record change for sync
+		recordChange(EntityTypeSession, id, "", OpDelete, nil)
+	}
+
+	return err
 }
 
 // DeleteUserSessions deletes all sessions for a user.
@@ -155,4 +169,31 @@ func (s *Store) ExtendSession(id string, duration time.Duration) error {
 		session.ExpiresAt = time.Now().Add(duration)
 		return putJSON(tx, BucketSessions, id, &session)
 	})
+}
+
+// ListActiveSessions returns all non-expired sessions for sync purposes.
+func (s *Store) ListActiveSessions() ([]*Session, error) {
+	var sessions []*Session
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(BucketSessions)
+		if b == nil {
+			return nil
+		}
+
+		now := time.Now()
+		return b.ForEach(func(k, v []byte) error {
+			var session Session
+			if err := unmarshalJSON(v, &session); err != nil {
+				return err
+			}
+			// Only include non-expired sessions
+			if now.Before(session.ExpiresAt) {
+				sessions = append(sessions, &session)
+			}
+			return nil
+		})
+	})
+
+	return sessions, err
 }

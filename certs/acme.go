@@ -77,6 +77,8 @@ type ACMEStorage interface {
 	UpdateACMEConfig(config *ACMEConfig) error
 	GetACMEAccountKey() ([]byte, error)
 	SaveACMEAccountKey(key []byte) error
+	GetACMEState() (*ACMEState, error)
+	SaveACMEState(state *ACMEState) error
 }
 
 // CertUploader is an interface for uploading certificates
@@ -128,8 +130,27 @@ func NewACMEManager(certManager CertUploader) (*ACMEManager, error) {
 	return m, nil
 }
 
-// loadConfig loads ACME configuration from file
+// SetStorage sets the storage backend for the ACME manager
+func (m *ACMEManager) SetStorage(storage ACMEStorage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.storage = storage
+}
+
+// loadConfig loads ACME configuration from storage or file
 func (m *ACMEManager) loadConfig() error {
+	// Try storage first
+	if m.storage != nil {
+		cfg, err := m.storage.GetACMEConfig()
+		if err == nil && cfg != nil {
+			m.config = *cfg
+			return nil
+		}
+	}
+	// Fall back to file
+	if m.configFile == "" {
+		return fmt.Errorf("no storage or config file configured")
+	}
 	data, err := os.ReadFile(m.configFile)
 	if err != nil {
 		return err
@@ -153,8 +174,20 @@ func (m *ACMEManager) saveConfig() error {
 	return os.WriteFile(m.configFile, data, 0644)
 }
 
-// loadState loads ACME state from file
+// loadState loads ACME state from storage or file
 func (m *ACMEManager) loadState() error {
+	// Try storage first
+	if m.storage != nil {
+		state, err := m.storage.GetACMEState()
+		if err == nil && state != nil {
+			m.state = *state
+			return nil
+		}
+	}
+	// Fall back to file
+	if m.stateFile == "" {
+		return nil
+	}
 	data, err := os.ReadFile(m.stateFile)
 	if err != nil {
 		return err
@@ -162,8 +195,15 @@ func (m *ACMEManager) loadState() error {
 	return json.Unmarshal(data, &m.state)
 }
 
-// saveState saves ACME state to file
+// saveState saves ACME state to storage or file
 func (m *ACMEManager) saveState() error {
+	if m.storage != nil {
+		return m.storage.SaveACMEState(&m.state)
+	}
+	// Fall back to file
+	if m.stateFile == "" {
+		return nil
+	}
 	data, err := json.MarshalIndent(m.state, "", "  ")
 	if err != nil {
 		return err

@@ -34,10 +34,9 @@ func (s *Store) CreateAPIKey(apiKey *APIKey) error {
 	})
 
 	if err == nil {
-		// Record change for sync (exclude key hash from sync data)
-		syncKey := *apiKey
-		syncKey.KeyHash = ""
-		recordChange(EntityTypeAPIKey, apiKey.ID, apiKey.TenantID, OpCreate, &syncKey)
+		// Record change for sync (include key hash so keys work across all servers)
+		// The hash is a SHA256 of the key - safe to sync as it's a one-way hash
+		recordChange(EntityTypeAPIKey, apiKey.ID, apiKey.TenantID, OpCreate, apiKey)
 	}
 
 	return err
@@ -104,9 +103,8 @@ func (s *Store) UpdateAPIKey(apiKey *APIKey) error {
 	})
 
 	if err == nil {
-		syncKey := *apiKey
-		syncKey.KeyHash = ""
-		recordChange(EntityTypeAPIKey, apiKey.ID, apiKey.TenantID, OpUpdate, &syncKey)
+		// Include key hash so keys work across all servers
+		recordChange(EntityTypeAPIKey, apiKey.ID, apiKey.TenantID, OpUpdate, apiKey)
 	}
 
 	return err
@@ -145,6 +143,7 @@ func (s *Store) DeleteAPIKey(id string) error {
 }
 
 // ListAPIKeys returns all API keys, optionally filtered by tenant.
+// The hash is omitted for security - use ListAPIKeysForSync when syncing.
 func (s *Store) ListAPIKeys(tenantID string) ([]*APIKey, error) {
 	var apiKeys []*APIKey
 
@@ -162,6 +161,33 @@ func (s *Store) ListAPIKeys(tenantID string) ([]*APIKey, error) {
 			if tenantID == "" || apiKey.TenantID == tenantID {
 				// Don't return the hash
 				apiKey.KeyHash = ""
+				apiKeys = append(apiKeys, &apiKey)
+			}
+			return nil
+		})
+	})
+
+	return apiKeys, err
+}
+
+// ListAPIKeysForSync returns all API keys including hashes for cluster sync.
+// This allows API keys to work across all cluster servers.
+func (s *Store) ListAPIKeysForSync(tenantID string) ([]*APIKey, error) {
+	var apiKeys []*APIKey
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(BucketAPIKeys)
+		if b == nil {
+			return nil
+		}
+
+		return b.ForEach(func(k, v []byte) error {
+			var apiKey APIKey
+			if err := unmarshalJSON(v, &apiKey); err != nil {
+				return err
+			}
+			if tenantID == "" || apiKey.TenantID == tenantID {
+				// Include hash for sync so keys work on all servers
 				apiKeys = append(apiKeys, &apiKey)
 			}
 			return nil

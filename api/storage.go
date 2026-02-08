@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/scott/dns/auth"
 	"github.com/scott/dns/config"
 	"github.com/scott/dns/dnssec"
@@ -136,12 +138,14 @@ func (h *Handler) handleZonesStorage(w http.ResponseWriter, r *http.Request, ses
 		var resp []ZoneResponse
 		for _, z := range zones {
 			resp = append(resp, ZoneResponse{
-				ZoneID:   z.Name, // Zone uses Name as key
-				TenantID: z.TenantID,
-				Name:     z.Name,
-				Type:     config.ZoneType(z.Type),
-				Subnet:   z.Subnet,
-				TTL:      z.TTL,
+				ZoneID:      z.Name, // Zone uses Name as key
+				TenantID:    z.TenantID,
+				Name:        z.Name,
+				Type:        config.ZoneType(z.Type),
+				Subnet:      z.Subnet,
+				Domain:      z.Domain,
+				StripPrefix: z.StripPrefix,
+				TTL:         z.TTL,
 			})
 		}
 		if resp == nil {
@@ -151,12 +155,13 @@ func (h *Handler) handleZonesStorage(w http.ResponseWriter, r *http.Request, ses
 
 	case "POST":
 		var req struct {
-			Name     string `json:"name"`
-			Type     string `json:"type"`
-			TenantID string `json:"tenant_id"`
-			Subnet   string `json:"subnet"`
-			Domain   string `json:"domain"`
-			TTL      int    `json:"ttl"`
+			Name        string `json:"name"`
+			Type        string `json:"type"`
+			TenantID    string `json:"tenant_id"`
+			Subnet      string `json:"subnet"`
+			Domain      string `json:"domain"`
+			StripPrefix bool   `json:"strip_prefix"`
+			TTL         int    `json:"ttl"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			h.errorResponse(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -193,12 +198,13 @@ func (h *Handler) handleZonesStorage(w http.ResponseWriter, r *http.Request, ses
 		}
 
 		zone := &storage.Zone{
-			Name:     zoneName,
-			Type:     storage.ZoneType(req.Type),
-			TenantID: tenantID,
-			Subnet:   req.Subnet,
-			Domain:   req.Domain,
-			TTL:      uint32(req.TTL),
+			Name:        zoneName,
+			Type:        storage.ZoneType(req.Type),
+			TenantID:    tenantID,
+			Subnet:      req.Subnet,
+			Domain:      req.Domain,
+			StripPrefix: req.StripPrefix,
+			TTL:         uint32(req.TTL),
 		}
 
 		if err := store.CreateZone(zone); err != nil {
@@ -252,21 +258,24 @@ func (h *Handler) handleZoneStorage(w http.ResponseWriter, r *http.Request, sess
 	switch r.Method {
 	case "GET":
 		h.jsonResponse(w, ZoneResponse{
-			ZoneID:   zone.Name,
-			TenantID: zone.TenantID,
-			Name:     zone.Name,
-			Type:     config.ZoneType(zone.Type),
-			Subnet:   zone.Subnet,
-			TTL:      zone.TTL,
+			ZoneID:      zone.Name,
+			TenantID:    zone.TenantID,
+			Name:        zone.Name,
+			Type:        config.ZoneType(zone.Type),
+			Subnet:      zone.Subnet,
+			Domain:      zone.Domain,
+			StripPrefix: zone.StripPrefix,
+			TTL:         zone.TTL,
 		})
 
 	case "PUT":
 		var req struct {
-			Name   string `json:"name"`
-			Type   string `json:"type"`
-			Subnet string `json:"subnet"`
-			Domain string `json:"domain"`
-			TTL    int    `json:"ttl"`
+			Name        string `json:"name"`
+			Type        string `json:"type"`
+			Subnet      string `json:"subnet"`
+			Domain      string `json:"domain"`
+			StripPrefix bool   `json:"strip_prefix"`
+			TTL         int    `json:"ttl"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			h.errorResponse(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -288,12 +297,13 @@ func (h *Handler) handleZoneStorage(w http.ResponseWriter, r *http.Request, sess
 
 			// Create new zone with updated properties
 			newZone := &storage.Zone{
-				Name:     newName,
-				Type:     storage.ZoneType(req.Type),
-				Subnet:   req.Subnet,
-				Domain:   req.Domain,
-				TenantID: zone.TenantID,
-				TTL:      uint32(req.TTL),
+				Name:        newName,
+				Type:        storage.ZoneType(req.Type),
+				Subnet:      req.Subnet,
+				Domain:      req.Domain,
+				StripPrefix: req.StripPrefix,
+				TenantID:    zone.TenantID,
+				TTL:         uint32(req.TTL),
 			}
 			if err := store.CreateZone(newZone); err != nil {
 				// Try to restore the old zone on failure
@@ -306,6 +316,7 @@ func (h *Handler) handleZoneStorage(w http.ResponseWriter, r *http.Request, sess
 			zone.Type = storage.ZoneType(req.Type)
 			zone.Subnet = req.Subnet
 			zone.Domain = req.Domain
+			zone.StripPrefix = req.StripPrefix
 			zone.TTL = uint32(req.TTL)
 
 			if err := store.UpdateZone(zone); err != nil {
@@ -532,6 +543,15 @@ func (h *Handler) handleSecondaryZonesStorage(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Determine tenant filter
+	tenantID := ""
+	if session != nil && !session.IsSuperAdmin {
+		tenantID = session.TenantID
+		if tenantID == "" {
+			tenantID = auth.MainTenantID
+		}
+	}
+
 	switch r.Method {
 	case "GET":
 		zones, err := store.ListSecondaryZones()
@@ -542,12 +562,19 @@ func (h *Handler) handleSecondaryZonesStorage(w http.ResponseWriter, r *http.Req
 
 		var resp []map[string]interface{}
 		for _, z := range zones {
+			// Filter by tenant if not super admin
+			if tenantID != "" && z.TenantID != tenantID {
+				continue
+			}
 			resp = append(resp, map[string]interface{}{
-				"id":        z.Zone, // Use Zone name as ID
-				"zone":      z.Zone,
-				"primaries": z.Primaries,
-				"tsig_key":  z.TSIGKey,
-				"interval":  z.RefreshInterval,
+				"id":               z.Zone, // Use Zone name as ID
+				"zone":             z.Zone,
+				"tenant_id":        z.TenantID,
+				"primaries":        z.Primaries,
+				"tsig_key":         z.TSIGKey,
+				"interval":         z.RefreshInterval,
+				"dnssec_key_url":   z.DNSSECKeyURL,
+				"dnssec_key_token": z.DNSSECKeyToken,
 			})
 		}
 		if resp == nil {
@@ -557,14 +584,26 @@ func (h *Handler) handleSecondaryZonesStorage(w http.ResponseWriter, r *http.Req
 
 	case "POST":
 		var req struct {
-			Zone      string   `json:"zone"`
-			Primaries []string `json:"primaries"`
-			TSIGKey   string   `json:"tsig_key"`
-			Interval  uint32   `json:"interval"`
+			Zone           string   `json:"zone"`
+			TenantID       string   `json:"tenant_id"`
+			Primaries      []string `json:"primaries"`
+			TSIGKey        string   `json:"tsig_key"`
+			Interval       uint32   `json:"interval"`
+			DNSSECKeyURL   string   `json:"dnssec_key_url"`
+			DNSSECKeyToken string   `json:"dnssec_key_token"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			h.errorResponse(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
+		}
+
+		// Set tenant ID from session if not super admin
+		zoneTenantID := req.TenantID
+		if session != nil && !session.IsSuperAdmin {
+			zoneTenantID = session.TenantID
+		}
+		if zoneTenantID == "" {
+			zoneTenantID = auth.MainTenantID
 		}
 
 		// Check if a primary zone with this name already exists
@@ -583,9 +622,12 @@ func (h *Handler) handleSecondaryZonesStorage(w http.ResponseWriter, r *http.Req
 
 		sz := &storage.SecondaryZone{
 			Zone:            req.Zone,
+			TenantID:        zoneTenantID,
 			Primaries:       req.Primaries,
 			TSIGKey:         req.TSIGKey,
 			RefreshInterval: req.Interval,
+			DNSSECKeyURL:    req.DNSSECKeyURL,
+			DNSSECKeyToken:  req.DNSSECKeyToken,
 		}
 
 		if err := store.CreateSecondaryZone(sz); err != nil {
@@ -608,6 +650,15 @@ func (h *Handler) handleSecondaryZoneStorage(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Determine tenant filter
+	tenantID := ""
+	if session != nil && !session.IsSuperAdmin {
+		tenantID = session.TenantID
+		if tenantID == "" {
+			tenantID = auth.MainTenantID
+		}
+	}
+
 	// Extract zone ID from URL path
 	zoneID := strings.TrimPrefix(r.URL.Path, "/api/secondary-zones/")
 	zoneID = strings.Split(zoneID, "/")[0]
@@ -622,6 +673,14 @@ func (h *Handler) handleSecondaryZoneStorage(w http.ResponseWriter, r *http.Requ
 		decodedZoneID = zoneID
 	}
 
+	// Helper function to check tenant access
+	checkTenantAccess := func(zone *storage.SecondaryZone) bool {
+		if tenantID == "" {
+			return true // Super admin
+		}
+		return zone.TenantID == tenantID
+	}
+
 	switch r.Method {
 	case "GET":
 		zone, err := store.GetSecondaryZone(decodedZoneID)
@@ -630,18 +689,33 @@ func (h *Handler) handleSecondaryZoneStorage(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
+		// Check tenant access
+		if !checkTenantAccess(zone) {
+			h.errorResponse(w, "Secondary zone not found", http.StatusNotFound)
+			return
+		}
+
 		h.jsonResponse(w, map[string]interface{}{
-			"id":        zone.Zone,
-			"zone":      zone.Zone,
-			"primaries": zone.Primaries,
-			"tsig_key":  zone.TSIGKey,
-			"interval":  zone.RefreshInterval,
+			"id":               zone.Zone,
+			"zone":             zone.Zone,
+			"tenant_id":        zone.TenantID,
+			"primaries":        zone.Primaries,
+			"tsig_key":         zone.TSIGKey,
+			"interval":         zone.RefreshInterval,
+			"dnssec_key_url":   zone.DNSSECKeyURL,
+			"dnssec_key_token": zone.DNSSECKeyToken,
 		})
 
 	case "DELETE":
 		// Check if zone exists first
 		zone, err := store.GetSecondaryZone(decodedZoneID)
 		if err != nil || zone == nil {
+			h.errorResponse(w, "Secondary zone not found", http.StatusNotFound)
+			return
+		}
+
+		// Check tenant access
+		if !checkTenantAccess(zone) {
 			h.errorResponse(w, "Secondary zone not found", http.StatusNotFound)
 			return
 		}
@@ -655,10 +729,12 @@ func (h *Handler) handleSecondaryZoneStorage(w http.ResponseWriter, r *http.Requ
 
 	case "PUT":
 		var req struct {
-			Zone      string   `json:"zone"`
-			Primaries []string `json:"primaries"`
-			TSIGKey   string   `json:"tsig_key"`
-			Interval  uint32   `json:"interval"`
+			Zone           string   `json:"zone"`
+			Primaries      []string `json:"primaries"`
+			TSIGKey        string   `json:"tsig_key"`
+			Interval       uint32   `json:"interval"`
+			DNSSECKeyURL   string   `json:"dnssec_key_url"`
+			DNSSECKeyToken string   `json:"dnssec_key_token"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			h.errorResponse(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -672,12 +748,21 @@ func (h *Handler) handleSecondaryZoneStorage(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
-		// Update the zone
+		// Check tenant access
+		if !checkTenantAccess(existingZone) {
+			h.errorResponse(w, "Secondary zone not found", http.StatusNotFound)
+			return
+		}
+
+		// Update the zone (preserve tenant_id)
 		sz := &storage.SecondaryZone{
 			Zone:            req.Zone,
+			TenantID:        existingZone.TenantID, // Preserve tenant
 			Primaries:       req.Primaries,
 			TSIGKey:         req.TSIGKey,
 			RefreshInterval: req.Interval,
+			DNSSECKeyURL:    req.DNSSECKeyURL,
+			DNSSECKeyToken:  req.DNSSECKeyToken,
 		}
 
 		// If zone name changed, delete old and create new
@@ -702,6 +787,233 @@ func (h *Handler) handleSecondaryZoneStorage(w http.ResponseWriter, r *http.Requ
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleConvertSecondaryZone handles converting a secondary zone to a primary zone
+func (h *Handler) handleConvertSecondaryZone(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	store := h.getStore()
+	if store == nil {
+		h.errorResponse(w, "Storage not available", http.StatusInternalServerError)
+		return
+	}
+
+	// Get session for tenant context
+	session := auth.GetSession(r.Context())
+	if session == nil {
+		h.errorResponse(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Determine tenant filter
+	tenantID := ""
+	if !session.IsSuperAdmin {
+		tenantID = session.TenantID
+		if tenantID == "" {
+			tenantID = auth.MainTenantID
+		}
+	}
+
+	// Extract zone name from URL path: /api/secondary-zones/convert/{zone}
+	zoneID := strings.TrimPrefix(r.URL.Path, "/api/secondary-zones/convert/")
+	if zoneID == "" {
+		h.errorResponse(w, "Zone name required", http.StatusBadRequest)
+		return
+	}
+
+	// URL decode the zone name
+	decodedZoneID, err := url.PathUnescape(zoneID)
+	if err != nil {
+		decodedZoneID = zoneID
+	}
+
+	// Get the secondary zone
+	secondaryZone, err := store.GetSecondaryZone(decodedZoneID)
+	if err != nil || secondaryZone == nil {
+		h.errorResponse(w, "Secondary zone not found", http.StatusNotFound)
+		return
+	}
+
+	// Check tenant access
+	if tenantID != "" && secondaryZone.TenantID != tenantID {
+		h.errorResponse(w, "Secondary zone not found", http.StatusNotFound)
+		return
+	}
+
+	// Get secondary manager to fetch current records
+	secMgr := h.getSecondaryManager()
+	if secMgr == nil {
+		h.errorResponse(w, "Secondary zone manager not available", http.StatusInternalServerError)
+		return
+	}
+
+	// Get all records from the secondary zone (in memory from last transfer)
+	records := secMgr.GetAllRecords(decodedZoneID)
+	soa := secMgr.GetSOA(decodedZoneID)
+
+	if len(records) == 0 && soa == nil {
+		h.errorResponse(w, "Secondary zone has no cached records. Ensure zone has synced at least once.", http.StatusBadRequest)
+		return
+	}
+
+	// Check if a primary zone already exists with this name
+	existingZone, _ := store.GetZone(decodedZoneID)
+	if existingZone != nil {
+		h.errorResponse(w, "A primary zone with this name already exists", http.StatusConflict)
+		return
+	}
+
+	// Create the primary zone
+	zoneName := dns.Fqdn(decodedZoneID)
+	newZone := &storage.Zone{
+		Name:     zoneName,
+		Type:     storage.ZoneTypeForward,
+		TenantID: secondaryZone.TenantID,
+	}
+
+	// If we have a SOA, use its TTL
+	if soa != nil {
+		newZone.TTL = soa.Header().Ttl
+	} else {
+		newZone.TTL = 3600
+	}
+
+	if err := store.CreateZone(newZone); err != nil {
+		h.errorResponse(w, "Failed to create primary zone: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Add SOA record if present
+	var recordsCreated int
+	var recordsFailed int
+
+	if soa != nil {
+		soaData, _ := json.Marshal(storage.SOARecordData{
+			MName:   soa.Ns,
+			RName:   soa.Mbox,
+			Serial:  soa.Serial,
+			Refresh: soa.Refresh,
+			Retry:   soa.Retry,
+			Expire:  soa.Expire,
+			Minimum: soa.Minttl,
+		})
+		soaRecord := &storage.Record{
+			Zone:    zoneName,
+			Name:    zoneName,
+			Type:    "SOA",
+			TTL:     soa.Header().Ttl,
+			Enabled: true,
+			Data:    soaData,
+		}
+		if err := store.CreateRecord(soaRecord); err != nil {
+			recordsFailed++
+		} else {
+			recordsCreated++
+		}
+	}
+
+	// Convert all DNS records to storage records
+	for _, rr := range records {
+		record, err := dnsRRToStorageRecord(rr, zoneName)
+		if err != nil {
+			recordsFailed++
+			continue
+		}
+
+		if err := store.CreateRecord(record); err != nil {
+			recordsFailed++
+		} else {
+			recordsCreated++
+		}
+	}
+
+	// Delete the secondary zone
+	if err := store.DeleteSecondaryZone(decodedZoneID); err != nil {
+		// Zone was created but secondary wasn't deleted - report partial success
+		h.jsonResponse(w, map[string]interface{}{
+			"status":          "partial",
+			"message":         "Primary zone created but failed to delete secondary zone: " + err.Error(),
+			"zone":            zoneName,
+			"records_created": recordsCreated,
+			"records_failed":  recordsFailed,
+		})
+		return
+	}
+
+	// Also delete the secondary zone cache
+	store.DeleteSecondaryZoneCache(decodedZoneID)
+
+	// Trigger config update
+	h.UpdateConfigFromStorage()
+
+	h.jsonResponse(w, map[string]interface{}{
+		"status":          "ok",
+		"message":         "Secondary zone converted to primary zone",
+		"zone":            zoneName,
+		"records_created": recordsCreated,
+		"records_failed":  recordsFailed,
+	})
+}
+
+// dnsRRToStorageRecord converts a dns.RR to a storage.Record
+func dnsRRToStorageRecord(rr dns.RR, zoneName string) (*storage.Record, error) {
+	hdr := rr.Header()
+	record := &storage.Record{
+		Zone:    zoneName,
+		Name:    hdr.Name,
+		Type:    dns.TypeToString[hdr.Rrtype],
+		TTL:     hdr.Ttl,
+		Enabled: true,
+	}
+
+	var data interface{}
+
+	switch v := rr.(type) {
+	case *dns.A:
+		data = storage.ARecordData{IP: v.A.String()}
+	case *dns.AAAA:
+		data = storage.AAAARecordData{IP: v.AAAA.String()}
+	case *dns.CNAME:
+		data = storage.CNAMERecordData{Target: v.Target}
+	case *dns.MX:
+		data = storage.MXRecordData{Priority: v.Preference, Target: v.Mx}
+	case *dns.NS:
+		data = storage.NSRecordData{Target: v.Ns}
+	case *dns.PTR:
+		data = storage.PTRRecordData{Target: v.Ptr}
+	case *dns.TXT:
+		data = storage.TXTRecordData{Values: v.Txt}
+	case *dns.SRV:
+		data = storage.SRVRecordData{
+			Priority: v.Priority,
+			Weight:   v.Weight,
+			Port:     v.Port,
+			Target:   v.Target,
+		}
+	case *dns.CAA:
+		data = storage.CAARecordData{
+			Flag:  v.Flag,
+			Tag:   v.Tag,
+			Value: v.Value,
+		}
+	case *dns.SOA:
+		// Skip SOA - handled separately
+		return nil, fmt.Errorf("SOA handled separately")
+	default:
+		return nil, fmt.Errorf("unsupported record type: %s", dns.TypeToString[hdr.Rrtype])
+	}
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	record.Data = jsonData
+
+	return record, nil
 }
 
 // handleTransferStorage handles transfer config API using storage backend
@@ -1462,4 +1774,593 @@ func subnetToReverseZone(subnet string) string {
 	}
 
 	return ""
+}
+
+// ==================== Zone File Import ====================
+
+// ZoneImportRequest represents a request to import a zone from a zone file
+type ZoneImportRequest struct {
+	ZoneName string `json:"zone_name"` // Zone name (e.g., "example.com")
+	ZoneFile string `json:"zone_file"` // BIND zone file content
+	Preview  bool   `json:"preview"`   // If true, only preview without importing
+}
+
+// ZoneImportResult represents the result of a zone import
+type ZoneImportResult struct {
+	Zone         *storage.Zone   `json:"zone"`
+	Records      []*RecordResult `json:"records"`
+	RecordCount  int             `json:"record_count"`
+	Errors       []string        `json:"errors"`
+	Warnings     []string        `json:"warnings"`
+	Imported     bool            `json:"imported"`
+}
+
+// RecordResult represents a parsed record for import preview
+type RecordResult struct {
+	Name    string          `json:"name"`
+	Type    string          `json:"type"`
+	TTL     uint32          `json:"ttl"`
+	Data    json.RawMessage `json:"data"`
+	RawData string          `json:"raw_data,omitempty"` // Human-readable data
+}
+
+// handleZoneImport handles zone file import
+func (h *Handler) handleZoneImport(w http.ResponseWriter, r *http.Request) {
+	session := auth.GetSession(r.Context())
+	if session == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	
+	// Only POST for import
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check permissions - need write access (admin or super admin)
+	if !session.IsSuperAdmin && session.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return
+	}
+
+	h.handleZoneImportStorage(w, r, session)
+}
+
+// handleZoneImportStorage handles zone import using storage backend
+func (h *Handler) handleZoneImportStorage(w http.ResponseWriter, r *http.Request, session *auth.Session) {
+	store, ok := h.store.(*storage.Store)
+	if !ok || store == nil {
+		http.Error(w, "Storage backend not available", http.StatusInternalServerError)
+		return
+	}
+
+	var req ZoneImportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.ZoneName == "" {
+		http.Error(w, "zone_name is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.ZoneFile == "" {
+		http.Error(w, "zone_file is required", http.StatusBadRequest)
+		return
+	}
+
+	// Import using zonefile package
+	result, err := h.importZoneFile(store, session, req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+// importZoneFile parses and optionally imports a BIND zone file
+func (h *Handler) importZoneFile(store *storage.Store, session *auth.Session, req ZoneImportRequest) (*ZoneImportResult, error) {
+	parser := &zoneFileParser{defaultTTL: 3600}
+	
+	parsed, err := parser.parse(strings.NewReader(req.ZoneFile), req.ZoneName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse zone file: %w", err)
+	}
+
+	result := &ZoneImportResult{
+		Zone:        parsed.zone,
+		Records:     make([]*RecordResult, 0, len(parsed.records)),
+		RecordCount: len(parsed.records),
+		Errors:      parsed.errors,
+		Warnings:    make([]string, 0),
+		Imported:    false,
+	}
+
+	// Convert records to result format
+	for _, rec := range parsed.records {
+		rr := &RecordResult{
+			Name:    rec.Name,
+			Type:    rec.Type,
+			TTL:     rec.TTL,
+			Data:    rec.Data,
+			RawData: formatRecordData(rec.Type, rec.Data),
+		}
+		result.Records = append(result.Records, rr)
+	}
+
+	// Skip SOA records in the count (they're metadata, not importable)
+	soaCount := 0
+	for _, rec := range result.Records {
+		if rec.Type == "SOA" {
+			soaCount++
+		}
+	}
+	if soaCount > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("%d SOA record(s) detected and will be used for zone configuration", soaCount))
+	}
+
+	// If preview only, return without importing
+	if req.Preview {
+		return result, nil
+	}
+
+	// Check if zone already exists
+	existingZone, _ := store.GetZone(req.ZoneName)
+	if existingZone != nil {
+		return nil, fmt.Errorf("zone %s already exists - delete it first or import records individually", req.ZoneName)
+	}
+
+	// Set tenant ID from session
+	tenantID := session.TenantID
+	if tenantID == "" {
+		tenantID = auth.MainTenantID
+	}
+	parsed.zone.TenantID = tenantID
+
+	// Create the zone
+	err = store.CreateZone(parsed.zone)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create zone: %w", err)
+	}
+
+	// Import records (skip SOA - it's already in zone metadata)
+	importedCount := 0
+	for _, rec := range parsed.records {
+		if rec.Type == "SOA" {
+			continue // Skip SOA, already handled
+		}
+		
+		rec.Zone = parsed.zone.Name
+		if err := store.CreateRecord(rec); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("Failed to import %s %s: %v", rec.Name, rec.Type, err))
+		} else {
+			importedCount++
+		}
+	}
+
+	result.Imported = true
+	result.RecordCount = importedCount
+	
+	// Update config
+	h.UpdateConfigFromStorage()
+
+	return result, nil
+}
+
+// formatRecordData formats record data as a human-readable string
+func formatRecordData(rtype string, data json.RawMessage) string {
+	switch rtype {
+	case "A", "AAAA":
+		var d struct{ Address string `json:"address"` }
+		if json.Unmarshal(data, &d) == nil {
+			return d.Address
+		}
+	case "CNAME", "NS", "PTR":
+		var d struct{ Target string `json:"target"` }
+		if json.Unmarshal(data, &d) == nil {
+			return d.Target
+		}
+	case "MX":
+		var d struct {
+			Preference uint16 `json:"preference"`
+			Exchange   string `json:"exchange"`
+		}
+		if json.Unmarshal(data, &d) == nil {
+			return fmt.Sprintf("%d %s", d.Preference, d.Exchange)
+		}
+	case "TXT":
+		var d struct{ Text string `json:"text"` }
+		if json.Unmarshal(data, &d) == nil {
+			return fmt.Sprintf("\"%s\"", d.Text)
+		}
+	case "SRV":
+		var d struct {
+			Priority uint16 `json:"priority"`
+			Weight   uint16 `json:"weight"`
+			Port     uint16 `json:"port"`
+			Target   string `json:"target"`
+		}
+		if json.Unmarshal(data, &d) == nil {
+			return fmt.Sprintf("%d %d %d %s", d.Priority, d.Weight, d.Port, d.Target)
+		}
+	case "CAA":
+		var d struct {
+			Flag  uint8  `json:"flag"`
+			Tag   string `json:"tag"`
+			Value string `json:"value"`
+		}
+		if json.Unmarshal(data, &d) == nil {
+			return fmt.Sprintf("%d %s \"%s\"", d.Flag, d.Tag, d.Value)
+		}
+	}
+	return string(data)
+}
+
+// zoneFileParser is a simplified BIND zone file parser
+type zoneFileParser struct {
+	origin     string
+	defaultTTL uint32
+}
+
+type parsedZoneFile struct {
+	zone    *storage.Zone
+	records []*storage.Record
+	errors  []string
+}
+
+func (p *zoneFileParser) parse(r interface{ Read([]byte) (int, error) }, zoneName string) (*parsedZoneFile, error) {
+	if !strings.HasSuffix(zoneName, ".") {
+		zoneName += "."
+	}
+	p.origin = zoneName
+
+	result := &parsedZoneFile{
+		zone: &storage.Zone{
+			Name:    strings.TrimSuffix(zoneName, "."),
+			Type:    "forward",
+			TTL:     p.defaultTTL,
+			Serial:  uint32(time.Now().Unix()),
+			Refresh: 3600,
+			Retry:   600,
+			Expire:  604800,
+			Minimum: 3600,
+		},
+		records: make([]*storage.Record, 0),
+	}
+
+	// Read all content
+	buf := make([]byte, 0, 64*1024)
+	tmp := make([]byte, 4096)
+	for {
+		n, err := r.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+		}
+		if err != nil {
+			break
+		}
+	}
+	content := string(buf)
+
+	var currentName string
+	lineNum := 0
+	lines := strings.Split(content, "\n")
+
+	for lineNum < len(lines) {
+		line := lines[lineNum]
+		lineNum++
+		
+		// Remove comments
+		if idx := strings.Index(line, ";"); idx >= 0 {
+			line = line[:idx]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Handle directives
+		if strings.HasPrefix(line, "$") {
+			p.handleDirective(line, result)
+			continue
+		}
+
+		// Handle multi-line records (parentheses)
+		if strings.Contains(line, "(") && !strings.Contains(line, ")") {
+			// Collect multi-line
+			fullLine := line
+			for lineNum < len(lines) {
+				nextLine := lines[lineNum]
+				lineNum++
+				if idx := strings.Index(nextLine, ";"); idx >= 0 {
+					nextLine = nextLine[:idx]
+				}
+				fullLine += " " + strings.TrimSpace(nextLine)
+				if strings.Contains(nextLine, ")") {
+					break
+				}
+			}
+			line = strings.ReplaceAll(fullLine, "(", "")
+			line = strings.ReplaceAll(line, ")", "")
+			line = strings.TrimSpace(line)
+		}
+
+		record, name, err := p.parseRecord(line, currentName)
+		if err != nil {
+			result.errors = append(result.errors, fmt.Sprintf("line %d: %v", lineNum, err))
+			continue
+		}
+
+		if name != "" {
+			currentName = name
+		}
+
+		if record != nil {
+			record.Zone = zoneName
+			result.records = append(result.records, record)
+
+			if record.Type == "SOA" {
+				p.extractSOAToZone(record, result.zone)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func (p *zoneFileParser) handleDirective(line string, result *parsedZoneFile) {
+	parts := strings.Fields(line)
+	if len(parts) < 2 {
+		return
+	}
+
+	switch strings.ToUpper(parts[0]) {
+	case "$ORIGIN":
+		origin := parts[1]
+		if !strings.HasSuffix(origin, ".") {
+			origin += "."
+		}
+		p.origin = origin
+	case "$TTL":
+		if ttl, err := p.parseTTL(parts[1]); err == nil {
+			p.defaultTTL = ttl
+			result.zone.TTL = ttl
+		}
+	}
+}
+
+func (p *zoneFileParser) parseRecord(line, prevName string) (*storage.Record, string, error) {
+	fields := strings.Fields(line)
+	if len(fields) < 3 {
+		return nil, "", fmt.Errorf("too few fields")
+	}
+
+	var name string
+	var ttl uint32 = p.defaultTTL
+	var rtype string
+	var dataStart int
+
+	// Determine if first field is a name
+	if !p.isNumeric(fields[0]) && !p.isClass(fields[0]) && !p.isType(fields[0]) {
+		name = fields[0]
+		dataStart = 1
+	} else {
+		name = prevName
+		dataStart = 0
+	}
+
+	// Handle @ as origin
+	if name == "@" {
+		name = p.origin
+	}
+
+	// Make name fully qualified
+	if name != "" && !strings.HasSuffix(name, ".") {
+		name = name + "." + p.origin
+	}
+
+	// Parse TTL, class, and type
+	for i := dataStart; i < len(fields); i++ {
+		f := fields[i]
+		if p.isNumeric(f) {
+			if t, err := p.parseTTL(f); err == nil {
+				ttl = t
+			}
+		} else if p.isClass(f) {
+			// Skip class
+		} else if p.isType(f) {
+			rtype = strings.ToUpper(f)
+			dataStart = i + 1
+			break
+		}
+	}
+
+	if rtype == "" {
+		return nil, name, fmt.Errorf("no record type found")
+	}
+
+	data := fields[dataStart:]
+	if len(data) == 0 && rtype != "TXT" {
+		return nil, name, fmt.Errorf("no record data")
+	}
+
+	record, err := p.buildRecord(name, ttl, rtype, data)
+	if err != nil {
+		return nil, name, err
+	}
+
+	return record, name, nil
+}
+
+func (p *zoneFileParser) buildRecord(name string, ttl uint32, rtype string, data []string) (*storage.Record, error) {
+	record := &storage.Record{
+		Name: strings.TrimSuffix(name, "."),
+		Type: rtype,
+		TTL:  ttl,
+	}
+
+	switch rtype {
+	case "A":
+		if len(data) < 1 {
+			return nil, fmt.Errorf("A record needs IP")
+		}
+		record.Data = json.RawMessage(fmt.Sprintf(`{"address":"%s"}`, data[0]))
+
+	case "AAAA":
+		if len(data) < 1 {
+			return nil, fmt.Errorf("AAAA record needs IP")
+		}
+		record.Data = json.RawMessage(fmt.Sprintf(`{"address":"%s"}`, data[0]))
+
+	case "CNAME", "NS", "PTR":
+		if len(data) < 1 {
+			return nil, fmt.Errorf("%s record needs target", rtype)
+		}
+		target := p.expandName(data[0])
+		record.Data = json.RawMessage(fmt.Sprintf(`{"target":"%s"}`, strings.TrimSuffix(target, ".")))
+
+	case "MX":
+		if len(data) < 2 {
+			return nil, fmt.Errorf("MX record needs priority and exchange")
+		}
+		pref, _ := strconv.ParseUint(data[0], 10, 16)
+		exchange := p.expandName(data[1])
+		record.Data = json.RawMessage(fmt.Sprintf(`{"preference":%d,"exchange":"%s"}`, pref, strings.TrimSuffix(exchange, ".")))
+
+	case "TXT":
+		// Join all data and handle quotes
+		text := strings.Join(data, " ")
+		// Remove surrounding quotes if present
+		text = strings.Trim(text, "\"")
+		// Handle escaped quotes
+		text = strings.ReplaceAll(text, "\\\"", "\"")
+		// Escape for JSON
+		text = strings.ReplaceAll(text, "\\", "\\\\")
+		text = strings.ReplaceAll(text, "\"", "\\\"")
+		record.Data = json.RawMessage(fmt.Sprintf(`{"text":"%s"}`, text))
+
+	case "SRV":
+		if len(data) < 4 {
+			return nil, fmt.Errorf("SRV record needs priority, weight, port, target")
+		}
+		priority, _ := strconv.ParseUint(data[0], 10, 16)
+		weight, _ := strconv.ParseUint(data[1], 10, 16)
+		port, _ := strconv.ParseUint(data[2], 10, 16)
+		target := p.expandName(data[3])
+		record.Data = json.RawMessage(fmt.Sprintf(`{"priority":%d,"weight":%d,"port":%d,"target":"%s"}`,
+			priority, weight, port, strings.TrimSuffix(target, ".")))
+
+	case "CAA":
+		if len(data) < 3 {
+			return nil, fmt.Errorf("CAA record needs flag, tag, value")
+		}
+		flag, _ := strconv.ParseUint(data[0], 10, 8)
+		tag := data[1]
+		value := strings.Trim(strings.Join(data[2:], " "), "\"")
+		record.Data = json.RawMessage(fmt.Sprintf(`{"flag":%d,"tag":"%s","value":"%s"}`, flag, tag, value))
+
+	case "SOA":
+		if len(data) < 7 {
+			return nil, fmt.Errorf("SOA record needs mname, rname, serial, refresh, retry, expire, minimum")
+		}
+		mname := p.expandName(data[0])
+		rname := p.expandName(data[1])
+		serial, _ := strconv.ParseUint(data[2], 10, 32)
+		refresh, _ := p.parseTTL(data[3])
+		retry, _ := p.parseTTL(data[4])
+		expire, _ := p.parseTTL(data[5])
+		minimum, _ := p.parseTTL(data[6])
+		record.Data = json.RawMessage(fmt.Sprintf(
+			`{"mname":"%s","rname":"%s","serial":%d,"refresh":%d,"retry":%d,"expire":%d,"minimum":%d}`,
+			strings.TrimSuffix(mname, "."), strings.TrimSuffix(rname, "."), serial, refresh, retry, expire, minimum))
+
+	default:
+		// For unsupported types, store raw data
+		record.Data = json.RawMessage(fmt.Sprintf(`{"raw":"%s"}`, strings.Join(data, " ")))
+	}
+
+	return record, nil
+}
+
+func (p *zoneFileParser) expandName(name string) string {
+	if name == "@" {
+		return p.origin
+	}
+	if strings.HasSuffix(name, ".") {
+		return name
+	}
+	return name + "." + p.origin
+}
+
+func (p *zoneFileParser) extractSOAToZone(record *storage.Record, zone *storage.Zone) {
+	var soa struct {
+		MName   string `json:"mname"`
+		RName   string `json:"rname"`
+		Serial  uint32 `json:"serial"`
+		Refresh uint32 `json:"refresh"`
+		Retry   uint32 `json:"retry"`
+		Expire  uint32 `json:"expire"`
+		Minimum uint32 `json:"minimum"`
+	}
+
+	if err := json.Unmarshal(record.Data, &soa); err == nil {
+		zone.PrimaryNS = soa.MName
+		zone.AdminEmail = soa.RName
+		zone.Serial = soa.Serial
+		zone.Refresh = soa.Refresh
+		zone.Retry = soa.Retry
+		zone.Expire = soa.Expire
+		zone.Minimum = soa.Minimum
+	}
+}
+
+func (p *zoneFileParser) parseTTL(s string) (uint32, error) {
+	s = strings.ToLower(s)
+	multiplier := uint32(1)
+
+	if strings.HasSuffix(s, "s") {
+		s = s[:len(s)-1]
+	} else if strings.HasSuffix(s, "m") {
+		s = s[:len(s)-1]
+		multiplier = 60
+	} else if strings.HasSuffix(s, "h") {
+		s = s[:len(s)-1]
+		multiplier = 3600
+	} else if strings.HasSuffix(s, "d") {
+		s = s[:len(s)-1]
+		multiplier = 86400
+	} else if strings.HasSuffix(s, "w") {
+		s = s[:len(s)-1]
+		multiplier = 604800
+	}
+
+	val, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, err
+	}
+
+	return uint32(val) * multiplier, nil
+}
+
+func (p *zoneFileParser) isNumeric(s string) bool {
+	_, err := p.parseTTL(s)
+	return err == nil
+}
+
+func (p *zoneFileParser) isClass(s string) bool {
+	upper := strings.ToUpper(s)
+	return upper == "IN" || upper == "CH" || upper == "HS" || upper == "CS"
+}
+
+func (p *zoneFileParser) isType(s string) bool {
+	types := map[string]bool{
+		"A": true, "AAAA": true, "CNAME": true, "MX": true, "NS": true,
+		"PTR": true, "SOA": true, "SRV": true, "TXT": true, "CAA": true,
+		"SSHFP": true, "TLSA": true, "NAPTR": true, "LOC": true,
+	}
+	return types[strings.ToUpper(s)]
 }

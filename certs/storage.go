@@ -25,6 +25,8 @@ type StorageInterface interface {
 	UpdateACMEConfig(config *storage.ACMEConfig) error
 	GetACMEAccountKey() ([]byte, error)
 	SaveACMEAccountKey(key []byte) error
+	GetACMEState() (*storage.ACMEState, error)
+	SaveACMEState(state *storage.ACMEState) error
 }
 
 // certStorageAdapter adapts StorageInterface to CertStorage
@@ -205,6 +207,30 @@ func (a *acmeStorageAdapter) SaveACMEAccountKey(key []byte) error {
 	return a.store.SaveACMEAccountKey(key)
 }
 
+func (a *acmeStorageAdapter) GetACMEState() (*ACMEState, error) {
+	state, err := a.store.GetACMEState()
+	if err != nil {
+		return nil, err
+	}
+	return &ACMEState{
+		Email:        state.Email,
+		Domains:      state.Domains,
+		LastRenewal:  state.LastRenewal,
+		NextRenewal:  state.NextRenewal,
+		Registration: state.RegistrationURI,
+	}, nil
+}
+
+func (a *acmeStorageAdapter) SaveACMEState(state *ACMEState) error {
+	return a.store.SaveACMEState(&storage.ACMEState{
+		Email:           state.Email,
+		Domains:         state.Domains,
+		LastRenewal:     state.LastRenewal,
+		NextRenewal:     state.NextRenewal,
+		RegistrationURI: state.Registration,
+	})
+}
+
 // NewACMEManagerWithStorage creates an ACME manager backed by storage
 func NewACMEManagerWithStorage(certMgr *Manager, store StorageInterface) (*ACMEManager, error) {
 	// Load ACME config from storage
@@ -239,6 +265,9 @@ func NewACMEManagerWithStorage(certMgr *Manager, store StorageInterface) (*ACMEM
 	if a.config.ChallengeType == "" {
 		a.config.ChallengeType = "dns-01"
 	}
+
+	// Load state from storage
+	a.loadState()
 
 	return a, nil
 }

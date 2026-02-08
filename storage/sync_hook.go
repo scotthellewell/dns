@@ -64,6 +64,7 @@ const (
 	EntityTypeRecursion     = dnssync.EntityRecursion
 	EntityTypeAPIKey        = dnssync.EntityAPIKey
 	EntityTypeSettings      = dnssync.EntitySettings
+	EntityTypeSession       = dnssync.EntitySession
 )
 
 // Operation constants

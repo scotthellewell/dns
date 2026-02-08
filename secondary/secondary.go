@@ -2,6 +2,7 @@ package secondary
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,22 @@ import (
 	"github.com/miekg/dns"
 	"github.com/scott/dns/config"
 )
+
+// ZoneCache represents cached zone data for persistence
+type ZoneCache struct {
+	Zone      string    `json:"zone"`
+	Serial    uint32    `json:"serial"`
+	Records   []string  `json:"records"` // Wire format base64 encoded
+	LastSync  time.Time `json:"last_sync"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CacheStore interface for persisting secondary zone records
+type CacheStore interface {
+	SaveSecondaryZoneCache(cache *ZoneCache) error
+	GetSecondaryZoneCache(zone string) (*ZoneCache, error)
+	DeleteSecondaryZoneCache(zone string) error
+}
 
 // ZoneData holds the transferred records for a zone
 type ZoneData struct {
@@ -31,6 +48,7 @@ type Manager struct {
 	mu     sync.RWMutex
 	zones  map[string]*ZoneData
 	config []config.ParsedSecondaryZone
+	store  CacheStore
 	stop   chan struct{}
 	wg     sync.WaitGroup
 }
@@ -45,6 +63,13 @@ func New(cfg *config.ParsedConfig) *Manager {
 	return m
 }
 
+// SetCacheStore sets the cache store for persisting zone records
+func (m *Manager) SetCacheStore(store CacheStore) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.store = store
+}
+
 // Start begins the initial zone transfers and refresh loops
 func (m *Manager) Start() {
 	for _, szCfg := range m.config {
@@ -55,13 +80,198 @@ func (m *Manager) Start() {
 		}
 		m.mu.Unlock()
 
-		// Do initial transfer
-		m.transferZone(szCfg)
+		// Try to load from cache first
+		if m.loadFromCache(szCfg.Zone) {
+			log.Printf("Secondary: Loaded %s from cache, checking if refresh needed", szCfg.Zone)
+			// Check if we need to refresh (SOA serial check)
+			if m.needsRefresh(szCfg) {
+				m.transferZone(szCfg)
+			} else {
+				log.Printf("Secondary: Zone %s is up to date (cached serial matches primary)", szCfg.Zone)
+			}
+		} else {
+			// No cache, do full transfer
+			m.transferZone(szCfg)
+		}
 
 		// Start refresh goroutine
 		m.wg.Add(1)
 		go m.refreshLoop(szCfg)
 	}
+}
+
+// loadFromCache loads zone data from the persistent cache
+func (m *Manager) loadFromCache(zone string) bool {
+	m.mu.RLock()
+	store := m.store
+	m.mu.RUnlock()
+
+	if store == nil {
+		return false
+	}
+
+	cache, err := store.GetSecondaryZoneCache(zone)
+	if err != nil {
+		return false
+	}
+
+	// Decode the records from wire format
+	var records []dns.RR
+	var soa *dns.SOA
+
+	for _, encoded := range cache.Records {
+		data, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			log.Printf("Secondary: Failed to decode cached record for %s: %v", zone, err)
+			continue
+		}
+
+		rr, _, err := dns.UnpackRR(data, 0)
+		if err != nil {
+			log.Printf("Secondary: Failed to unpack cached record for %s: %v", zone, err)
+			continue
+		}
+
+		// Extract SOA if present
+		if s, ok := rr.(*dns.SOA); ok {
+			if soa == nil {
+				soa = s
+			}
+		}
+		records = append(records, rr)
+	}
+
+	if len(records) == 0 {
+		return false
+	}
+
+	// Update zone data
+	m.mu.Lock()
+	zd := m.zones[zone]
+	zd.Records = records
+	zd.SOA = soa
+	zd.Serial = cache.Serial
+	zd.LastSync = cache.LastSync
+	// Set next sync based on refresh interval
+	zd.NextSync = time.Now().Add(5 * time.Minute) // Will be updated after SOA check
+	m.mu.Unlock()
+
+	log.Printf("Secondary: Loaded %d cached records for %s (serial %d, synced %v ago)",
+		len(records), zone, cache.Serial, time.Since(cache.LastSync).Round(time.Second))
+
+	return true
+}
+
+// saveToCache persists the current zone data to cache
+func (m *Manager) saveToCache(zone string) {
+	m.mu.RLock()
+	store := m.store
+	zd := m.zones[zone]
+	m.mu.RUnlock()
+
+	if store == nil || zd == nil || len(zd.Records) == 0 {
+		return
+	}
+
+	// Encode records to wire format
+	var encoded []string
+	for _, rr := range zd.Records {
+		buf := make([]byte, dns.MaxMsgSize)
+		off, err := dns.PackRR(rr, buf, 0, nil, false)
+		if err != nil {
+			log.Printf("Secondary: Failed to pack record for cache: %v", err)
+			continue
+		}
+		encoded = append(encoded, base64.StdEncoding.EncodeToString(buf[:off]))
+	}
+
+	// Also encode SOA
+	if zd.SOA != nil {
+		buf := make([]byte, dns.MaxMsgSize)
+		off, err := dns.PackRR(zd.SOA, buf, 0, nil, false)
+		if err == nil {
+			encoded = append(encoded, base64.StdEncoding.EncodeToString(buf[:off]))
+		}
+	}
+
+	cache := &ZoneCache{
+		Zone:      zone,
+		Serial:    zd.Serial,
+		Records:   encoded,
+		LastSync:  zd.LastSync,
+		UpdatedAt: time.Now(),
+	}
+
+	if err := store.SaveSecondaryZoneCache(cache); err != nil {
+		log.Printf("Secondary: Failed to save cache for %s: %v", zone, err)
+	} else {
+		log.Printf("Secondary: Cached %d records for %s", len(encoded), zone)
+	}
+}
+
+// needsRefresh checks if the zone needs to be refreshed by comparing serials
+func (m *Manager) needsRefresh(szCfg config.ParsedSecondaryZone) bool {
+	m.mu.RLock()
+	zd := m.zones[szCfg.Zone]
+	cachedSerial := zd.Serial
+	m.mu.RUnlock()
+
+	// Query SOA from primary to check serial
+	for _, primary := range szCfg.Primaries {
+		serial, err := m.querySOASerial(szCfg.Zone, primary, szCfg)
+		if err != nil {
+			log.Printf("Secondary: Failed to query SOA for %s from %s: %v", szCfg.Zone, primary, err)
+			continue
+		}
+
+		if serial > cachedSerial {
+			log.Printf("Secondary: Zone %s needs refresh (cached serial %d, primary serial %d)",
+				szCfg.Zone, cachedSerial, serial)
+			return true
+		}
+
+		// Serial is same or lower - no refresh needed
+		return false
+	}
+
+	// Couldn't reach any primary - assume refresh needed to be safe
+	return true
+}
+
+// querySOASerial queries the SOA serial from a server
+func (m *Manager) querySOASerial(zone, server string, szCfg config.ParsedSecondaryZone) (uint32, error) {
+	msg := new(dns.Msg)
+	msg.SetQuestion(dns.Fqdn(zone), dns.TypeSOA)
+	msg.RecursionDesired = false
+
+	// Add TSIG if configured
+	if szCfg.TSIGKeyName != "" {
+		algo := getTSIGAlgorithm(szCfg.TSIGAlgorithm)
+		msg.SetTsig(szCfg.TSIGKeyName, algo, 300, time.Now().Unix())
+	}
+
+	client := new(dns.Client)
+	client.Net = "tcp"
+	if szCfg.TSIGKeyName != "" {
+		client.TsigSecret = map[string]string{szCfg.TSIGKeyName: szCfg.TSIGSecret}
+	}
+
+	resp, _, err := client.Exchange(msg, server)
+	if err != nil {
+		return 0, err
+	}
+
+	if resp.Rcode != dns.RcodeSuccess {
+		return 0, fmt.Errorf("SOA query failed with rcode %d", resp.Rcode)
+	}
+
+	for _, rr := range resp.Answer {
+		if soa, ok := rr.(*dns.SOA); ok {
+			return soa.Serial, nil
+		}
+	}
+
+	return 0, fmt.Errorf("no SOA record in response")
 }
 
 // Stop stops all refresh loops
@@ -287,6 +497,9 @@ func (m *Manager) transferZone(szCfg config.ParsedSecondaryZone) {
 		log.Printf("Secondary: Zone %s transferred successfully (%d records, serial %d, next refresh in %ds)",
 			zone, len(records), soa.Serial, refreshInterval)
 
+		// Save to persistent cache
+		m.saveToCache(zone)
+
 		// Fetch DNSSEC keys if configured (async to not block)
 		if szCfg.DNSSECKeyURL != "" {
 			go func(cfg config.ParsedSecondaryZone) {
@@ -351,35 +564,6 @@ func (m *Manager) doAXFR(zone, server string, szCfg config.ParsedSecondaryZone) 
 	}
 
 	return records, soa, nil
-}
-
-// querySOASerial queries just the SOA to check the serial
-func (m *Manager) querySOASerial(zone, server string, szCfg config.ParsedSecondaryZone) (uint32, error) {
-	c := new(dns.Client)
-	c.Timeout = 5 * time.Second
-
-	msg := new(dns.Msg)
-	msg.SetQuestion(zone, dns.TypeSOA)
-
-	// Add TSIG if configured
-	if szCfg.TSIGKeyName != "" {
-		algo := getTSIGAlgorithm(szCfg.TSIGAlgorithm)
-		msg.SetTsig(szCfg.TSIGKeyName, algo, 300, time.Now().Unix())
-		c.TsigSecret = map[string]string{szCfg.TSIGKeyName: szCfg.TSIGSecret}
-	}
-
-	resp, _, err := c.Exchange(msg, server)
-	if err != nil {
-		return 0, err
-	}
-
-	for _, rr := range resp.Answer {
-		if soa, ok := rr.(*dns.SOA); ok {
-			return soa.Serial, nil
-		}
-	}
-
-	return 0, nil
 }
 
 // updateNextSync updates the next sync time based on refresh interval

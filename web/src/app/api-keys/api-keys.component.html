@@ -1,7 +1,15 @@
 <div class="api-keys-container">
   <div class="section-header">
-    <h2>API Keys</h2>
-    <p class="section-desc">Manage API keys for programmatic access</p>
+    <div class="header-content">
+      <h2>API Keys</h2>
+      <p class="section-desc">Manage API keys for programmatic access</p>
+    </div>
+    <div class="header-actions">
+      <button mat-raised-button color="primary" (click)="openCreateDialog()">
+        <mat-icon>add</mat-icon>
+        Add API Key
+      </button>
+    </div>
   </div>
 
   <!-- New Key Alert -->
@@ -24,35 +32,12 @@
     </div>
   }
 
-  <!-- Create New Key -->
-  <mat-card class="create-key-card">
-    <mat-card-content>
-      <div class="create-key-form">
-        <mat-form-field appearance="outline" class="key-name-field">
-          <mat-label>API Key Name</mat-label>
-          <input matInput [(ngModel)]="newKeyName" placeholder="e.g., CI/CD Pipeline">
-          <mat-hint>A descriptive name to identify this key</mat-hint>
-        </mat-form-field>
-        <button mat-raised-button color="primary" (click)="createApiKey()" [disabled]="creating()">
-          @if (creating()) {
-            <mat-spinner diameter="18"></mat-spinner>
-          } @else {
-            <ng-container>
-              <mat-icon>add</mat-icon>
-              Create Key
-            </ng-container>
-          }
-        </button>
-      </div>
-    </mat-card-content>
-  </mat-card>
-
   <!-- Keys Table -->
   @if (loading()) {
     <div class="loading-container">
       <mat-spinner diameter="40"></mat-spinner>
     </div>
-  } @else if (apiKeys().length === 0) {
+  } @else if (filteredApiKeys().length === 0) {
     <div class="empty-state">
       <mat-icon>vpn_key</mat-icon>
       <h3>No API Keys</h3>
@@ -60,7 +45,7 @@
     </div>
   } @else {
     <mat-card class="keys-table-card">
-      <table mat-table [dataSource]="apiKeys()" class="keys-table">
+      <table mat-table [dataSource]="filteredApiKeys()" class="keys-table">
         <ng-container matColumnDef="name">
           <th mat-header-cell *matHeaderCellDef>Name</th>
           <td mat-cell *matCellDef="let key">{{key.name}}</td>
@@ -69,7 +54,16 @@
         <ng-container matColumnDef="prefix">
           <th mat-header-cell *matHeaderCellDef>Key Prefix</th>
           <td mat-cell *matCellDef="let key">
-            <code class="key-prefix">{{key.prefix}}...</code>
+            <code class="key-prefix">{{key.key_prefix}}</code>
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="role">
+          <th mat-header-cell *matHeaderCellDef>Role</th>
+          <td mat-cell *matCellDef="let key">
+            <span class="role-badge" [ngClass]="'role-' + (key.role || getRoleName(key.permissions).toLowerCase().replace(' ', '-'))">
+              {{key.role || getRoleName(key.permissions)}}
+            </span>
           </td>
         </ng-container>
 

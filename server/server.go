@@ -32,6 +32,9 @@ type Server struct {
 	querylog  *querylog.Logger // Query Logger
 	mu        sync.RWMutex
 
+	// DNSSEC key store for loading keys from database
+	dnssecKeyStore DNSSECKeyStore
+
 	// ACME challenge records (temporary TXT records for DNS-01 validation)
 	acmeRecords   map[string]string
 	acmeRecordsMu sync.RWMutex
@@ -77,7 +80,29 @@ func New(cfg *config.ParsedConfig) *Server {
 	return srv
 }
 
-// loadDNSSEC loads DNSSEC keys from configuration
+// DNSSECKeyData interface for DNSSEC key data from storage
+type DNSSECKeyData interface {
+	GetZoneName() string
+	GetAlgorithm() string
+	GetKSKPrivate() string
+	GetZSKPrivate() string
+	IsEnabled() bool
+}
+
+// DNSSECKeyStore interface for loading DNSSEC keys from storage
+type DNSSECKeyStore interface {
+	GetDNSSECKeys(zoneName string) (DNSSECKeyData, error)
+	ListZonesWithDNSSEC() ([]string, error)
+}
+
+// SetDNSSECKeyStore sets the key store for loading DNSSEC keys from database
+func (s *Server) SetDNSSECKeyStore(store DNSSECKeyStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dnssecKeyStore = store
+}
+
+// loadDNSSEC loads DNSSEC keys from configuration (legacy file-based)
 func (s *Server) loadDNSSEC(cfg *config.ParsedConfig) {
 	for _, keyCfg := range cfg.DNSSEC {
 		err := s.dnssec.LoadKey(dnssec.KeyConfig{
@@ -92,6 +117,48 @@ func (s *Server) loadDNSSEC(cfg *config.ParsedConfig) {
 			log.Printf("Loaded DNSSEC keys for zone %s", keyCfg.Zone)
 		}
 	}
+}
+
+// LoadDNSSECFromStorage loads all DNSSEC keys from the database
+func (s *Server) LoadDNSSECFromStorage() error {
+	s.mu.RLock()
+	store := s.dnssecKeyStore
+	s.mu.RUnlock()
+
+	if store == nil {
+		return nil // No storage configured, use file-based loading
+	}
+
+	zones, err := store.ListZonesWithDNSSEC()
+	if err != nil {
+		return fmt.Errorf("failed to list DNSSEC zones: %w", err)
+	}
+
+	for _, zoneName := range zones {
+		keys, err := store.GetDNSSECKeys(zoneName)
+		if err != nil {
+			log.Printf("Failed to get DNSSEC keys for %s: %v", zoneName, err)
+			continue
+		}
+
+		if !keys.IsEnabled() {
+			continue
+		}
+
+		err = s.dnssec.LoadKeyFromData(dnssec.StoredKeyData{
+			Zone:       keys.GetZoneName(),
+			Algorithm:  keys.GetAlgorithm(),
+			KSKPrivate: keys.GetKSKPrivate(),
+			ZSKPrivate: keys.GetZSKPrivate(),
+		})
+		if err != nil {
+			log.Printf("Failed to load DNSSEC keys for %s from storage: %v", zoneName, err)
+		} else {
+			log.Printf("Loaded DNSSEC keys for zone %s from storage", zoneName)
+		}
+	}
+
+	return nil
 }
 
 // UpdateConfig updates the server configuration atomically
@@ -205,6 +272,16 @@ func (s *Server) getSecondary() *secondary.Manager {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.secondary
+}
+
+// SetSecondaryCacheStore sets the cache store for the secondary zone manager
+func (s *Server) SetSecondaryCacheStore(store secondary.CacheStore) {
+	s.mu.RLock()
+	sec := s.secondary
+	s.mu.RUnlock()
+	if sec != nil {
+		sec.SetCacheStore(store)
+	}
 }
 
 // lookupSecondaryRecords looks up records from secondary zones

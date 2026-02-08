@@ -24,6 +24,7 @@ func (m *Manager) RegisterAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/users", m.corsHandler(m.MiddlewareFunc(m.handleUsers)))
 	mux.HandleFunc("/api/auth/users/", m.corsHandler(m.MiddlewareFunc(m.handleUser)))
 	mux.HandleFunc("/api/auth/apikeys", m.corsHandler(m.MiddlewareFunc(m.handleAPIKeys)))
+	mux.HandleFunc("/api/auth/apikeys/roles", m.corsHandler(m.MiddlewareFunc(m.handleAPIKeyRoles)))
 	mux.HandleFunc("/api/auth/apikeys/", m.corsHandler(m.MiddlewareFunc(m.handleAPIKey)))
 	mux.HandleFunc("/api/auth/config", m.corsHandler(m.MiddlewareFunc(m.handleAuthConfig)))
 	mux.HandleFunc("/api/auth/me", m.corsHandler(m.MiddlewareFunc(m.handleMe)))
@@ -516,23 +517,44 @@ func (m *Manager) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	case "GET":
 		// Any authenticated user can list their keys, admins can see all
 		keys := m.ListAPIKeys()
-		if session.Role != "admin" {
-			// Filter to only show keys created by this user
+		if session.Role != "admin" && !session.IsSuperAdmin {
+			// Filter to only show keys created by this user AND same tenant
 			var userKeys []APIKey
 			for _, k := range keys {
-				if k.CreatedBy == session.UserID {
+				if k.CreatedBy == session.UserID && k.TenantID == session.TenantID {
 					userKeys = append(userKeys, k)
 				}
 			}
 			keys = userKeys
+		} else if !session.IsSuperAdmin {
+			// Admin (but not super admin) can only see keys from their tenant
+			var tenantKeys []APIKey
+			for _, k := range keys {
+				if k.TenantID == session.TenantID {
+					tenantKeys = append(tenantKeys, k)
+				}
+			}
+			keys = tenantKeys
+		}
+		// Ensure we return an empty array, not null
+		if keys == nil {
+			keys = []APIKey{}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(keys)
 
 	case "POST":
+		// Only admins and super admins can create API keys
+		if session.Role != "admin" && !session.IsSuperAdmin {
+			http.Error(w, "Forbidden: only administrators can create API keys", http.StatusForbidden)
+			return
+		}
+
 		var req struct {
 			Name        string     `json:"name"`
+			Role        string     `json:"role"` // "super_admin", "admin", "readonly"
 			Permissions []string   `json:"permissions"`
+			TenantID    string     `json:"tenant_id"` // Optional: create key for specific tenant (super admin only)
 			ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 		}
 
@@ -541,16 +563,65 @@ func (m *Manager) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Non-admin users can only create readonly keys
-		if session.Role != "admin" && !session.IsSuperAdmin {
-			req.Permissions = []string{"read"}
+		// Determine target tenant
+		targetTenant := session.TenantID
+		if req.TenantID != "" && req.TenantID != session.TenantID {
+			// Creating key for different tenant requires super admin
+			if !session.IsSuperAdmin {
+				http.Error(w, "Only super admins can create API keys for other tenants", http.StatusForbidden)
+				return
+			}
+			targetTenant = req.TenantID
 		}
 
-		apiKey, rawKey, err := m.CreateAPIKey(req.Name, req.Permissions, session.TenantID, req.ExpiresAt, session.UserID)
+		// Convert role to permissions array
+		// Supported roles: "super_admin" (main tenant only), "admin", "readonly"
+		var permissions []string
+		switch req.Role {
+		case "super_admin":
+			// Super admin only allowed for main tenant
+			if targetTenant != "main" {
+				http.Error(w, "Super admin role only available for main tenant", http.StatusForbidden)
+				return
+			}
+			// Only super admins can create super admin keys
+			if !session.IsSuperAdmin {
+				http.Error(w, "Only super admins can create super admin API keys", http.StatusForbidden)
+				return
+			}
+			permissions = []string{"*"}
+		case "admin":
+			permissions = []string{"admin"}
+		case "readonly":
+			permissions = []string{"read"}
+		default:
+			// Fallback to permissions array if role not specified (legacy support)
+			if len(req.Permissions) > 0 {
+				permissions = req.Permissions
+				// Validate that non-super-admin can't create super admin keys
+				for _, p := range permissions {
+					if (p == "*" || p == "admin") && !session.IsSuperAdmin {
+						// Regular admins can create "admin" role but not "*" (super admin)
+						if p == "*" {
+							http.Error(w, "Only super admins can create super admin API keys", http.StatusForbidden)
+							return
+						}
+					}
+				}
+			} else {
+				// Default to admin permissions for admins
+				permissions = []string{"admin"}
+			}
+		}
+
+		apiKey, rawKey, err := m.CreateAPIKey(req.Name, permissions, targetTenant, req.ExpiresAt, session.UserID)
 		if err != nil {
 			http.Error(w, "Failed to create API key", http.StatusInternalServerError)
 			return
 		}
+
+		// Map permissions back to role for response
+		role := m.permissionsToRole(permissions)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -559,6 +630,7 @@ func (m *Manager) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 			"id":          apiKey.ID,
 			"name":        apiKey.Name,
 			"prefix":      apiKey.KeyPrefix,
+			"role":        role,
 			"permissions": apiKey.Permissions,
 			"created_at":  apiKey.CreatedAt,
 			"expires_at":  apiKey.ExpiresAt,
@@ -585,8 +657,8 @@ func (m *Manager) handleAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case "DELETE":
-		// Check ownership for non-admins
-		if session.Role != "admin" {
+		// Admins and super admins can delete any key; others can only delete their own
+		if session.Role != "admin" && !session.IsSuperAdmin {
 			keys := m.ListAPIKeys()
 			var owned bool
 			for _, k := range keys {
@@ -611,6 +683,49 @@ func (m *Manager) handleAPIKey(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleAPIKeyRoles returns the available roles for API key creation
+func (m *Manager) handleAPIKeyRoles(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r.Context())
+	if session == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Only admins can see available roles
+	if session.Role != "admin" && !session.IsSuperAdmin {
+		http.Error(w, "Forbidden: only administrators can view API key roles", http.StatusForbidden)
+		return
+	}
+
+	type RoleOption struct {
+		Value       string `json:"value"`
+		Label       string `json:"label"`
+		Description string `json:"description"`
+	}
+
+	roles := []RoleOption{
+		{Value: "readonly", Label: "Read Only", Description: "Can only read data, no modifications"},
+		{Value: "admin", Label: "Admin", Description: "Full access to tenant resources"},
+	}
+
+	// Super admin role only available for main tenant and super admins
+	if session.IsSuperAdmin && session.TenantID == "main" {
+		roles = append(roles, RoleOption{
+			Value:       "super_admin",
+			Label:       "Super Admin",
+			Description: "Full system access including tenant management",
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(roles)
 }
 
 func (m *Manager) handleAuthConfig(w http.ResponseWriter, r *http.Request) {

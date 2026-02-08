@@ -61,6 +61,7 @@ func (s *Store) BuildParsedConfig() (*config.ParsedConfig, error) {
 		if zone.Domain != "" {
 			pz.Domain = zone.Domain
 		}
+		pz.StripPrefix = zone.StripPrefix
 
 		parsed.Zones = append(parsed.Zones, pz)
 
@@ -454,6 +455,56 @@ func (s *Store) UpdateSecondaryZone(zone *SecondaryZone) error {
 	}
 
 	return err
+}
+
+// ============================================================================
+// Secondary Zone Cache (persisted zone transfer data)
+// ============================================================================
+
+// secondaryZoneCacheKey returns the cache key for a secondary zone
+func secondaryZoneCacheKey(zone string) []byte {
+	return []byte("sz:" + zone)
+}
+
+// SaveSecondaryZoneCache saves the cached records from a zone transfer.
+func (s *Store) SaveSecondaryZoneCache(cache *SecondaryZoneCache) error {
+	cache.UpdatedAt = time.Now()
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(BucketCache)
+		data, err := json.Marshal(cache)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(secondaryZoneCacheKey(cache.Zone), data)
+	})
+}
+
+// GetSecondaryZoneCache retrieves the cached records for a secondary zone.
+func (s *Store) GetSecondaryZoneCache(zone string) (*SecondaryZoneCache, error) {
+	var cache SecondaryZoneCache
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(BucketCache)
+		if bucket == nil {
+			return ErrNotFound
+		}
+		data := bucket.Get(secondaryZoneCacheKey(zone))
+		if data == nil {
+			return ErrNotFound
+		}
+		return json.Unmarshal(data, &cache)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &cache, nil
+}
+
+// DeleteSecondaryZoneCache removes the cached records for a secondary zone.
+func (s *Store) DeleteSecondaryZoneCache(zone string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(BucketCache)
+		return bucket.Delete(secondaryZoneCacheKey(zone))
+	})
 }
 
 // ============================================================================

@@ -172,6 +172,7 @@ const (
 	EntityRecursion     = "recursion"
 	EntityAPIKey        = "api_key"
 	EntitySettings      = "settings"
+	EntitySession       = "session"
 )
 
 // OpLogEntry represents a single operation in the operation log

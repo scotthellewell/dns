@@ -23,6 +23,8 @@
   }
 }
 
+// No tabs - removed tab styling
+
 .tenant-filter {
   padding: 8px 12px;
   border-radius: 6px;
@@ -46,8 +48,14 @@
     color: #e2e8f0;
     font-size: 1.25rem;
     font-weight: 500;
-    margin-bottom: 16px;
+    margin-bottom: 8px;
     padding-left: 4px;
+  }
+
+  .section-subtitle {
+    color: #64748b;
+    font-size: 0.875rem;
+    margin: 0 0 16px 4px;
   }
 }
 
@@ -305,6 +313,13 @@
     font-weight: 500;
     margin: 0 0 12px 0;
   }
+
+  .section-description {
+    color: #64748b;
+    font-size: 0.8rem;
+    margin: 0 0 16px 0;
+    line-height: 1.4;
+  }
 }
 
 .ds-record-section {
@@ -533,5 +548,220 @@
   .token-actions {
     display: flex;
     gap: 8px;
+  }
+}
+
+// Import Modal Styles
+.import-modal {
+  .modal-body {
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+}
+
+.import-intro {
+  margin-bottom: 24px;
+  padding: 16px;
+  background: #1e293b;
+  border-radius: 8px;
+  border-left: 3px solid #3b82f6;
+
+  p {
+    margin: 0 0 16px 0;
+    color: #cbd5e1;
+    line-height: 1.6;
+  }
+}
+
+.provider-help {
+  h4 {
+    color: #f1f5f9;
+    font-size: 0.875rem;
+    font-weight: 600;
+    margin: 0 0 8px 0;
+  }
+
+  ul {
+    margin: 0;
+    padding-left: 20px;
+
+    li {
+      color: #94a3b8;
+      font-size: 0.85rem;
+      margin-bottom: 4px;
+
+      strong {
+        color: #e2e8f0;
+      }
+    }
+  }
+}
+
+.file-upload {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  input[type="file"] {
+    display: none;
+  }
+
+  .file-name {
+    color: #94a3b8;
+    font-size: 0.875rem;
+    font-style: italic;
+  }
+}
+
+.import-preview {
+  h3 {
+    color: #f1f5f9;
+    font-size: 1.1rem;
+    margin: 0 0 16px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #334155;
+  }
+
+  h4 {
+    color: #e2e8f0;
+    font-size: 0.95rem;
+    margin: 16px 0 8px 0;
+  }
+}
+
+.preview-summary {
+  display: flex;
+  gap: 24px;
+  padding: 12px 16px;
+  background: #1e293b;
+  border-radius: 6px;
+  margin-bottom: 16px;
+
+  .summary-item {
+    color: #cbd5e1;
+    font-size: 0.9rem;
+
+    strong {
+      color: #f1f5f9;
+    }
+  }
+}
+
+.preview-warnings {
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+
+  h4 {
+    color: #facc15;
+    margin: 0 0 8px 0;
+  }
+
+  ul {
+    margin: 0;
+    padding-left: 20px;
+
+    li {
+      color: #fde047;
+      font-size: 0.85rem;
+    }
+  }
+}
+
+.preview-errors {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+
+  h4 {
+    color: #ef4444;
+    margin: 0 0 8px 0;
+  }
+
+  ul {
+    margin: 0;
+    padding-left: 20px;
+
+    li {
+      color: #fca5a5;
+      font-size: 0.85rem;
+    }
+  }
+}
+
+.preview-records {
+  .record-note {
+    margin-top: 12px;
+    color: #64748b;
+    font-size: 0.85rem;
+  }
+}
+
+.preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+
+  th, td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid #334155;
+  }
+
+  th {
+    background: #1e293b;
+    color: #94a3b8;
+    font-weight: 500;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+  }
+
+  td {
+    color: #e2e8f0;
+    
+    code {
+      font-family: 'Fira Code', 'Monaco', monospace;
+      background: #0f172a;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+    }
+  }
+
+  tr.soa-record {
+    background: rgba(59, 130, 246, 0.1);
+    
+    td {
+      color: #93c5fd;
+    }
+  }
+
+  .record-type {
+    display: inline-block;
+    padding: 2px 8px;
+    background: #334155;
+    border-radius: 4px;
+    font-weight: 500;
+    font-size: 0.75rem;
+  }
+}
+
+.btn-outline {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid #475569;
+  background: transparent;
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: all 0.2s;
+
+  &:hover {
+    background: #1e293b;
+    border-color: #64748b;
   }
 }

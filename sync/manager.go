@@ -129,6 +129,17 @@ func (m *Manager) SetFullSyncProvider(provider FullSyncProvider) {
 	m.fullSyncProvider = provider
 }
 
+// ServerID returns this server's unique ID
+func (m *Manager) ServerID() string {
+	return m.serverID
+}
+
+// ReplayAllEntries replays all entries in the oplog through a callback
+// This is useful for repairing entries that weren't properly applied
+func (m *Manager) ReplayAllEntries(callback func(entry *OpLogEntry) error) error {
+	return m.oplog.ReplayAllEntries(callback)
+}
+
 // FullSync broadcasts all local data to connected peers
 // This is used for initial sync when a new peer joins the cluster
 func (m *Manager) FullSync() (int, error) {
@@ -242,6 +253,14 @@ func (m *Manager) UpdateConfig(newConfig *Config) {
 
 	// Update config
 	m.config = newConfig
+
+	// Update server identity if changed
+	if newConfig.ServerName != "" {
+		m.serverName = newConfig.ServerName
+	}
+	if newConfig.ServerID != "" && newConfig.ServerID != m.serverID {
+		m.serverID = newConfig.ServerID
+	}
 
 	// If we're going from disabled to enabled, start the manager
 	if !oldEnabled && newConfig.Enabled {

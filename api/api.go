@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/scott/dns/auth"
 	"github.com/scott/dns/config"
 	"github.com/scott/dns/metrics"
@@ -18,6 +19,13 @@ import (
 )
 
 // TODO: Add authentication middleware
+
+// SecondaryZoneProvider interface for getting secondary zone records
+type SecondaryZoneProvider interface {
+	HasZone(zone string) bool
+	GetAllRecords(zone string) []dns.RR
+	GetSOA(zone string) *dns.SOA
+}
 
 // Stats holds server statistics
 type Stats struct {
@@ -29,14 +37,30 @@ type Stats struct {
 
 // Handler provides the HTTP API for the DNS server
 type Handler struct {
-	config         *config.ParsedConfig
-	rawConfig      *config.Config
-	configPath     string
-	stats          *Stats
-	metrics        *metrics.Collector
-	configMu       sync.RWMutex
-	onConfigUpdate func(*config.ParsedConfig)
-	store          interface{} // Optional storage backend (*storage.Store)
+	config           *config.ParsedConfig
+	rawConfig        *config.Config
+	configPath       string
+	stats            *Stats
+	metrics          *metrics.Collector
+	configMu         sync.RWMutex
+	onConfigUpdate   func(*config.ParsedConfig)
+	store            interface{} // Optional storage backend (*storage.Store)
+	secondaryMgr     SecondaryZoneProvider
+	secondaryMgrLock sync.RWMutex
+}
+
+// SetSecondaryManager sets the secondary zone manager for convert operations
+func (h *Handler) SetSecondaryManager(mgr SecondaryZoneProvider) {
+	h.secondaryMgrLock.Lock()
+	defer h.secondaryMgrLock.Unlock()
+	h.secondaryMgr = mgr
+}
+
+// getSecondaryManager returns the secondary manager if set
+func (h *Handler) getSecondaryManager() SecondaryZoneProvider {
+	h.secondaryMgrLock.RLock()
+	defer h.secondaryMgrLock.RUnlock()
+	return h.secondaryMgr
 }
 
 // New creates a new API handler with ephemeral storage.
@@ -150,6 +174,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Zones (reverse DNS patterns)
 	mux.HandleFunc("/api/zones", h.corsMiddleware(h.handleZones))
+	mux.HandleFunc("/api/zones/import", h.corsMiddleware(h.handleZoneImport)) // Zone file import
 	mux.HandleFunc("/api/zones/", h.corsMiddleware(h.handleZone))
 
 	// DNS Records
@@ -158,6 +183,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Secondary zones
 	mux.HandleFunc("/api/secondary-zones", h.corsMiddleware(h.handleSecondaryZones))
+	mux.HandleFunc("/api/secondary-zones/convert/", h.corsMiddleware(h.handleConvertSecondaryZone)) // Convert to primary
 	mux.HandleFunc("/api/secondary-zones/", h.corsMiddleware(h.handleSecondaryZone))
 
 	// Transfer settings
@@ -192,10 +218,12 @@ func (h *Handler) RegisterRoutesWithAuth(mux *http.ServeMux, authMgr AuthMiddlew
 	// All other routes require authentication
 	mux.HandleFunc("/api/config", wrap(h.handleConfig))
 	mux.HandleFunc("/api/zones", wrap(h.handleZones))
+	mux.HandleFunc("/api/zones/import", wrap(h.handleZoneImport)) // Zone file import
 	mux.HandleFunc("/api/zones/", wrap(h.handleZone))
 	mux.HandleFunc("/api/records", wrap(h.handleRecords))
 	mux.HandleFunc("/api/records/", wrap(h.handleRecord))
 	mux.HandleFunc("/api/secondary-zones", wrap(h.handleSecondaryZones))
+	mux.HandleFunc("/api/secondary-zones/convert/", wrap(h.handleConvertSecondaryZone)) // Convert to primary
 	mux.HandleFunc("/api/secondary-zones/", wrap(h.handleSecondaryZone))
 	mux.HandleFunc("/api/delegations", wrap(h.handleDelegations))
 	mux.HandleFunc("/api/delegations/", wrap(h.handleDelegation))
@@ -272,11 +300,39 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	uptime := time.Since(h.stats.StartTime)
 
-	// Count records
-	recordCount := len(cfg.ARecords) + len(cfg.AAAARecords) + len(cfg.MXRecords) +
-		len(cfg.TXTRecords) + len(cfg.NSRecords) + len(cfg.SOARecords) +
-		len(cfg.CNAMERecords) + len(cfg.SRVRecords) + len(cfg.CAARecords) +
-		len(cfg.PTRRecords)
+	// Check for tenant filter
+	tenantID := r.URL.Query().Get("tenant_id")
+
+	// Try to use storage for tenant-filtered counts
+	var zoneCount, recordCount, secondaryZoneCount int
+
+	if store, ok := h.store.(*storage.Store); ok && tenantID != "" {
+		// Use storage for tenant-filtered counts
+		zones, _ := store.ListZones(tenantID)
+		zoneCount = len(zones)
+
+		// Count records across all zones for this tenant
+		for _, zone := range zones {
+			records, _ := store.GetAllZoneRecords(zone.Name)
+			recordCount += len(records)
+		}
+
+		// Count secondary zones for tenant
+		allSecondaryZones, _ := store.ListSecondaryZones()
+		for _, sz := range allSecondaryZones {
+			if sz.TenantID == tenantID {
+				secondaryZoneCount++
+			}
+		}
+	} else {
+		// No tenant filter or no storage - return all from config
+		zoneCount = len(cfg.Zones)
+		recordCount = len(cfg.ARecords) + len(cfg.AAAARecords) + len(cfg.MXRecords) +
+			len(cfg.TXTRecords) + len(cfg.NSRecords) + len(cfg.SOARecords) +
+			len(cfg.CNAMERecords) + len(cfg.SRVRecords) + len(cfg.CAARecords) +
+			len(cfg.PTRRecords)
+		secondaryZoneCount = len(cfg.SecondaryZones)
+	}
 
 	resp := StatusResponse{
 		Status:         "running",
@@ -285,9 +341,9 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		TotalQueries:   atomic.LoadUint64(&h.stats.TotalQueries),
 		QueriesByType:  queryTypes,
 		Listen:         cfg.Listen,
-		ZoneCount:      len(cfg.Zones),
+		ZoneCount:      zoneCount,
 		RecordCount:    recordCount,
-		SecondaryZones: len(cfg.SecondaryZones),
+		SecondaryZones: secondaryZoneCount,
 	}
 
 	h.jsonResponse(w, resp)
@@ -374,6 +430,7 @@ type ZoneResponse struct {
 	Name        string          `json:"name"`             // Zone name (e.g., "example.com" or "168.192.in-addr.arpa")
 	Type        config.ZoneType `json:"type"`             // "forward" or "reverse"
 	Subnet      string          `json:"subnet,omitempty"` // For reverse zones
+	Domain      string          `json:"domain,omitempty"` // For reverse zones - domain suffix for PTR records
 	StripPrefix bool            `json:"strip_prefix"`
 	TTL         uint32          `json:"ttl"`
 }

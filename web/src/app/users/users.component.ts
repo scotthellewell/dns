@@ -1,9 +1,10 @@
-import { Component, inject, signal, OnInit } from '@angular/core';
+import { Component, inject, signal, OnInit, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { AuthService, User } from '../services/auth.service';
+import { TenantContextService } from '../services/tenant-context.service';
 
 @Component({
   selector: 'app-users',
@@ -16,6 +17,7 @@ export class UsersComponent implements OnInit {
   private http = inject(HttpClient);
   private snackBar = inject(MatSnackBar);
   readonly auth = inject(AuthService);
+  private tenantContext = inject(TenantContextService);
 
   users = signal<User[]>([]);
   loading = signal(false);
@@ -25,13 +27,21 @@ export class UsersComponent implements OnInit {
   showCreateForm = false;
   editingUser: User | null = null;
 
+  constructor() {
+    // React to tenant context changes
+    effect(() => {
+      const tenantId = this.tenantContext.currentTenantId();
+      this.loadUsers();
+    });
+  }
+
   ngOnInit() {
     this.loadUsers();
   }
 
   loadUsers() {
     this.loading.set(true);
-    const tenantId = this.auth.tenantId();
+    const tenantId = this.tenantContext.currentTenantId();
     
     this.http.get<User[]>(`/api/auth/tenants/${tenantId}/users`).subscribe({
       next: (users) => {
@@ -68,7 +78,7 @@ export class UsersComponent implements OnInit {
     }
 
     this.creating.set(true);
-    const tenantId = this.auth.tenantId();
+    const tenantId = this.tenantContext.currentTenantId();
 
     this.http.post(`/api/auth/tenants/${tenantId}/users`, {
       username: username.trim(),
@@ -102,7 +112,7 @@ export class UsersComponent implements OnInit {
     if (!this.editingUser) return;
 
     this.saving.set(true);
-    const tenantId = this.auth.tenantId();
+    const tenantId = this.tenantContext.currentTenantId();
 
     this.http.put(`/api/auth/tenants/${tenantId}/users/${this.editingUser.id}`, {
       display_name: displayName?.trim() || undefined,
@@ -131,7 +141,7 @@ export class UsersComponent implements OnInit {
       return;
     }
 
-    const tenantId = this.auth.tenantId();
+    const tenantId = this.tenantContext.currentTenantId();
     this.http.put(`/api/auth/tenants/${tenantId}/users/${user.id}`, {
       password: newPassword
     }).subscribe({
@@ -149,7 +159,7 @@ export class UsersComponent implements OnInit {
       return;
     }
 
-    const tenantId = this.auth.tenantId();
+    const tenantId = this.tenantContext.currentTenantId();
     this.http.delete(`/api/auth/tenants/${tenantId}/users/${user.id}`).subscribe({
       next: () => {
         this.snackBar.open('User deleted', 'Dismiss', { duration: 3000 });

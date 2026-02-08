@@ -203,6 +203,98 @@ func (m *Manager) LoadKey(cfg KeyConfig) error {
 	return nil
 }
 
+// StoredKeyData represents DNSSEC key data as stored in the database
+type StoredKeyData struct {
+	Zone       string
+	Algorithm  string
+	KSKPrivate string // PEM-encoded
+	KSKPublic  string // Base64-encoded
+	ZSKPrivate string // PEM-encoded
+	ZSKPublic  string // Base64-encoded
+}
+
+// LoadKeyFromData loads DNSSEC keys from database-stored data (no file system access)
+func (m *Manager) LoadKeyFromData(data StoredKeyData) error {
+	zone := dns.Fqdn(strings.ToLower(data.Zone))
+
+	algorithm := dns.ECDSAP256SHA256
+	switch strings.ToUpper(data.Algorithm) {
+	case "ECDSAP256SHA256", "":
+		algorithm = dns.ECDSAP256SHA256
+	case "ECDSAP384SHA384":
+		algorithm = dns.ECDSAP384SHA384
+	case "ED25519":
+		algorithm = dns.ED25519
+	default:
+		return fmt.Errorf("unsupported algorithm: %s", data.Algorithm)
+	}
+
+	signer := &Signer{
+		zone:      zone,
+		algorithm: algorithm,
+	}
+
+	// Load KSK from PEM data
+	if data.KSKPrivate != "" {
+		ksk, kskPriv, err := parseKeyFromPEM(data.KSKPrivate, zone, algorithm, true)
+		if err != nil {
+			return fmt.Errorf("failed to parse KSK: %w", err)
+		}
+		signer.ksk = ksk
+		signer.kskPriv = kskPriv
+	}
+
+	// Load ZSK from PEM data
+	if data.ZSKPrivate != "" {
+		zsk, zskPriv, err := parseKeyFromPEM(data.ZSKPrivate, zone, algorithm, false)
+		if err != nil {
+			return fmt.Errorf("failed to parse ZSK: %w", err)
+		}
+		signer.zsk = zsk
+		signer.zskPriv = zskPriv
+	}
+
+	if signer.ksk == nil || signer.zsk == nil {
+		return fmt.Errorf("DNSSEC keys incomplete for zone %s", zone)
+	}
+
+	m.signers[zone] = signer
+	return nil
+}
+
+// parseKeyFromPEM parses a DNSSEC key from PEM-encoded data
+func parseKeyFromPEM(pemData, zone string, algorithm uint8, isKSK bool) (*dns.DNSKEY, crypto.PrivateKey, error) {
+	block, _ := pem.Decode([]byte(pemData))
+	if block == nil {
+		return nil, nil, fmt.Errorf("failed to decode PEM data")
+	}
+
+	privKey, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse private key: %w", err)
+	}
+
+	flags := uint16(256) // ZSK
+	if isKSK {
+		flags = 257 // KSK
+	}
+
+	key := &dns.DNSKEY{
+		Hdr: dns.RR_Header{
+			Name:   zone,
+			Rrtype: dns.TypeDNSKEY,
+			Class:  dns.ClassINET,
+			Ttl:    3600,
+		},
+		Flags:     flags,
+		Protocol:  3,
+		Algorithm: algorithm,
+		PublicKey: publicKeyToBase64(privKey.Public()),
+	}
+
+	return key, privKey, nil
+}
+
 // GetSigner returns the signer for a zone (or parent zone)
 func (m *Manager) GetSigner(name string) *Signer {
 	name = dns.Fqdn(strings.ToLower(name))

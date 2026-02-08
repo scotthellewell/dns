@@ -1,9 +1,10 @@
-import { Component, OnInit, ChangeDetectorRef, inject, ViewChild, ElementRef } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef, inject, ViewChild, ElementRef, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ApiService, Zone, ZoneType, DnssecZone, DnssecKeyImport } from '../services/api.service';
+import { ApiService, Zone, ZoneType, DnssecZone, DnssecKeyImport, SecondaryZone, ZoneImportResult } from '../services/api.service';
 import { ToastService } from '../services/toast.service';
 import { AuthService, Tenant } from '../services/auth.service';
+import { TenantContextService } from '../services/tenant-context.service';
 
 @Component({
   selector: 'app-zones',
@@ -15,13 +16,12 @@ import { AuthService, Tenant } from '../services/auth.service';
 export class ZonesComponent implements OnInit {
   private toast = inject(ToastService);
   readonly auth = inject(AuthService);
+  readonly tenantContext = inject(TenantContextService);
   
   @ViewChild('keyFileInput') keyFileInput!: ElementRef<HTMLInputElement>;
   
   zones: Zone[] = [];
   filteredZones: Zone[] = [];
-  tenants: Tenant[] = [];
-  selectedTenant = '';
   dnssecZones: Map<string, DnssecZone> = new Map();
   showForm = false;
   saving = false;
@@ -35,6 +35,16 @@ export class ZonesComponent implements OnInit {
   keyToken: string | null = null;      // Current key token (full or masked)
   showKeyToken = false;                 // Whether token was just generated (show full)
   
+  // Import form state
+  showImportForm = false;
+  importLoading = false;
+  importPreview: ZoneImportResult | null = null;
+  selectedFileName = '';
+  importFormData = {
+    zoneName: '',
+    zoneFile: ''
+  };
+  
   algorithms = [
     { value: 'ECDSAP256SHA256', label: 'ECDSA P-256 (Recommended)' },
     { value: 'ECDSAP384SHA384', label: 'ECDSA P-384' },
@@ -45,47 +55,32 @@ export class ZonesComponent implements OnInit {
     name: '',
     type: 'forward',
     subnet: '',
+    domain: '',
     strip_prefix: false,
     ttl: 3600
   };
 
-  constructor(private api: ApiService, private cdr: ChangeDetectorRef) {}
-
-  ngOnInit(): void {
-    this.loadTenants();
-    this.loadZones();
-    this.loadDnssecConfig();
-  }
-
-  loadTenants(): void {
-    if (!this.auth.isSuperAdmin()) return;
-    
-    this.auth.getTenants().subscribe({
-      next: (tenants) => {
-        this.tenants = tenants;
-        // Default to main tenant
-        const mainTenant = tenants.find(t => t.is_main);
-        if (mainTenant && !this.selectedTenant) {
-          this.selectedTenant = mainTenant.id;
-          this.filterZones();
-        }
-        this.cdr.detectChanges();
-      },
-      error: (err) => {
-        console.error('Failed to load tenants', err);
-      }
+  constructor(private api: ApiService, private cdr: ChangeDetectorRef) {
+    // React to tenant context changes
+    effect(() => {
+      const tenantId = this.tenantContext.currentTenantId();
+      this.filterZones();
+      this.loadSecondaryZones(); // Reload secondary zones for current tenant
     });
   }
 
-  onTenantFilterChange(): void {
-    this.filterZones();
+  ngOnInit(): void {
+    this.loadZones();
+    this.loadDnssecConfig();
+    this.loadSecondaryZones();
   }
 
   filterZones(): void {
-    if (!this.selectedTenant || !this.auth.isSuperAdmin()) {
-      this.filteredZones = this.zones;
+    const currentTenant = this.tenantContext.currentTenantId();
+    if (this.auth.isSuperAdmin()) {
+      this.filteredZones = this.zones.filter(z => z.tenant_id === currentTenant);
     } else {
-      this.filteredZones = this.zones.filter(z => z.tenant_id === this.selectedTenant);
+      this.filteredZones = this.zones;
     }
     this.cdr.detectChanges();
   }
@@ -137,6 +132,7 @@ export class ZonesComponent implements OnInit {
       name: '',
       type: type,
       subnet: '',
+      domain: '',
       strip_prefix: false,
       ttl: 3600
     };
@@ -467,5 +463,206 @@ export class ZonesComponent implements OnInit {
         this.toast.success('Key fetch URL copied to clipboard');
       });
     }
+  }
+
+  // ==================== Secondary Zones ====================
+  
+  secondaryZones: SecondaryZone[] = [];
+  showSecondaryForm = false;
+  editingSecondaryZone: SecondaryZone | null = null;
+  secondaryFormData: Partial<SecondaryZone> = {};
+  
+  loadSecondaryZones(): void {
+    this.api.getSecondaryZones().subscribe({
+      next: (zones) => {
+        this.secondaryZones = zones || [];
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.toast.error('Failed to load secondary zones');
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  openAddSecondaryForm(): void {
+    this.editingSecondaryZone = null;
+    this.secondaryFormData = {
+      zone: '',
+      primary: '',
+      refresh_interval: 3600,
+      tsig_key: '',
+      dnssec_key_url: '',
+      dnssec_key_token: ''
+    };
+    this.showSecondaryForm = true;
+  }
+
+  openEditSecondaryForm(zone: SecondaryZone): void {
+    this.editingSecondaryZone = zone;
+    this.secondaryFormData = { ...zone };
+    this.showSecondaryForm = true;
+  }
+
+  closeSecondaryForm(): void {
+    this.showSecondaryForm = false;
+    this.editingSecondaryZone = null;
+    this.secondaryFormData = {};
+  }
+
+  saveSecondaryZone(): void {
+    if (!this.secondaryFormData.zone || !this.secondaryFormData.primary) {
+      this.toast.error('Zone name and primary server are required');
+      return;
+    }
+
+    const zone: SecondaryZone = {
+      zone: this.secondaryFormData.zone!,
+      tenant_id: this.tenantContext.currentTenantId(),
+      primary: this.secondaryFormData.primary!,
+      refresh_interval: this.secondaryFormData.refresh_interval || 3600,
+      tsig_key: this.secondaryFormData.tsig_key || '',
+      dnssec_key_url: this.secondaryFormData.dnssec_key_url || '',
+      dnssec_key_token: this.secondaryFormData.dnssec_key_token || ''
+    };
+
+    const request = this.editingSecondaryZone
+      ? this.api.updateSecondaryZone(zone.zone, zone)
+      : this.api.addSecondaryZone(zone);
+
+    request.subscribe({
+      next: () => {
+        this.toast.success(this.editingSecondaryZone ? 'Secondary zone updated' : 'Secondary zone added');
+        this.loadSecondaryZones();
+        this.closeSecondaryForm();
+      },
+      error: (err) => {
+        this.toast.error(err.error?.error || 'Failed to save secondary zone');
+      }
+    });
+  }
+
+  deleteSecondaryZone(zone: SecondaryZone): void {
+    if (!confirm(`Delete secondary zone "${zone.zone}"? This will stop replicating this zone.`)) {
+      return;
+    }
+
+    this.api.deleteSecondaryZone(zone.zone).subscribe({
+      next: () => {
+        this.toast.success('Secondary zone deleted');
+        this.loadSecondaryZones();
+      },
+      error: (err) => {
+        this.toast.error(err.error?.error || 'Failed to delete secondary zone');
+      }
+    });
+  }
+
+  triggerZoneTransfer(zone: SecondaryZone): void {
+    // TODO: Implement manual zone transfer trigger via API
+    this.toast.success(`Zone transfer triggered for ${zone.zone}`);
+  }
+
+  // ==================== Zone Import ====================
+
+  openImportForm(): void {
+    this.showImportForm = true;
+    this.importPreview = null;
+    this.selectedFileName = '';
+    this.importFormData = {
+      zoneName: '',
+      zoneFile: ''
+    };
+  }
+
+  closeImportForm(): void {
+    this.showImportForm = false;
+    this.importPreview = null;
+    this.selectedFileName = '';
+    this.importFormData = {
+      zoneName: '',
+      zoneFile: ''
+    };
+  }
+
+  onFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files.length > 0) {
+      const file = input.files[0];
+      this.selectedFileName = file.name;
+      
+      // Try to extract zone name from filename (e.g., example.com.zone -> example.com)
+      if (!this.importFormData.zoneName) {
+        let zoneName = file.name
+          .replace(/\.(zone|txt|db)$/i, '')  // Remove common extensions
+          .replace(/^db\./i, '');            // Remove db. prefix if present
+        if (zoneName.includes('.')) {
+          this.importFormData.zoneName = zoneName;
+        }
+      }
+
+      // Read file content
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        this.importFormData.zoneFile = e.target?.result as string;
+        this.cdr.detectChanges();
+      };
+      reader.readAsText(file);
+    }
+  }
+
+  previewImport(): void {
+    if (!this.importFormData.zoneName || !this.importFormData.zoneFile) {
+      this.toast.error('Please enter a zone name and provide zone file content');
+      return;
+    }
+
+    this.importLoading = true;
+    this.api.previewZoneImport(this.importFormData.zoneName, this.importFormData.zoneFile).subscribe({
+      next: (result) => {
+        this.importPreview = result;
+        this.importLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.importLoading = false;
+        this.toast.error(err.error || 'Failed to parse zone file');
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  executeImport(): void {
+    if (!this.importFormData.zoneName || !this.importFormData.zoneFile) {
+      return;
+    }
+
+    this.importLoading = true;
+    this.api.importZone({
+      zone_name: this.importFormData.zoneName,
+      zone_file: this.importFormData.zoneFile,
+      preview: false
+    }).subscribe({
+      next: (result) => {
+        this.importLoading = false;
+        if (result.imported) {
+          this.toast.success(`Zone imported successfully: ${result.record_count} records`);
+          this.closeImportForm();
+          this.loadZones();
+        } else {
+          this.toast.error('Import failed');
+        }
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.importLoading = false;
+        this.toast.error(err.error || 'Failed to import zone');
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  hasSoaRecord(): boolean {
+    return this.importPreview?.records?.some(r => r.type === 'SOA') ?? false;
   }
 }

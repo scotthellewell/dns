@@ -126,16 +126,19 @@ func (sm *StorageManager) AuthenticateAPIKey(key string) (*Session, error) {
 	// Update last used
 	sm.store.UpdateAPIKeyLastUsed(apiKey.ID)
 
+	role := sm.permissionsToRole(apiKey.Permissions)
+
 	// Create session from API key
 	session := &Session{
-		ID:         apiKey.ID,
-		UserID:     "apikey:" + apiKey.ID,
-		Username:   "API Key: " + apiKey.Name,
-		TenantID:   apiKey.TenantID,
-		Role:       sm.permissionsToRole(apiKey.Permissions),
-		CreatedAt:  time.Now(),
-		ExpiresAt:  time.Now().Add(time.Hour),
-		AuthMethod: "apikey",
+		ID:           apiKey.ID,
+		UserID:       "apikey:" + apiKey.ID,
+		Username:     "API Key: " + apiKey.Name,
+		TenantID:     apiKey.TenantID,
+		Role:         role,
+		IsSuperAdmin: role == RoleSuperAdmin,
+		CreatedAt:    time.Now(),
+		ExpiresAt:    time.Now().Add(time.Hour),
+		AuthMethod:   "apikey",
 	}
 
 	return session, nil
@@ -143,8 +146,13 @@ func (sm *StorageManager) AuthenticateAPIKey(key string) (*Session, error) {
 
 func (sm *StorageManager) permissionsToRole(permissions []string) string {
 	for _, p := range permissions {
-		if p == "admin" {
+		if p == "*" {
 			return RoleSuperAdmin
+		}
+	}
+	for _, p := range permissions {
+		if p == "admin" {
+			return "admin" // "admin" permission maps to "admin" role for API keys
 		}
 	}
 	for _, p := range permissions {

@@ -392,15 +392,19 @@ func (m *Manager) AuthenticateAPIKey(key string) (*Session, error) {
 			m.config.APIKeys[i].LastUsed = &now
 			go m.saveConfig()
 
+			role := m.permissionsToRole(apiKey.Permissions)
+
 			// Create session from API key
 			session := &Session{
-				ID:         apiKey.ID,
-				UserID:     "apikey:" + apiKey.ID,
-				Username:   "API Key: " + apiKey.Name,
-				Role:       m.permissionsToRole(apiKey.Permissions),
-				CreatedAt:  time.Now(),
-				ExpiresAt:  time.Now().Add(time.Hour), // API key sessions are short-lived
-				AuthMethod: "apikey",
+				ID:           apiKey.ID,
+				UserID:       "apikey:" + apiKey.ID,
+				Username:     "API Key: " + apiKey.Name,
+				TenantID:     apiKey.TenantID,
+				Role:         role,
+				IsSuperAdmin: role == "admin",
+				CreatedAt:    time.Now(),
+				ExpiresAt:    time.Now().Add(time.Hour), // API key sessions are short-lived
+				AuthMethod:   "apikey",
 			}
 
 			return session, nil
@@ -412,16 +416,21 @@ func (m *Manager) AuthenticateAPIKey(key string) (*Session, error) {
 
 func (m *Manager) permissionsToRole(permissions []string) string {
 	for _, p := range permissions {
+		if p == "*" {
+			return RoleSuperAdmin
+		}
+	}
+	for _, p := range permissions {
 		if p == "admin" {
-			return "admin"
+			return "admin" // "admin" permission maps to "admin" role for API keys
 		}
 	}
 	for _, p := range permissions {
 		if p == "write" {
-			return "write"
+			return RoleUser
 		}
 	}
-	return "readonly"
+	return RoleReadonly
 }
 
 func (m *Manager) createSession(user *User, authMethod string) (*Session, error) {
@@ -711,6 +720,7 @@ func (m *Manager) ListAPIKeys() []APIKey {
 				Name:        k.Name,
 				KeyHash:     "", // Never expose hash
 				KeyPrefix:   k.KeyPrefix,
+				TenantID:    k.TenantID,
 				Permissions: k.Permissions,
 				CreatedAt:   k.CreatedAt,
 				ExpiresAt:   k.ExpiresAt,

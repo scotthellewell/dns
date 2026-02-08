@@ -23,6 +23,52 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+// secondaryCacheAdapter adapts storage.Store to secondary.CacheStore interface
+type secondaryCacheAdapter struct {
+	store *storage.Store
+}
+
+func (a *secondaryCacheAdapter) SaveSecondaryZoneCache(cache *secondary.ZoneCache) error {
+	return a.store.SaveSecondaryZoneCache(&storage.SecondaryZoneCache{
+		Zone:      cache.Zone,
+		Serial:    cache.Serial,
+		Records:   cache.Records,
+		LastSync:  cache.LastSync,
+		UpdatedAt: cache.UpdatedAt,
+	})
+}
+
+func (a *secondaryCacheAdapter) GetSecondaryZoneCache(zone string) (*secondary.ZoneCache, error) {
+	c, err := a.store.GetSecondaryZoneCache(zone)
+	if err != nil {
+		return nil, err
+	}
+	return &secondary.ZoneCache{
+		Zone:      c.Zone,
+		Serial:    c.Serial,
+		Records:   c.Records,
+		LastSync:  c.LastSync,
+		UpdatedAt: c.UpdatedAt,
+	}, nil
+}
+
+func (a *secondaryCacheAdapter) DeleteSecondaryZoneCache(zone string) error {
+	return a.store.DeleteSecondaryZoneCache(zone)
+}
+
+// dnssecKeyStoreAdapter adapts storage.Store to server.DNSSECKeyStore interface
+type dnssecKeyStoreAdapter struct {
+	store *storage.Store
+}
+
+func (a *dnssecKeyStoreAdapter) GetDNSSECKeys(zoneName string) (server.DNSSECKeyData, error) {
+	return a.store.GetDNSSECKeys(zoneName)
+}
+
+func (a *dnssecKeyStoreAdapter) ListZonesWithDNSSEC() ([]string, error) {
+	return a.store.ListZonesWithDNSSEC()
+}
+
 func main() {
 	dataDir := flag.String("data", "./data", "Data directory for bbolt database")
 	flag.Parse()
@@ -60,6 +106,17 @@ func main() {
 
 	// Create DNS server
 	srv := server.New(parsed)
+
+	// Set up secondary zone cache persistence
+	srv.SetSecondaryCacheStore(&secondaryCacheAdapter{store: store})
+
+	// Set up DNSSEC key store for loading keys from database
+	srv.SetDNSSECKeyStore(&dnssecKeyStoreAdapter{store: store})
+
+	// Load DNSSEC keys from storage (database) instead of file system
+	if err := srv.LoadDNSSECFromStorage(); err != nil {
+		log.Printf("Warning: Failed to load DNSSEC keys from storage: %v", err)
+	}
 
 	// Set up DNSSEC key fetch callback for secondary zones
 	secondary.SetKeyFetchCallback(func(zone string, keys *secondary.DNSSECKeyData) error {
@@ -271,6 +328,7 @@ func loadSyncConfig(store *storage.Store) *config.SyncConfig {
 
 		cfg.Enabled = stored.Enabled
 		cfg.NodeID = stored.NodeID
+		cfg.ServerName = stored.ServerName
 		cfg.SharedSecret = stored.SharedSecret
 		cfg.TombstoneRetentionDays = stored.TombstoneRetentionDays
 
@@ -300,7 +358,7 @@ func loadSyncConfig(store *storage.Store) *config.SyncConfig {
 		return nil
 	}
 
-	log.Printf("[sync] Loaded config from database: enabled=%v, nodeID=%s, peers=%d", cfg.Enabled, cfg.NodeID, len(cfg.Peers))
+	log.Printf("[sync] Loaded config from database: enabled=%v, nodeID=%s, serverName=%s, peers=%d", cfg.Enabled, cfg.NodeID, cfg.ServerName, len(cfg.Peers))
 	return &cfg
 }
 
@@ -310,6 +368,7 @@ func initSyncManager(store *storage.Store, cfg *config.SyncConfig) *sync.Manager
 	syncCfg := &sync.Config{
 		Enabled:           cfg.Enabled,
 		ServerID:          cfg.NodeID,
+		ServerName:        cfg.ServerName,
 		SharedSecret:      cfg.SharedSecret,
 		BatchSize:         1000,
 		ReconnectInterval: 5 * time.Second,
@@ -357,7 +416,103 @@ func initSyncManager(store *storage.Store, cfg *config.SyncConfig) *sync.Manager
 		return nil
 	}
 
+	// Repair: replay oplog entries to catch any that weren't properly applied
+	// This handles the case where an entity type was added after entries were synced
+	repairSyncEntries(mgr, store)
+
 	return mgr
+}
+
+// repairSyncEntries replays oplog entries from remote servers to ensure they're applied
+// This handles the case where entity type support was added after entries were synced
+func repairSyncEntries(mgr *sync.Manager, store *storage.Store) {
+	localServerID := mgr.ServerID()
+	repaired := 0
+
+	err := mgr.ReplayAllEntries(func(entry *sync.OpLogEntry) error {
+		// Only repair entries from OTHER servers
+		if entry.ServerID == localServerID {
+			return nil
+		}
+
+		// Check if entity needs to be applied based on type
+		switch entry.EntityType {
+		case sync.EntityAPIKey:
+			// Check if API key exists
+			apiKey, _ := store.GetAPIKey(entry.EntityID)
+			if apiKey == nil && entry.Operation != sync.OpDelete {
+				// API key doesn't exist but oplog has it - apply it
+				log.Printf("[sync-repair] Applying missed API key entry: %s", entry.EntityID)
+				if err := storage.WithSyncHookDisabled(func() error {
+					return applyCreateOrUpdate(store, entry)
+				}); err != nil {
+					log.Printf("[sync-repair] Error applying API key %s: %v", entry.EntityID, err)
+				} else {
+					repaired++
+				}
+			}
+
+		case sync.EntityUser:
+			user, _ := store.GetUser(entry.EntityID)
+			if user == nil && entry.Operation != sync.OpDelete {
+				log.Printf("[sync-repair] Applying missed user entry: %s", entry.EntityID)
+				if err := storage.WithSyncHookDisabled(func() error {
+					return applyCreateOrUpdate(store, entry)
+				}); err != nil {
+					log.Printf("[sync-repair] Error applying user %s: %v", entry.EntityID, err)
+				} else {
+					repaired++
+				}
+			}
+
+		case sync.EntityZone:
+			zone, _ := store.GetZone(entry.EntityID)
+			if zone == nil && entry.Operation != sync.OpDelete {
+				log.Printf("[sync-repair] Applying missed zone entry: %s", entry.EntityID)
+				if err := storage.WithSyncHookDisabled(func() error {
+					return applyCreateOrUpdate(store, entry)
+				}); err != nil {
+					log.Printf("[sync-repair] Error applying zone %s: %v", entry.EntityID, err)
+				} else {
+					repaired++
+				}
+			}
+
+		case sync.EntityTenant:
+			tenant, _ := store.GetTenant(entry.EntityID)
+			if tenant == nil && entry.Operation != sync.OpDelete {
+				log.Printf("[sync-repair] Applying missed tenant entry: %s", entry.EntityID)
+				if err := storage.WithSyncHookDisabled(func() error {
+					return applyCreateOrUpdate(store, entry)
+				}); err != nil {
+					log.Printf("[sync-repair] Error applying tenant %s: %v", entry.EntityID, err)
+				} else {
+					repaired++
+				}
+			}
+
+		case sync.EntitySession:
+			session, _ := store.GetSession(entry.EntityID)
+			if session == nil && entry.Operation != sync.OpDelete {
+				log.Printf("[sync-repair] Applying missed session entry: %s", entry.EntityID)
+				if err := storage.WithSyncHookDisabled(func() error {
+					return applyCreateOrUpdate(store, entry)
+				}); err != nil {
+					log.Printf("[sync-repair] Error applying session %s: %v", entry.EntityID, err)
+				} else {
+					repaired++
+				}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		log.Printf("[sync-repair] Error replaying entries: %v", err)
+	} else if repaired > 0 {
+		log.Printf("[sync-repair] Repaired %d missing entries", repaired)
+	}
 }
 
 // createApplyCallback creates a callback function to apply remote changes to local storage
@@ -391,6 +546,10 @@ func applyDelete(store *storage.Store, entityType, entityID string) error {
 		return store.DeleteTenant(entityID)
 	case sync.EntityDNSSECKeys:
 		return store.DeleteDNSSECKeys(entityID)
+	case sync.EntityAPIKey:
+		return store.DeleteAPIKey(entityID)
+	case sync.EntitySession:
+		return store.DeleteSession(entityID)
 	default:
 		log.Printf("[sync] Unknown entity type for delete: %s", entityType)
 		return nil
@@ -461,6 +620,46 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 			return err
 		}
 		return store.SaveDNSSECKeys(&keys)
+
+	case sync.EntityAPIKey:
+		var apiKey storage.APIKey
+		if err := json.Unmarshal(data, &apiKey); err != nil {
+			return err
+		}
+		// API keys are synced with their hash so they work across all cluster servers
+		existing, _ := store.GetAPIKey(apiKey.ID)
+		if existing != nil {
+			// Update with the synced data (including hash if provided)
+			if apiKey.KeyHash == "" {
+				// Preserve existing hash if not provided in sync
+				apiKey.KeyHash = existing.KeyHash
+			} else if existing.KeyHash == "synced_from_remote_server_key_not_usable_locally" {
+				// Repair: existing has placeholder hash, use the real one from sync
+				log.Printf("[sync] Repairing API key %s with real hash from sync", apiKey.ID)
+			}
+			return store.UpdateAPIKey(&apiKey)
+		}
+		// Create new key with synced hash
+		if apiKey.KeyHash == "" {
+			log.Printf("[sync] Warning: API key %s synced without hash, key won't work", apiKey.ID)
+		} else {
+			log.Printf("[sync] Creating synced API key %s (usable on all cluster servers)", apiKey.ID)
+		}
+		return store.CreateAPIKey(&apiKey)
+
+	case sync.EntitySession:
+		var session storage.Session
+		if err := json.Unmarshal(data, &session); err != nil {
+			return err
+		}
+		// Sessions are synced so bearer tokens work across all cluster servers
+		existing, _ := store.GetSession(session.ID)
+		if existing != nil {
+			// Session already exists, no need to update (they're immutable except for expiry)
+			return nil
+		}
+		log.Printf("[sync] Creating synced session %s for user %s", session.ID, session.Username)
+		return store.CreateSession(&session)
 
 	default:
 		log.Printf("[sync] Unknown entity type: %s", entry.EntityType)
@@ -566,6 +765,37 @@ func createFullSyncProvider(store *storage.Store) sync.FullSyncProvider {
 					EntityID:   keys.ZoneName,
 					TenantID:   "",
 					Data:       keys,
+				})
+			}
+		}
+
+		// Get all API keys (including hashes for cluster-wide authentication)
+		apiKeys, err := store.ListAPIKeysForSync("")
+		if err != nil {
+			log.Printf("[sync] Warning: failed to list API keys: %v", err)
+		} else {
+			for _, apiKey := range apiKeys {
+				// Include full API key with hash so keys work on all servers
+				items = append(items, sync.FullSyncDataItem{
+					EntityType: sync.EntityAPIKey,
+					EntityID:   apiKey.ID,
+					TenantID:   apiKey.TenantID,
+					Data:       apiKey,
+				})
+			}
+		}
+
+		// Get all active sessions (for cluster-wide bearer token support)
+		sessions, err := store.ListActiveSessions()
+		if err != nil {
+			log.Printf("[sync] Warning: failed to list sessions: %v", err)
+		} else {
+			for _, session := range sessions {
+				items = append(items, sync.FullSyncDataItem{
+					EntityType: sync.EntitySession,
+					EntityID:   session.ID,
+					TenantID:   session.TenantID,
+					Data:       session,
 				})
 			}
 		}

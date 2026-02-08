@@ -17,6 +17,161 @@
   }
 }
 
+// Cluster Overview Section
+.cluster-section {
+  margin-bottom: 32px;
+
+  h2 {
+    margin-top: 0;
+  }
+}
+
+.cluster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.cluster-card {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+
+  &.this-server {
+    border-color: #3b82f6;
+    border-width: 2px;
+  }
+
+  .server-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #334155;
+  }
+
+  .server-badge {
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+
+    &.current {
+      background: #1e40af;
+      color: #93c5fd;
+    }
+
+    &.connected {
+      background: #14532d;
+      color: #86efac;
+    }
+
+    &.disconnected {
+      background: #7f1d1d;
+      color: #fca5a5;
+    }
+  }
+
+  .server-name {
+    font-weight: 600;
+    color: #f1f5f9;
+    font-size: 1rem;
+  }
+
+  .server-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .server-stat {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.875rem;
+
+    .stat-icon {
+      font-size: 0.875rem;
+      &.online { color: #22c55e; }
+      &.offline { color: #ef4444; }
+    }
+
+    .stat-label {
+      color: #94a3b8;
+    }
+
+    .stat-value {
+      color: #e2e8f0;
+      font-weight: 500;
+
+      &.running { color: #22c55e; }
+      &.stopped { color: #ef4444; }
+      &.error { 
+        color: #ef4444;
+        font-size: 0.75rem;
+        word-break: break-word;
+      }
+    }
+  }
+}
+
+.cluster-summary {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: #1e293b;
+  border-radius: 8px;
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+
+  .summary-item {
+    font-size: 0.875rem;
+    color: #e2e8f0;
+
+    strong {
+      color: #94a3b8;
+      font-weight: 500;
+    }
+  }
+
+  .status-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 500;
+    font-size: 0.75rem;
+    margin-left: 4px;
+
+    &.healthy {
+      background: #14532d;
+      color: #86efac;
+    }
+
+    &.degraded {
+      background: #7f1d1d;
+      color: #fca5a5;
+    }
+
+    &.partial {
+      background: #78350f;
+      color: #fcd34d;
+    }
+  }
+}
+
+.section-header {
+  margin-top: 24px;
+  
+  h2 {
+    margin-top: 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #334155;
+  }
+}
+
 .error-banner {
   background: #450a0a;
   color: #fca5a5;

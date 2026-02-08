@@ -23,6 +23,7 @@ export interface Zone {
   name: string;             // Zone name (e.g., "example.com" or "168.192.in-addr.arpa")
   type: ZoneType;           // "forward" or "reverse"
   subnet?: string;          // For reverse zones
+  domain?: string;          // For reverse zones - domain for PTR records
   strip_prefix: boolean;
   ttl: number;
   // DNSSEC fields (populated when fetching zone details)
@@ -86,6 +87,7 @@ export interface DnsRecord {
 
 export interface SecondaryZone {
   zone: string;
+  tenant_id?: string;
   primary: string;
   primaries?: string[];
   refresh_interval: number;
@@ -94,6 +96,30 @@ export interface SecondaryZone {
   // DNSSEC key sharing for secondary signing
   dnssec_key_url?: string;   // URL to fetch keys from primary
   dnssec_key_token?: string; // Token for authentication
+}
+
+// Zone Import types
+export interface ZoneImportRequest {
+  zone_name: string;
+  zone_file: string;
+  preview: boolean;
+}
+
+export interface ZoneImportResult {
+  zone: Zone;
+  records: ImportedRecord[];
+  record_count: number;
+  errors: string[];
+  warnings: string[];
+  imported: boolean;
+}
+
+export interface ImportedRecord {
+  name: string;
+  type: string;
+  ttl: number;
+  data: any;
+  raw_data?: string;
 }
 
 export interface TransferConfig {
@@ -276,8 +302,12 @@ export class ApiService {
   constructor(private http: HttpClient) {}
 
   // Status
-  getStatus(): Observable<ServerStatus> {
-    return this.http.get<ServerStatus>(`${this.baseUrl}/status`);
+  getStatus(tenantId?: string): Observable<ServerStatus> {
+    let url = `${this.baseUrl}/status`;
+    if (tenantId) {
+      url += `?tenant_id=${encodeURIComponent(tenantId)}`;
+    }
+    return this.http.get<ServerStatus>(url);
   }
 
   // Zones
@@ -337,6 +367,22 @@ export class ApiService {
 
   createSecondaryZone(zone: SecondaryZone): Observable<any> {
     return this.http.post(`${this.baseUrl}/secondary-zones`, zone);
+  }
+
+  convertSecondaryToPrimary(zone: string): Observable<{ status: string; message: string; zone: string; records_created: number; records_failed: number }> {
+    return this.http.post<{ status: string; message: string; zone: string; records_created: number; records_failed: number }>(
+      `${this.baseUrl}/secondary-zones/convert/${encodeURIComponent(zone)}`,
+      {}
+    );
+  }
+
+  // Zone Import
+  importZone(request: ZoneImportRequest): Observable<ZoneImportResult> {
+    return this.http.post<ZoneImportResult>(`${this.baseUrl}/zones/import`, request);
+  }
+
+  previewZoneImport(zoneName: string, zoneFile: string): Observable<ZoneImportResult> {
+    return this.importZone({ zone_name: zoneName, zone_file: zoneFile, preview: true });
   }
 
   // Transfer Settings
