@@ -24,6 +24,10 @@ type Manager struct {
 	totalBlocked   uint64
 	totalAllowed   uint64
 	lastUpdateTime time.Time
+
+	// Initialization state
+	ready    bool
+	initDone chan struct{}
 }
 
 // Config holds blocklist configuration.
@@ -83,36 +87,56 @@ func New(store Store) *Manager {
 			Response:   "nxdomain",
 			LogBlocked: true,
 		},
+		initDone: make(chan struct{}),
 	}
 
 	return m
 }
 
 // Start initializes the manager and starts the update scheduler.
+// This returns immediately and does initialization in the background.
 func (m *Manager) Start() error {
-	// Load config from storage
+	// Load config from storage (fast operation, do synchronously)
 	if cfg, err := m.store.GetBlocklistConfig(); err == nil && cfg != nil {
+		m.mu.Lock()
 		m.config = cfg
+		m.mu.Unlock()
 	}
 
-	// Load sources from storage
+	// Load sources from storage (fast operation, do synchronously)
 	sources, err := m.store.GetBlocklistSources()
 	if err != nil {
 		log.Printf("[blocklist] Failed to load sources: %v", err)
 	} else {
+		m.mu.Lock()
 		for _, s := range sources {
 			m.sources[s.ID] = s
 		}
+		m.mu.Unlock()
 	}
 
-	// Load whitelist
+	// Load whitelist (fast operation, do synchronously)
 	if entries, err := m.store.GetBlocklistWhitelist(); err == nil {
+		m.mu.Lock()
 		for _, e := range entries {
 			m.addToWhitelist(e)
 		}
+		m.mu.Unlock()
 	}
 
-	// Build bloom filter from stored domains
+	log.Printf("[blocklist] Starting initialization in background (sources: %d)", len(m.sources))
+
+	// Do heavy lifting in background goroutine
+	go m.initializeInBackground()
+
+	return nil
+}
+
+// initializeInBackground performs slow initialization tasks without blocking server startup.
+func (m *Manager) initializeInBackground() {
+	defer close(m.initDone)
+
+	// Build bloom filter from stored domains (can be slow with large lists)
 	if err := m.rebuildBloomFilter(); err != nil {
 		log.Printf("[blocklist] Failed to build bloom filter: %v", err)
 	}
@@ -121,10 +145,15 @@ func (m *Manager) Start() error {
 	m.scheduler = NewScheduler(m)
 	m.scheduler.Start()
 
-	log.Printf("[blocklist] Started with %d sources, bloom filter size: %d",
-		len(m.sources), m.bloom.Count())
+	m.mu.Lock()
+	m.ready = true
+	var count uint64
+	if m.bloom != nil {
+		count = m.bloom.Count()
+	}
+	m.mu.Unlock()
 
-	return nil
+	log.Printf("[blocklist] Initialization complete (bloom filter: %d entries)", count)
 }
 
 // Stop stops the blocklist manager.
@@ -134,12 +163,29 @@ func (m *Manager) Stop() {
 	}
 }
 
+// IsReady returns true if the blocklist manager has finished initialization.
+func (m *Manager) IsReady() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.ready
+}
+
+// WaitReady blocks until the blocklist manager is fully initialized.
+func (m *Manager) WaitReady() {
+	<-m.initDone
+}
+
 // Check returns true if the domain should be blocked.
 func (m *Manager) Check(domain string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	if !m.config.Enabled {
+		return false
+	}
+
+	// If not yet initialized, allow all traffic (fail open)
+	if !m.ready {
 		return false
 	}
 
@@ -264,6 +310,22 @@ func (m *Manager) GetSources() []*Source {
 		result = append(result, s)
 	}
 	return result
+}
+
+// GetSource returns a source by ID.
+func (m *Manager) GetSource(id string) *Source {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sources[id]
+}
+
+// UpdateSource updates an existing blocklist source.
+func (m *Manager) UpdateSource(source *Source) error {
+	m.mu.Lock()
+	m.sources[source.ID] = source
+	m.mu.Unlock()
+
+	return m.store.SaveBlocklistSource(source)
 }
 
 // AddSource adds a new blocklist source.

@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
 
 export interface ServerStatus {
   status: string;
@@ -636,15 +637,19 @@ export class ApiService {
 
   // Blocklist API
   getBlocklistConfig(): Observable<BlocklistConfig> {
-    return this.http.get<BlocklistConfig>(`${this.baseUrl}/blocklist/config`);
+    return this.http.get<{ config: BlocklistConfig; stats: any }>(`${this.baseUrl}/blocklist`).pipe(
+      map(response => response.config)
+    );
   }
 
   updateBlocklistConfig(config: BlocklistConfig): Observable<any> {
-    return this.http.put(`${this.baseUrl}/blocklist/config`, config);
+    return this.http.put(`${this.baseUrl}/blocklist`, config);
   }
 
   getBlocklistSources(): Observable<BlocklistSource[]> {
-    return this.http.get<BlocklistSource[]>(`${this.baseUrl}/blocklist/sources`);
+    return this.http.get<{ sources: BlocklistSource[]; available: any[] }>(`${this.baseUrl}/blocklist/sources`).pipe(
+      map(response => response.sources)
+    );
   }
 
   addBlocklistSource(source: Partial<BlocklistSource>): Observable<BlocklistSource> {
@@ -664,7 +669,9 @@ export class ApiService {
   }
 
   getBlocklistStats(): Observable<BlocklistStats> {
-    return this.http.get<BlocklistStats>(`${this.baseUrl}/blocklist/stats`);
+    return this.http.get<{ config: any; stats: BlocklistStats }>(`${this.baseUrl}/blocklist`).pipe(
+      map(response => response.stats)
+    );
   }
 
   testBlocklistDomain(domain: string): Observable<BlocklistTestResult> {

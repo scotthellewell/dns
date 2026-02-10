@@ -13,7 +13,9 @@ type BlocklistManager interface {
 	GetConfig() *blocklist.Config
 	SetConfig(cfg *blocklist.Config) error
 	GetSources() []*blocklist.Source
+	GetSource(id string) *blocklist.Source
 	AddSource(source *blocklist.Source) error
+	UpdateSource(source *blocklist.Source) error
 	RemoveSource(id string) error
 	GetWhitelist() []string
 	SetWhitelist(entries []string) error
@@ -166,6 +168,46 @@ func (h *Handler) handleBlocklistSource(w http.ResponseWriter, r *http.Request) 
 	}
 
 	switch r.Method {
+	case http.MethodPut:
+		// Update source (e.g., toggle enabled state)
+		var updates map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// Get existing source
+		source := bl.GetSource(sourceID)
+		if source == nil {
+			http.Error(w, "Source not found", http.StatusNotFound)
+			return
+		}
+
+		// Apply updates
+		if enabled, ok := updates["enabled"].(bool); ok {
+			source.Enabled = enabled
+		}
+		if name, ok := updates["name"].(string); ok {
+			source.Name = name
+		}
+		if url, ok := updates["url"].(string); ok {
+			source.URL = url
+		}
+		if format, ok := updates["format"].(string); ok {
+			source.Format = format
+		}
+		if updateMinutes, ok := updates["update_minutes"].(float64); ok {
+			source.UpdateMinutes = int(updateMinutes)
+		}
+
+		if err := bl.UpdateSource(source); err != nil {
+			http.Error(w, "Failed to update source: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(source)
+
 	case http.MethodPost:
 		// Handle actions like /api/blocklist/sources/{id}/refresh
 		if action == "refresh" {
