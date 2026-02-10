@@ -307,6 +307,43 @@ export interface Delegation {
   ds_records?: DsRecordData[];
 }
 
+// Blocklist types
+export interface BlocklistConfig {
+  enabled: boolean;
+  response: string;       // "nxdomain", "zero", or "redirect"
+  redirect_ip?: string;
+  log_blocked: boolean;
+}
+
+export interface BlocklistSource {
+  id: string;
+  name: string;
+  url: string;
+  format: string;         // "hosts" or "domains"
+  enabled: boolean;
+  update_minutes: number;
+  last_update?: string;
+  last_etag?: string;
+  entry_count: number;
+  last_error?: string;
+  next_update?: string;
+}
+
+export interface BlocklistStats {
+  enabled: boolean;
+  total_entries: number;
+  sources_count: number;
+  sources_enabled: number;
+  blocked_queries_total: number;
+  last_update?: string;
+}
+
+export interface BlocklistTestResult {
+  domain: string;
+  blocked: boolean;
+  source?: string;
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -595,6 +632,55 @@ export class ApiService {
 
   generateSyncSecret(): Observable<{ secret: string }> {
     return this.http.post<{ secret: string }>(`${this.baseUrl}/sync/config/generate-secret`, {});
+  }
+
+  // Blocklist API
+  getBlocklistConfig(): Observable<BlocklistConfig> {
+    return this.http.get<BlocklistConfig>(`${this.baseUrl}/blocklist/config`);
+  }
+
+  updateBlocklistConfig(config: BlocklistConfig): Observable<any> {
+    return this.http.put(`${this.baseUrl}/blocklist/config`, config);
+  }
+
+  getBlocklistSources(): Observable<BlocklistSource[]> {
+    return this.http.get<BlocklistSource[]>(`${this.baseUrl}/blocklist/sources`);
+  }
+
+  addBlocklistSource(source: Partial<BlocklistSource>): Observable<BlocklistSource> {
+    return this.http.post<BlocklistSource>(`${this.baseUrl}/blocklist/sources`, source);
+  }
+
+  updateBlocklistSource(id: string, source: Partial<BlocklistSource>): Observable<any> {
+    return this.http.put(`${this.baseUrl}/blocklist/sources/${id}`, source);
+  }
+
+  deleteBlocklistSource(id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/blocklist/sources/${id}`);
+  }
+
+  refreshBlocklistSource(id: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/blocklist/sources/${id}/refresh`, {});
+  }
+
+  getBlocklistStats(): Observable<BlocklistStats> {
+    return this.http.get<BlocklistStats>(`${this.baseUrl}/blocklist/stats`);
+  }
+
+  testBlocklistDomain(domain: string): Observable<BlocklistTestResult> {
+    return this.http.get<BlocklistTestResult>(`${this.baseUrl}/blocklist/test/${encodeURIComponent(domain)}`);
+  }
+
+  getBlocklistWhitelist(): Observable<string[]> {
+    return this.http.get<string[]>(`${this.baseUrl}/blocklist/whitelist`);
+  }
+
+  addBlocklistWhitelist(domain: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/blocklist/whitelist`, { domain });
+  }
+
+  removeBlocklistWhitelist(domain: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/blocklist/whitelist/${encodeURIComponent(domain)}`);
   }
 }
 

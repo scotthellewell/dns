@@ -47,6 +47,7 @@ type Handler struct {
 	store            interface{} // Optional storage backend (*storage.Store)
 	secondaryMgr     SecondaryZoneProvider
 	secondaryMgrLock sync.RWMutex
+	blocklistMgr     BlocklistManager
 }
 
 // SetSecondaryManager sets the secondary zone manager for convert operations
@@ -202,6 +203,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Audit logs
 	mux.HandleFunc("/api/audit", h.corsMiddleware(h.handleAudit))
+
+	// Blocklist management
+	mux.HandleFunc("/api/blocklist", h.corsMiddleware(h.handleBlocklist))
+	mux.HandleFunc("/api/blocklist/sources", h.corsMiddleware(h.handleBlocklistSources))
+	mux.HandleFunc("/api/blocklist/sources/", h.corsMiddleware(h.handleBlocklistSource))
+	mux.HandleFunc("/api/blocklist/whitelist", h.corsMiddleware(h.handleBlocklistWhitelist))
+	mux.HandleFunc("/api/blocklist/test/", h.corsMiddleware(h.handleBlocklistTest))
+	mux.HandleFunc("/api/blocklist/refresh", h.corsMiddleware(h.handleBlocklistRefresh))
 }
 
 // RegisterRoutesWithAuth registers all API routes with authentication middleware
@@ -238,6 +247,14 @@ func (h *Handler) RegisterRoutesWithAuth(mux *http.ServeMux, authMgr AuthMiddlew
 	mux.HandleFunc("/api/dnssec", wrap(h.handleDNSSEC))
 	mux.HandleFunc("/api/settings", wrap(h.handleSettings))
 	mux.HandleFunc("/api/audit", wrap(h.handleAudit))
+
+	// Blocklist management
+	mux.HandleFunc("/api/blocklist", wrap(h.handleBlocklist))
+	mux.HandleFunc("/api/blocklist/sources", wrap(h.handleBlocklistSources))
+	mux.HandleFunc("/api/blocklist/sources/", wrap(h.handleBlocklistSource))
+	mux.HandleFunc("/api/blocklist/whitelist", wrap(h.handleBlocklistWhitelist))
+	mux.HandleFunc("/api/blocklist/test/", wrap(h.handleBlocklistTest))
+	mux.HandleFunc("/api/blocklist/refresh", wrap(h.handleBlocklistRefresh))
 }
 
 // CORSMiddleware adds CORS headers - standalone version for use outside Handler

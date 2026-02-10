@@ -17,6 +17,7 @@ import (
 
 	"github.com/scott/dns/api"
 	"github.com/scott/dns/auth"
+	"github.com/scott/dns/blocklist"
 	"github.com/scott/dns/certs"
 	"github.com/scott/dns/config"
 	"github.com/scott/dns/ports"
@@ -71,6 +72,150 @@ func (a *dnssecKeyStoreAdapter) GetDNSSECKeys(zoneName string) (server.DNSSECKey
 
 func (a *dnssecKeyStoreAdapter) ListZonesWithDNSSEC() ([]string, error) {
 	return a.store.ListZonesWithDNSSEC()
+}
+
+// blocklistStoreAdapter adapts storage.Store to blocklist.Store interface
+type blocklistStoreAdapter struct {
+	store *storage.Store
+}
+
+func (a *blocklistStoreAdapter) GetBlocklistConfig() (*blocklist.Config, error) {
+	cfg, err := a.store.GetBlocklistConfig()
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return nil, nil
+	}
+	return &blocklist.Config{
+		Enabled:    cfg.Enabled,
+		Response:   cfg.Response,
+		RedirectIP: cfg.RedirectIP,
+		LogBlocked: cfg.LogBlocked,
+	}, nil
+}
+
+func (a *blocklistStoreAdapter) SaveBlocklistConfig(config *blocklist.Config) error {
+	return a.store.SaveBlocklistConfig(&storage.BlocklistConfig{
+		Enabled:    config.Enabled,
+		Response:   config.Response,
+		RedirectIP: config.RedirectIP,
+		LogBlocked: config.LogBlocked,
+	})
+}
+
+func (a *blocklistStoreAdapter) GetBlocklistSources() ([]*blocklist.Source, error) {
+	sources, err := a.store.GetBlocklistSources()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*blocklist.Source, 0, len(sources))
+	for _, s := range sources {
+		result = append(result, &blocklist.Source{
+			ID:            s.ID,
+			Name:          s.Name,
+			URL:           s.URL,
+			Format:        s.Format,
+			Enabled:       s.Enabled,
+			UpdateMinutes: s.UpdateMinutes,
+			LastUpdate:    s.LastUpdate,
+			LastETag:      s.LastETag,
+			EntryCount:    s.EntryCount,
+			LastError:     s.LastError,
+			ErrorCount:    s.ErrorCount,
+		})
+	}
+	return result, nil
+}
+
+func (a *blocklistStoreAdapter) SaveBlocklistSource(source *blocklist.Source) error {
+	return a.store.SaveBlocklistSource(&storage.BlocklistSource{
+		ID:            source.ID,
+		Name:          source.Name,
+		URL:           source.URL,
+		Format:        source.Format,
+		Enabled:       source.Enabled,
+		UpdateMinutes: source.UpdateMinutes,
+		LastUpdate:    source.LastUpdate,
+		LastETag:      source.LastETag,
+		EntryCount:    source.EntryCount,
+		LastError:     source.LastError,
+		ErrorCount:    source.ErrorCount,
+	})
+}
+
+func (a *blocklistStoreAdapter) DeleteBlocklistSource(id string) error {
+	return a.store.DeleteBlocklistSource(id)
+}
+
+func (a *blocklistStoreAdapter) GetBlocklistWhitelist() ([]string, error) {
+	return a.store.GetBlocklistWhitelist()
+}
+
+func (a *blocklistStoreAdapter) SaveBlocklistWhitelist(entries []string) error {
+	return a.store.SaveBlocklistWhitelist(entries)
+}
+
+func (a *blocklistStoreAdapter) AddBlockedDomains(sourceID string, domains []string) error {
+	return a.store.AddBlockedDomains(sourceID, domains)
+}
+
+func (a *blocklistStoreAdapter) RemoveBlockedDomainsForSource(sourceID string) error {
+	return a.store.RemoveBlockedDomainsForSource(sourceID)
+}
+
+func (a *blocklistStoreAdapter) IsBlocked(domain string) (bool, error) {
+	return a.store.IsBlocked(domain)
+}
+
+func (a *blocklistStoreAdapter) GetAllBlockedDomains() ([]string, error) {
+	return a.store.GetAllBlockedDomains()
+}
+
+func (a *blocklistStoreAdapter) GetBlockedDomainCount() (int, error) {
+	return a.store.GetBlockedDomainCount()
+}
+
+// blocklistServerAdapter adapts blocklist.Manager to server.BlocklistChecker interface
+type blocklistServerAdapter struct {
+	mgr *blocklist.Manager
+}
+
+func (a *blocklistServerAdapter) Check(domain string) bool {
+	return a.mgr.Check(domain)
+}
+
+func (a *blocklistServerAdapter) GetResponse() string {
+	cfg := a.mgr.GetConfig()
+	if cfg == nil {
+		return "nxdomain"
+	}
+	return cfg.Response
+}
+
+func (a *blocklistServerAdapter) GetRedirectIP() string {
+	cfg := a.mgr.GetConfig()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.RedirectIP
+}
+
+func (a *blocklistServerAdapter) GetConfig() *server.BlocklistConfig {
+	cfg := a.mgr.GetConfig()
+	if cfg == nil {
+		return &server.BlocklistConfig{
+			Enabled:    false,
+			Response:   "nxdomain",
+			LogBlocked: true,
+		}
+	}
+	return &server.BlocklistConfig{
+		Enabled:    cfg.Enabled,
+		Response:   cfg.Response,
+		RedirectIP: cfg.RedirectIP,
+		LogBlocked: cfg.LogBlocked,
+	}
 }
 
 // fetchCertificateFromPeer attempts to fetch a certificate from a peer server's API
@@ -276,6 +421,43 @@ func main() {
 	apiHandler := api.NewWithStorage(parsed, store, func(newCfg *config.ParsedConfig) {
 		srv.UpdateConfig(newCfg)
 	})
+
+	// Initialize blocklist manager
+	blocklistStore := &blocklistStoreAdapter{store: store}
+	blocklistMgr := blocklist.New(blocklistStore)
+	
+	// Load config from storage, or use defaults
+	blocklistConfig, err := blocklistStore.GetBlocklistConfig()
+	if err != nil || blocklistConfig == nil {
+		// Use default config with default sources
+		blocklistConfig = &blocklist.Config{
+			Enabled:    true,
+			LogBlocked: true,
+		}
+		blocklistMgr.SetConfig(blocklistConfig)
+		
+		// Add default sources
+		for _, source := range blocklist.DefaultSources() {
+			if err := blocklistMgr.AddSource(source); err != nil {
+				log.Printf("Warning: Failed to add default blocklist source %s: %v", source.ID, err)
+			}
+		}
+	} else {
+		blocklistMgr.SetConfig(blocklistConfig)
+	}
+	
+	// Start the blocklist manager (schedules updates)
+	if err := blocklistMgr.Start(); err != nil {
+		log.Printf("Warning: Failed to start blocklist manager: %v", err)
+	} else if blocklistConfig.Enabled {
+		log.Printf("Blocklist manager started")
+	}
+	
+	// Wire up blocklist to DNS server via adapter
+	srv.SetBlocklist(&blocklistServerAdapter{mgr: blocklistMgr})
+	
+	// Wire up blocklist to API handler
+	apiHandler.SetBlocklistManager(blocklistMgr)
 
 	// Set up sync manager config refresh callback now that we have the API handler
 	if syncMgr != nil {

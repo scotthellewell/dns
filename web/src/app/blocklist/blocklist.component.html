@@ -1,0 +1,325 @@
+<div class="page-container">
+  <div class="page-header">
+    <h1>DNS Blocklist</h1>
+    <p class="subtitle">Block ads, malware, and unwanted domains at the DNS level</p>
+  </div>
+
+  <!-- Stats Overview -->
+  @if (stats) {
+    <div class="stats-row">
+      <mat-card class="stat-card">
+        <div class="stat-content">
+          <mat-icon [class.active]="config.enabled">shield</mat-icon>
+          <div class="stat-text">
+            <span class="stat-value">{{config.enabled ? 'Active' : 'Disabled'}}</span>
+            <span class="stat-label">Protection Status</span>
+          </div>
+        </div>
+      </mat-card>
+      <mat-card class="stat-card">
+        <div class="stat-content">
+          <mat-icon>format_list_numbered</mat-icon>
+          <div class="stat-text">
+            <span class="stat-value">{{formatEntryCount(stats.total_entries)}}</span>
+            <span class="stat-label">Blocked Domains</span>
+          </div>
+        </div>
+      </mat-card>
+      <mat-card class="stat-card">
+        <div class="stat-content">
+          <mat-icon>source</mat-icon>
+          <div class="stat-text">
+            <span class="stat-value">{{stats.sources_enabled}}/{{stats.sources_count}}</span>
+            <span class="stat-label">Active Sources</span>
+          </div>
+        </div>
+      </mat-card>
+      <mat-card class="stat-card">
+        <div class="stat-content">
+          <mat-icon>block</mat-icon>
+          <div class="stat-text">
+            <span class="stat-value">{{stats.blocked_queries_total || 0}}</span>
+            <span class="stat-label">Queries Blocked</span>
+          </div>
+        </div>
+      </mat-card>
+    </div>
+  }
+
+  <!-- Configuration -->
+  <mat-card class="content-card">
+    <div class="card-section">
+      <div class="section-header">
+        <h2>General Settings</h2>
+      </div>
+
+      <div class="toggle-row">
+        <mat-slide-toggle [(ngModel)]="config.enabled" color="primary">
+          Enable Blocklist
+        </mat-slide-toggle>
+        <span class="toggle-hint">Block queries to domains on configured blocklists</span>
+      </div>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Block Response Type</mat-label>
+        <mat-select [(ngModel)]="config.response">
+          @for (type of responseTypes; track type.value) {
+            <mat-option [value]="type.value">
+              <mat-icon>{{type.icon}}</mat-icon>
+              {{ type.label }}
+            </mat-option>
+          }
+        </mat-select>
+        <mat-hint>How to respond to blocked domain queries</mat-hint>
+      </mat-form-field>
+
+      @if (config.response === 'redirect') {
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Redirect IP Address</mat-label>
+          <input matInput [(ngModel)]="config.redirect_ip" placeholder="192.168.1.100">
+          <mat-hint>IP address to return for blocked domains (can serve a block page)</mat-hint>
+        </mat-form-field>
+      }
+
+      <div class="toggle-row">
+        <mat-slide-toggle [(ngModel)]="config.log_blocked" color="primary">
+          Log Blocked Queries
+        </mat-slide-toggle>
+        <span class="toggle-hint">Record blocked queries in the query log for debugging</span>
+      </div>
+    </div>
+
+    <div class="card-footer">
+      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving">
+        @if (saving) {
+          Saving...
+        } @else {
+          Save Settings
+        }
+      </button>
+    </div>
+  </mat-card>
+
+  <!-- Blocklist Sources -->
+  <mat-card class="content-card">
+    <div class="card-section">
+      <div class="section-header">
+        <h2>Blocklist Sources</h2>
+        <p class="section-desc">Configure which blocklists to use for filtering</p>
+      </div>
+
+      @if (loading) {
+        <div class="loading-container">
+          <mat-spinner diameter="40"></mat-spinner>
+        </div>
+      } @else {
+        <table mat-table [dataSource]="sources" class="source-table">
+          <!-- Enabled Column -->
+          <ng-container matColumnDef="enabled">
+            <th mat-header-cell *matHeaderCellDef>On</th>
+            <td mat-cell *matCellDef="let source">
+              <mat-slide-toggle 
+                [checked]="source.enabled" 
+                (change)="toggleSource(source)"
+                color="primary">
+              </mat-slide-toggle>
+            </td>
+          </ng-container>
+
+          <!-- Name Column -->
+          <ng-container matColumnDef="name">
+            <th mat-header-cell *matHeaderCellDef>Source</th>
+            <td mat-cell *matCellDef="let source">
+              <div class="source-name">
+                <strong>{{source.name}}</strong>
+                <a [href]="source.url" target="_blank" class="source-url">
+                  {{source.url | slice:0:50}}{{source.url.length > 50 ? '...' : ''}}
+                </a>
+              </div>
+            </td>
+          </ng-container>
+
+          <!-- Format Column -->
+          <ng-container matColumnDef="format">
+            <th mat-header-cell *matHeaderCellDef>Format</th>
+            <td mat-cell *matCellDef="let source">
+              <mat-chip>{{source.format}}</mat-chip>
+            </td>
+          </ng-container>
+
+          <!-- Entries Column -->
+          <ng-container matColumnDef="entries">
+            <th mat-header-cell *matHeaderCellDef>Entries</th>
+            <td mat-cell *matCellDef="let source">
+              {{formatEntryCount(source.entry_count)}}
+            </td>
+          </ng-container>
+
+          <!-- Last Update Column -->
+          <ng-container matColumnDef="lastUpdate">
+            <th mat-header-cell *matHeaderCellDef>Update Interval</th>
+            <td mat-cell *matCellDef="let source">
+              {{formatUpdateInterval(source.update_minutes)}}
+            </td>
+          </ng-container>
+
+          <!-- Status Column -->
+          <ng-container matColumnDef="status">
+            <th mat-header-cell *matHeaderCellDef>Status</th>
+            <td mat-cell *matCellDef="let source">
+              <mat-icon 
+                [color]="getSourceStatusColor(source)"
+                [matTooltip]="source.last_error || (source.entry_count > 0 ? 'Loaded' : 'Pending')">
+                {{getSourceStatusIcon(source)}}
+              </mat-icon>
+            </td>
+          </ng-container>
+
+          <!-- Actions Column -->
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef></th>
+            <td mat-cell *matCellDef="let source">
+              <button mat-icon-button 
+                      (click)="refreshSource(source)" 
+                      [disabled]="refreshingSource === source.id"
+                      matTooltip="Refresh now">
+                @if (refreshingSource === source.id) {
+                  <mat-spinner diameter="20"></mat-spinner>
+                } @else {
+                  <mat-icon>refresh</mat-icon>
+                }
+              </button>
+              <button mat-icon-button color="warn" (click)="deleteSource(source)" matTooltip="Delete">
+                <mat-icon>delete</mat-icon>
+              </button>
+            </td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+          <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+        </table>
+
+        @if (sources.length === 0) {
+          <div class="empty-state">
+            <mat-icon>playlist_add</mat-icon>
+            <p>No blocklist sources configured</p>
+            <p class="hint">Add a source below to start blocking unwanted domains</p>
+          </div>
+        }
+      }
+    </div>
+
+    <!-- Add New Source -->
+    <mat-expansion-panel class="add-source-panel">
+      <mat-expansion-panel-header>
+        <mat-panel-title>
+          <mat-icon>add_circle</mat-icon>
+          Add New Source
+        </mat-panel-title>
+      </mat-expansion-panel-header>
+
+      <div class="add-source-form">
+        <mat-form-field appearance="outline">
+          <mat-label>Name</mat-label>
+          <input matInput [(ngModel)]="newSource.name" placeholder="My Blocklist">
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="url-field">
+          <mat-label>URL</mat-label>
+          <input matInput [(ngModel)]="newSource.url" placeholder="https://example.com/blocklist.txt">
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Format</mat-label>
+          <mat-select [(ngModel)]="newSource.format">
+            <mat-option value="domains">Domain List (one per line)</mat-option>
+            <mat-option value="hosts">Hosts File (0.0.0.0 domain)</mat-option>
+          </mat-select>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Update Interval (minutes)</mat-label>
+          <input matInput type="number" [(ngModel)]="newSource.update_minutes">
+        </mat-form-field>
+
+        <button mat-raised-button color="primary" (click)="addSource()">
+          <mat-icon>add</mat-icon>
+          Add Source
+        </button>
+      </div>
+    </mat-expansion-panel>
+  </mat-card>
+
+  <!-- Whitelist -->
+  <mat-card class="content-card">
+    <div class="card-section">
+      <div class="section-header">
+        <h2>Whitelist</h2>
+        <p class="section-desc">Domains that should never be blocked</p>
+      </div>
+
+      <div class="whitelist-chips">
+        @for (domain of whitelist; track domain) {
+          <mat-chip (removed)="removeWhitelist(domain)">
+            {{domain}}
+            <button matChipRemove>
+              <mat-icon>cancel</mat-icon>
+            </button>
+          </mat-chip>
+        }
+        @if (whitelist.length === 0) {
+          <span class="empty-text">No whitelisted domains</span>
+        }
+      </div>
+
+      <div class="add-row">
+        <mat-form-field appearance="outline" class="flex-grow">
+          <mat-label>Domain</mat-label>
+          <input matInput [(ngModel)]="newWhitelistDomain" placeholder="example.com" (keyup.enter)="addWhitelist()">
+        </mat-form-field>
+        <button mat-raised-button color="primary" (click)="addWhitelist()" [disabled]="!newWhitelistDomain">
+          <mat-icon>add</mat-icon>
+          Add
+        </button>
+      </div>
+    </div>
+  </mat-card>
+
+  <!-- Test Domain -->
+  <mat-card class="content-card">
+    <div class="card-section">
+      <div class="section-header">
+        <h2>Test Domain</h2>
+        <p class="section-desc">Check if a domain would be blocked</p>
+      </div>
+
+      <div class="test-row">
+        <mat-form-field appearance="outline" class="flex-grow">
+          <mat-label>Domain to test</mat-label>
+          <input matInput [(ngModel)]="testDomain" placeholder="ads.example.com" (keyup.enter)="testBlocklist()">
+        </mat-form-field>
+        <button mat-raised-button color="primary" (click)="testBlocklist()" [disabled]="!testDomain">
+          <mat-icon>search</mat-icon>
+          Test
+        </button>
+      </div>
+
+      @if (testResult) {
+        <div class="test-result" [class.blocked]="testResult.blocked" [class.allowed]="!testResult.blocked">
+          <mat-icon>{{testResult.blocked ? 'block' : 'check_circle'}}</mat-icon>
+          <div class="result-text">
+            <strong>{{testResult.domain}}</strong>
+            @if (testResult.blocked) {
+              <span>Would be BLOCKED</span>
+              @if (testResult.source) {
+                <span class="source-info">by {{testResult.source}}</span>
+              }
+            } @else {
+              <span>Would be ALLOWED</span>
+            }
+          </div>
+        </div>
+      }
+    </div>
+  </mat-card>
+</div>

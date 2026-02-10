@@ -14,27 +14,31 @@ import (
 
 // Bucket names
 var (
-	BucketTenants        = []byte("tenants")
-	BucketUsers          = []byte("users")
-	BucketAPIKeys        = []byte("api_keys")
-	BucketSessions       = []byte("sessions")
-	BucketZones          = []byte("zones")
-	BucketRecords        = []byte("records")
-	BucketDNSSECKeys     = []byte("dnssec_keys")
-	BucketDelegations    = []byte("delegations")
-	BucketSecondaryZones = []byte("secondary_zones")
-	BucketViews          = []byte("views")
-	BucketBlocklist      = []byte("blocklist")
-	BucketConfig         = []byte("config")
-	BucketSettings       = []byte("settings")
-	BucketCertificates   = []byte("certificates")
-	BucketCache          = []byte("cache")
-	BucketAudit          = []byte("audit")
-	BucketQueryLog       = []byte("query_log")
-	BucketMetrics        = []byte("metrics")
-	BucketIndexes        = []byte("indexes")
-	BucketSyncOpLog      = []byte("sync_oplog")
-	BucketSyncPeers      = []byte("sync_peers")
+	BucketTenants           = []byte("tenants")
+	BucketUsers             = []byte("users")
+	BucketAPIKeys           = []byte("api_keys")
+	BucketSessions          = []byte("sessions")
+	BucketZones             = []byte("zones")
+	BucketRecords           = []byte("records")
+	BucketDNSSECKeys        = []byte("dnssec_keys")
+	BucketDelegations       = []byte("delegations")
+	BucketSecondaryZones    = []byte("secondary_zones")
+	BucketViews             = []byte("views")
+	BucketBlocklist         = []byte("blocklist")
+	BucketBlocklistSources  = []byte("blocklist_sources")
+	BucketBlocklistDomains  = []byte("blocklist_domains")
+	BucketBlocklistConfig   = []byte("blocklist_config")
+	BucketBlocklistWhitelist = []byte("blocklist_whitelist")
+	BucketConfig            = []byte("config")
+	BucketSettings          = []byte("settings")
+	BucketCertificates      = []byte("certificates")
+	BucketCache             = []byte("cache")
+	BucketAudit             = []byte("audit")
+	BucketQueryLog          = []byte("query_log")
+	BucketMetrics           = []byte("metrics")
+	BucketIndexes           = []byte("indexes")
+	BucketSyncOpLog         = []byte("sync_oplog")
+	BucketSyncPeers         = []byte("sync_peers")
 )
 
 // All buckets to create on init
@@ -50,6 +54,10 @@ var allBuckets = [][]byte{
 	BucketSecondaryZones,
 	BucketViews,
 	BucketBlocklist,
+	BucketBlocklistSources,
+	BucketBlocklistDomains,
+	BucketBlocklistConfig,
+	BucketBlocklistWhitelist,
 	BucketConfig,
 	BucketSettings,
 	BucketCertificates,

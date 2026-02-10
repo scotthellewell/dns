@@ -58,3 +58,13 @@ web/test-results/
 # Playwright
 playwright/.cache/
 .credentials
+# Database files (NEVER commit these - contain sensitive data)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+data.db
+*.bolt
+*.bbolt
+# Allow README in data directory
+!data/README.md

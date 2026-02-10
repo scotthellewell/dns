@@ -20,6 +20,22 @@ import (
 	"github.com/scott/dns/transfer"
 )
 
+// BlocklistChecker interface for blocklist functionality.
+type BlocklistChecker interface {
+	Check(domain string) bool
+	GetResponse() string
+	GetRedirectIP() string
+	GetConfig() *BlocklistConfig
+}
+
+// BlocklistConfig holds blocklist configuration for the server.
+type BlocklistConfig struct {
+	Enabled    bool
+	Response   string
+	RedirectIP string
+	LogBlocked bool
+}
+
 // Server represents the DNS server
 type Server struct {
 	config    *config.ParsedConfig
@@ -30,6 +46,7 @@ type Server struct {
 	secondary *secondary.Manager
 	rrl       *rrl.Limiter     // Response Rate Limiter
 	querylog  *querylog.Logger // Query Logger
+	blocklist BlocklistChecker // Blocklist checker
 	mu        sync.RWMutex
 
 	// DNSSEC key store for loading keys from database
@@ -284,6 +301,20 @@ func (s *Server) SetSecondaryCacheStore(store secondary.CacheStore) {
 	}
 }
 
+// SetBlocklist sets the blocklist checker for the server.
+func (s *Server) SetBlocklist(bl BlocklistChecker) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.blocklist = bl
+}
+
+// getBlocklist returns the current blocklist checker with read lock.
+func (s *Server) getBlocklist() BlocklistChecker {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.blocklist
+}
+
 // lookupSecondaryRecords looks up records from secondary zones
 func (s *Server) lookupSecondaryRecords(name string, qtype uint16) []dns.RR {
 	sec := s.getSecondary()
@@ -308,6 +339,127 @@ func (s *Server) GetRRL() *rrl.Limiter {
 // GetQueryLog returns the query logger for external access
 func (s *Server) GetQueryLog() *querylog.Logger {
 	return s.querylog
+}
+
+// isAuthoritative checks if the server is authoritative for the given name.
+func (s *Server) isAuthoritative(name string, cfg *config.ParsedConfig) bool {
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	
+	// Check if name matches any of our zones
+	for _, pz := range cfg.Zones {
+		zone := strings.TrimSuffix(pz.Name, ".")
+		if name == zone || strings.HasSuffix(name, "."+zone) {
+			return true
+		}
+	}
+	
+	// Check secondary zones
+	for _, sz := range cfg.SecondaryZones {
+		zone := strings.TrimSuffix(sz.Zone, ".")
+		if name == zone || strings.HasSuffix(name, "."+zone) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// sendBlockedResponse sends a blocked response based on blocklist configuration.
+func (s *Server) sendBlockedResponse(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg, bl BlocklistChecker) {
+	response := bl.GetResponse()
+	
+	switch response {
+	case "nxdomain":
+		// Return NXDOMAIN
+		m.Rcode = dns.RcodeNameError
+		m.Answer = nil
+		
+	case "zero":
+		// Return 0.0.0.0 for A queries, :: for AAAA
+		if len(r.Question) > 0 {
+			q := r.Question[0]
+			switch q.Qtype {
+			case dns.TypeA:
+				m.Answer = []dns.RR{
+					&dns.A{
+						Hdr: dns.RR_Header{
+							Name:   q.Name,
+							Rrtype: dns.TypeA,
+							Class:  dns.ClassINET,
+							Ttl:    60,
+						},
+						A: net.ParseIP("0.0.0.0").To4(),
+					},
+				}
+			case dns.TypeAAAA:
+				m.Answer = []dns.RR{
+					&dns.AAAA{
+						Hdr: dns.RR_Header{
+							Name:   q.Name,
+							Rrtype: dns.TypeAAAA,
+							Class:  dns.ClassINET,
+							Ttl:    60,
+						},
+						AAAA: net.ParseIP("::"),
+					},
+				}
+			default:
+				m.Rcode = dns.RcodeNameError
+			}
+		}
+		
+	case "redirect":
+		// Return configured redirect IP
+		redirectIP := bl.GetRedirectIP()
+		if redirectIP == "" {
+			redirectIP = "0.0.0.0"
+		}
+		ip := net.ParseIP(redirectIP)
+		if ip == nil {
+			m.Rcode = dns.RcodeNameError
+			break
+		}
+		
+		if len(r.Question) > 0 {
+			q := r.Question[0]
+			if ip.To4() != nil && q.Qtype == dns.TypeA {
+				m.Answer = []dns.RR{
+					&dns.A{
+						Hdr: dns.RR_Header{
+							Name:   q.Name,
+							Rrtype: dns.TypeA,
+							Class:  dns.ClassINET,
+							Ttl:    60,
+						},
+						A: ip.To4(),
+					},
+				}
+			} else if ip.To4() == nil && q.Qtype == dns.TypeAAAA {
+				m.Answer = []dns.RR{
+					&dns.AAAA{
+						Hdr: dns.RR_Header{
+							Name:   q.Name,
+							Rrtype: dns.TypeAAAA,
+							Class:  dns.ClassINET,
+							Ttl:    60,
+						},
+						AAAA: ip,
+					},
+				}
+			} else {
+				m.Rcode = dns.RcodeNameError
+			}
+		}
+		
+	default:
+		// Default to NXDOMAIN
+		m.Rcode = dns.RcodeNameError
+		m.Answer = nil
+	}
+	
+	if err := w.WriteMsg(m); err != nil {
+		log.Printf("WriteMsg error (blocked): %v", err)
+	}
 }
 
 // ServeDNS implements the dns.Handler interface
@@ -388,6 +540,25 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	cfg := s.getConfig()
+
+	// Blocklist check - only for recursive queries (non-authoritative domains)
+	// and only if recursion is enabled
+	if cfg.Recursion.Enabled && len(r.Question) > 0 {
+		qname := strings.ToLower(r.Question[0].Name)
+		
+		// Check if this is NOT an authoritative query (i.e., we'd need to recurse)
+		if !s.isAuthoritative(qname, cfg) {
+			bl := s.getBlocklist()
+			if bl != nil && bl.Check(qname) {
+				s.sendBlockedResponse(w, r, m, bl)
+				// Log the blocked query
+				if s.querylog != nil {
+					s.querylog.Log(clientIPStr, r, m, time.Since(startTime))
+				}
+				return
+			}
+		}
+	}
 
 	for _, q := range r.Question {
 		log.Printf("Query: %s %s (DNSSEC: %v)", dns.TypeToString[q.Qtype], q.Name, wantDNSSEC)

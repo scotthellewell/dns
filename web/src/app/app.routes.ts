@@ -5,6 +5,7 @@ import { RecordsComponent } from './records/records.component';
 import { SecondaryZonesComponent } from './secondary-zones/secondary-zones.component';
 import { TransferComponent } from './transfer/transfer.component';
 import { RecursionComponent } from './recursion/recursion.component';
+import { BlocklistComponent } from './blocklist/blocklist.component';
 import { NetworkComponent } from './network/network.component';
 import { LoginComponent } from './login/login.component';
 import { ProfileComponent } from './profile/profile.component';
@@ -27,6 +28,7 @@ export const routes: Routes = [
   { path: 'secondary-zones', component: SecondaryZonesComponent, canActivate: [authGuard] },
   { path: 'transfer', component: TransferComponent, canActivate: [authGuard] },
   { path: 'recursion', component: RecursionComponent, canActivate: [superAdminGuard] },
+  { path: 'blocklist', component: BlocklistComponent, canActivate: [superAdminGuard] },
   { path: 'network', component: NetworkComponent, canActivate: [superAdminGuard] },
   { path: 'cluster-sync', component: ClusterSyncComponent, canActivate: [superAdminGuard] },
   { path: 'tenants', component: TenantsComponent, canActivate: [superAdminGuard] },
