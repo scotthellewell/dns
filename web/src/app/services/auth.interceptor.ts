@@ -12,9 +12,12 @@ export const authInterceptor: HttpInterceptorFn = (
   const authService = inject(AuthService);
   const router = inject(Router);
 
+  console.log('[Interceptor] Request:', request.method, request.url);
+
   // Skip auth header for auth status and login endpoints
   const skipAuth = ['/api/auth/status', '/api/auth/login', '/api/auth/logout', '/api/auth/oidc/providers'];
   if (skipAuth.some(url => request.url.includes(url))) {
+    console.log('[Interceptor] Skipping auth for:', request.url);
     return next(request);
   }
 

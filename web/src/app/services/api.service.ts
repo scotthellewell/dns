@@ -679,11 +679,13 @@ export class ApiService {
   }
 
   getBlocklistWhitelist(): Observable<string[]> {
-    return this.http.get<string[]>(`${this.baseUrl}/blocklist/whitelist`);
+    return this.http.get<{ whitelist: string[]; count: number }>(`${this.baseUrl}/blocklist/whitelist`).pipe(
+      map(response => response.whitelist || [])
+    );
   }
 
   addBlocklistWhitelist(domain: string): Observable<any> {
-    return this.http.post(`${this.baseUrl}/blocklist/whitelist`, { domain });
+    return this.http.post(`${this.baseUrl}/blocklist/whitelist`, { domains: [domain] });
   }
 
   removeBlocklistWhitelist(domain: string): Observable<any> {

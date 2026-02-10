@@ -372,19 +372,24 @@ func (m *Manager) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[auth] handleAuthStatus called from %s", r.RemoteAddr)
 	if r.Method != "GET" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	log.Printf("[auth] Building auth status response...")
 	response := map[string]interface{}{
 		"auth_enabled": m.IsEnabled(),
 		"needs_setup":  m.NeedsSetup(),
 	}
 
 	// Check if user is authenticated
+	log.Printf("[auth] Authenticating request...")
 	session, err := m.authenticateRequest(r)
+	log.Printf("[auth] authenticateRequest returned: session=%v, err=%v", session != nil, err)
 	if err == nil && session != nil {
+		log.Printf("[auth] User authenticated: %s (role: %s)", session.Username, session.Role)
 		response["authenticated"] = true
 		response["user"] = map[string]interface{}{
 			"id":             session.UserID,
@@ -397,6 +402,7 @@ func (m *Manager) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		response["auth_method"] = session.AuthMethod
 		response["expires_at"] = session.ExpiresAt
 	} else {
+		log.Printf("[auth] User not authenticated")
 		response["authenticated"] = false
 	}
 
@@ -411,6 +417,7 @@ func (m *Manager) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	response["auth_methods"] = methods
 
+	log.Printf("[auth] Sending auth status response: authenticated=%v", response["authenticated"])
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }

@@ -270,7 +270,8 @@ export class BlocklistComponent implements OnInit {
     return `${Math.round(minutes / 1440)} days`;
   }
 
-  formatEntryCount(count: number): string {
+  formatEntryCount(count: number | undefined): string {
+    if (count === undefined || count === null) return '0';
     if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
     if (count >= 1000) return `${(count / 1000).toFixed(0)}K`;
     return count.toString();

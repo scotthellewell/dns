@@ -847,30 +847,42 @@ func (m *Manager) MiddlewareFunc(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (m *Manager) authenticateRequest(r *http.Request) (*Session, error) {
+	log.Printf("[auth] authenticateRequest: checking headers...")
+	
 	// Check for API key in header
 	if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
+		log.Printf("[auth] Found X-API-Key header")
 		return m.AuthenticateAPIKey(apiKey)
 	}
 
 	// Check for Bearer token (API key)
 	if auth := r.Header.Get("Authorization"); auth != "" {
+		log.Printf("[auth] Found Authorization header: %s...", auth[:min(len(auth), 20)])
 		if strings.HasPrefix(auth, "Bearer ") {
 			token := strings.TrimPrefix(auth, "Bearer ")
+			log.Printf("[auth] Trying as session token...")
 			// Try as session token first
 			if session, err := m.ValidateSession(token); err == nil {
+				log.Printf("[auth] Valid session token for user: %s", session.Username)
 				return session, nil
 			}
+			log.Printf("[auth] Trying as API key...")
 			// Try as API key
 			if session, err := m.AuthenticateAPIKey(token); err == nil {
+				log.Printf("[auth] Valid API key for user: %s", session.Username)
 				return session, nil
 			}
+			log.Printf("[auth] Token not valid as session or API key")
 		}
 	}
 
 	// Check for session cookie
+	log.Printf("[auth] Checking for session cookie...")
 	if cookie, err := r.Cookie("session"); err == nil {
+		log.Printf("[auth] Found session cookie: %s...", cookie.Value[:min(len(cookie.Value), 10)])
 		return m.ValidateSession(cookie.Value)
 	}
+	log.Printf("[auth] No session cookie found")
 
 	return nil, ErrUnauthorized
 }

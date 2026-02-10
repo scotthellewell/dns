@@ -121,17 +121,21 @@ export class AuthService {
    * Check current authentication status
    */
   checkAuthStatus(): Observable<AuthStatus> {
+    console.log('[AuthService] checkAuthStatus() called, fetching:', `${this.baseUrl}/status`);
+    const startTime = Date.now();
     return this.http.get<AuthStatus>(`${this.baseUrl}/status`).pipe(
       tap(status => {
+        console.log('[AuthService] checkAuthStatus() received response in', Date.now() - startTime, 'ms:', status);
         this.authStatus.next(status);
         this.authEnabled.set(status.auth_enabled);
         this.isAuthenticated.set(status.authenticated);
         this.currentUser.set(status.user || null);
         this.authMethods.set(status.auth_methods || ['password']);
         this.needsSetup.set(status.needs_setup || false);
+        console.log('[AuthService] State updated - authenticated:', status.authenticated, 'user:', status.user?.username);
       }),
       catchError(err => {
-        console.error('Failed to check auth status', err);
+        console.error('[AuthService] checkAuthStatus() FAILED after', Date.now() - startTime, 'ms:', err);
         return of({
           auth_enabled: false,
           authenticated: false,
