@@ -75,6 +75,50 @@
     </div>
   </div>
 
+  <!-- Blocklist Protection Stats (Main Tenant Only) -->
+  <div *ngIf="showBlocklistStats" class="blocklist-section">
+    <h2>🛡️ DNS Protection</h2>
+    <div class="blocklist-stats-grid">
+      <div class="blocklist-stat-card" [class.active]="blocklistStats?.enabled" [class.inactive]="!blocklistStats?.enabled">
+        <div class="blocklist-icon">
+          <span *ngIf="blocklistStats?.enabled">🛡️</span>
+          <span *ngIf="!blocklistStats?.enabled">⚠️</span>
+        </div>
+        <div class="blocklist-content">
+          <div class="blocklist-value">{{ blocklistStats?.enabled ? 'Active' : 'Disabled' }}</div>
+          <div class="blocklist-label">Protection Status</div>
+        </div>
+      </div>
+
+      <div class="blocklist-stat-card highlight">
+        <div class="blocklist-icon">🚫</div>
+        <div class="blocklist-content">
+          <div class="blocklist-value">{{ formatBlockedDomains(blocklistStats?.total_entries || 0) }}</div>
+          <div class="blocklist-label">Domains Blocked</div>
+        </div>
+      </div>
+
+      <div class="blocklist-stat-card">
+        <div class="blocklist-icon">📋</div>
+        <div class="blocklist-content">
+          <div class="blocklist-value">{{ blocklistStats?.sources_enabled || 0 }}/{{ blocklistStats?.sources_count || 0 }}</div>
+          <div class="blocklist-label">Active Sources</div>
+        </div>
+      </div>
+
+      <div class="blocklist-stat-card">
+        <div class="blocklist-icon">🔒</div>
+        <div class="blocklist-content">
+          <div class="blocklist-value">{{ blocklistStats?.blocked_queries_total || 0 | number }}</div>
+          <div class="blocklist-label">Queries Blocked</div>
+        </div>
+      </div>
+    </div>
+    <div class="blocklist-footer">
+      <a routerLink="/blocklist" class="blocklist-link">Configure Blocklist →</a>
+    </div>
+  </div>
+
   <!-- Local Server Stats -->
   <div *ngIf="showClusterStats" class="section-header">
     <h2>This Server Statistics</h2>

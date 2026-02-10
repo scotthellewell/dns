@@ -1,6 +1,7 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef, inject, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ApiService, ServerStatus, PortsConfig, ClusterStatus } from '../services/api.service';
+import { RouterModule } from '@angular/router';
+import { ApiService, ServerStatus, PortsConfig, ClusterStatus, BlocklistStats } from '../services/api.service';
 import { ToastService } from '../services/toast.service';
 import { AuthService } from '../services/auth.service';
 import { TenantContextService } from '../services/tenant-context.service';
@@ -10,7 +11,7 @@ import { switchMap, catchError } from 'rxjs/operators';
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, RouterModule],
   templateUrl: './dashboard.component.html',
   styleUrls: ['./dashboard.component.scss']
 })
@@ -22,6 +23,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
   status: ServerStatus | null = null;
   portsConfig: PortsConfig | null = null;
   clusterStatus: ClusterStatus | null = null;
+  blocklistStats: BlocklistStats | null = null;
   private subscription?: Subscription;
   private hasShownError = false;
 
@@ -43,13 +45,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
         
         return forkJoin({
           status: this.api.getStatus(tenantId),
-          cluster: shouldLoadCluster ? this.api.getSyncStatus().pipe(catchError(() => of(null))) : of(null)
+          cluster: shouldLoadCluster ? this.api.getSyncStatus().pipe(catchError(() => of(null))) : of(null),
+          blocklist: shouldLoadCluster ? this.api.getBlocklistStats().pipe(catchError(() => of(null))) : of(null)
         });
       })
     ).subscribe({
       next: (result) => {
         this.status = result.status;
         this.clusterStatus = result.cluster;
+        this.blocklistStats = result.blocklist;
         this.hasShownError = false;
         this.cdr.detectChanges();
       },
@@ -75,12 +79,14 @@ export class DashboardComponent implements OnInit, OnDestroy {
     forkJoin({
       status: this.api.getStatus(tenantId),
       ports: this.api.getPorts(),
-      cluster: shouldLoadCluster ? this.api.getSyncStatus().pipe(catchError(() => of(null))) : of(null)
+      cluster: shouldLoadCluster ? this.api.getSyncStatus().pipe(catchError(() => of(null))) : of(null),
+      blocklist: shouldLoadCluster ? this.api.getBlocklistStats().pipe(catchError(() => of(null))) : of(null)
     }).subscribe({
       next: (result) => {
         this.status = result.status;
         this.portsConfig = result.ports;
         this.clusterStatus = result.cluster;
+        this.blocklistStats = result.blocklist;
         this.cdr.detectChanges();
       },
       error: (err) => {
@@ -94,9 +100,19 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return this.authService.isSuperAdmin() && this.tenantContext.isMainTenantSelected() && !!this.clusterStatus;
   }
 
+  get showBlocklistStats(): boolean {
+    return this.authService.isSuperAdmin() && this.tenantContext.isMainTenantSelected();
+  }
+
   getConnectedPeers(): number {
     if (!this.clusterStatus?.peers) return 0;
     return this.clusterStatus.peers.filter(p => p.connected).length;
+  }
+
+  formatBlockedDomains(count: number): string {
+    if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
+    if (count >= 1000) return `${(count / 1000).toFixed(0)}K`;
+    return count.toString();
   }
 
   getTotalPeers(): number {

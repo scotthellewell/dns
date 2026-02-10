@@ -265,3 +265,97 @@
     color: #f1f5f9;
   }
 }
+
+// Blocklist Protection Section
+.blocklist-section {
+  margin-bottom: 32px;
+  background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+  border: 1px solid #3730a3;
+  border-radius: 16px;
+  padding: 24px;
+
+  h2 {
+    margin: 0 0 20px 0;
+    color: #a5b4fc;
+    font-size: 1.25rem;
+  }
+}
+
+.blocklist-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.blocklist-stat-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: transform 0.2s, box-shadow 0.2s;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  &.active {
+    border-color: #22c55e;
+    background: rgba(34, 197, 94, 0.1);
+  }
+
+  &.inactive {
+    border-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.1);
+  }
+
+  &.highlight {
+    border-color: #8b5cf6;
+    background: rgba(139, 92, 246, 0.15);
+  }
+
+  .blocklist-icon {
+    font-size: 1.75rem;
+    line-height: 1;
+  }
+
+  .blocklist-content {
+    flex: 1;
+
+    .blocklist-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #f1f5f9;
+      line-height: 1.2;
+    }
+
+    .blocklist-label {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 2px;
+    }
+  }
+}
+
+.blocklist-footer {
+  margin-top: 16px;
+  text-align: right;
+
+  .blocklist-link {
+    color: #a5b4fc;
+    text-decoration: none;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: color 0.2s;
+
+    &:hover {
+      color: #c7d2fe;
+      text-decoration: underline;
+    }
+  }
+}
