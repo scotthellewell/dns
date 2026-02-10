@@ -3,6 +3,7 @@ package sync
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -311,6 +312,49 @@ func (o *OpLog) PruneTombstones(olderThan time.Duration) (int64, error) {
 	return pruned, err
 }
 
+// PruneOldEntries removes ALL entries older than the given duration
+// This is more aggressive than PruneTombstones and helps keep the oplog small
+func (o *OpLog) PruneOldEntries(olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-olderThan)
+	var pruned int64
+
+	err := o.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(oplogBucket)
+		if b == nil {
+			return nil
+		}
+
+		var keysToDelete [][]byte
+		c := b.Cursor()
+
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var entry OpLogEntry
+			if err := json.Unmarshal(v, &entry); err != nil {
+				continue
+			}
+
+			if entry.Timestamp.Before(cutoff) {
+				keysToDelete = append(keysToDelete, k)
+			}
+		}
+
+		for _, key := range keysToDelete {
+			if err := b.Delete(key); err != nil {
+				return err
+			}
+			pruned++
+		}
+
+		return nil
+	})
+
+	if pruned > 0 {
+		log.Printf("[oplog] Pruned %d old entries (older than %v)", pruned, olderThan)
+	}
+
+	return pruned, err
+}
+
 // SavePeerState saves the state for a peer
 func (o *OpLog) SavePeerState(state *PeerState) error {
 	return o.db.Update(func(tx *bolt.Tx) error {
@@ -387,20 +431,33 @@ func (o *OpLog) CurrentHLC() HybridLogicalClock {
 // for each one. This is useful for re-applying entries that were stored but not
 // processed (e.g., when a new entity type handler is added).
 func (o *OpLog) ReplayAllEntries(callback func(entry *OpLogEntry) error) error {
-	return o.db.View(func(tx *bolt.Tx) error {
+	log.Printf("[oplog] ReplayAllEntries starting View transaction...")
+	err := o.db.View(func(tx *bolt.Tx) error {
+		log.Printf("[oplog] Inside View transaction, getting bucket...")
 		b := tx.Bucket(oplogBucket)
 		if b == nil {
+			log.Printf("[oplog] Bucket is nil, returning")
 			return nil
 		}
 
-		return b.ForEach(func(k, v []byte) error {
+		count := 0
+		log.Printf("[oplog] Starting ForEach over oplog entries...")
+		err := b.ForEach(func(k, v []byte) error {
+			count++
+			if count%500 == 0 {
+				log.Printf("[oplog] ReplayAllEntries processed %d entries...", count)
+			}
 			var entry OpLogEntry
 			if err := json.Unmarshal(v, &entry); err != nil {
 				return nil // Skip malformed entries
 			}
 			return callback(&entry)
 		})
+		log.Printf("[oplog] ForEach complete, processed %d total entries", count)
+		return err
 	})
+	log.Printf("[oplog] ReplayAllEntries View transaction complete, err=%v", err)
+	return err
 }
 
 // makeKey creates a sortable key from an HLC and operation ID

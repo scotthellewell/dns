@@ -53,18 +53,21 @@ func recordChange(entityType, entityID, tenantID, operation string, data interfa
 
 // Entity type constants that map to sync entity types
 const (
-	EntityTypeZone          = dnssync.EntityZone
-	EntityTypeRecord        = dnssync.EntityRecord
-	EntityTypeUser          = dnssync.EntityUser
-	EntityTypeTenant        = dnssync.EntityTenant
-	EntityTypeDNSSECKeys    = dnssync.EntityDNSSECKeys
-	EntityTypeDelegation    = dnssync.EntityDelegation
-	EntityTypeSecondaryZone = dnssync.EntitySecondaryZone
-	EntityTypeTransfer      = dnssync.EntityTransfer
-	EntityTypeRecursion     = dnssync.EntityRecursion
-	EntityTypeAPIKey        = dnssync.EntityAPIKey
-	EntityTypeSettings      = dnssync.EntitySettings
-	EntityTypeSession       = dnssync.EntitySession
+	EntityTypeZone             = dnssync.EntityZone
+	EntityTypeRecord           = dnssync.EntityRecord
+	EntityTypeUser             = dnssync.EntityUser
+	EntityTypeTenant           = dnssync.EntityTenant
+	EntityTypeDNSSECKeys       = dnssync.EntityDNSSECKeys
+	EntityTypeDelegation       = dnssync.EntityDelegation
+	EntityTypeSecondaryZone    = dnssync.EntitySecondaryZone
+	EntityTypeTransfer         = dnssync.EntityTransfer
+	EntityTypeRecursion        = dnssync.EntityRecursion
+	EntityTypeAPIKey           = dnssync.EntityAPIKey
+	EntityTypeSettings         = dnssync.EntitySettings
+	EntityTypeSession          = dnssync.EntitySession
+	EntityTypeBlocklistConfig  = dnssync.EntityBlocklistConfig
+	EntityTypeBlocklistSource  = dnssync.EntityBlocklistSource
+	EntityTypeBlocklistWhitelist = dnssync.EntityBlocklistWhitelist
 )
 
 // Operation constants

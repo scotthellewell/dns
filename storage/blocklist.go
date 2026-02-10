@@ -57,7 +57,7 @@ func (s *Store) GetBlocklistConfig() (*BlocklistConfig, error) {
 
 // SaveBlocklistConfig saves the blocklist configuration.
 func (s *Store) SaveBlocklistConfig(config *BlocklistConfig) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(BucketBlocklistConfig)
 		if bucket == nil {
 			return fmt.Errorf("bucket not found")
@@ -68,6 +68,11 @@ func (s *Store) SaveBlocklistConfig(config *BlocklistConfig) error {
 		}
 		return bucket.Put([]byte("config"), data)
 	})
+	if err == nil {
+		// Record change for sync so blocklist config works across all cluster servers
+		recordChange(EntityTypeBlocklistConfig, "config", "", OpUpdate, config)
+	}
+	return err
 }
 
 // GetBlocklistSources retrieves all blocklist sources.
@@ -112,7 +117,7 @@ func (s *Store) GetBlocklistSource(id string) (*BlocklistSource, error) {
 
 // SaveBlocklistSource saves a blocklist source.
 func (s *Store) SaveBlocklistSource(source *BlocklistSource) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(BucketBlocklistSources)
 		if bucket == nil {
 			return fmt.Errorf("bucket not found")
@@ -123,11 +128,16 @@ func (s *Store) SaveBlocklistSource(source *BlocklistSource) error {
 		}
 		return bucket.Put([]byte(source.ID), data)
 	})
+	if err == nil {
+		// Record change for sync so blocklist sources work across all cluster servers
+		recordChange(EntityTypeBlocklistSource, source.ID, "", OpUpdate, source)
+	}
+	return err
 }
 
 // DeleteBlocklistSource deletes a blocklist source.
 func (s *Store) DeleteBlocklistSource(id string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(BucketBlocklistSources)
 		if bucket == nil {
 			return ErrNotFound
@@ -137,6 +147,11 @@ func (s *Store) DeleteBlocklistSource(id string) error {
 		}
 		return bucket.Delete([]byte(id))
 	})
+	if err == nil {
+		// Record change for sync
+		recordChange(EntityTypeBlocklistSource, id, "", OpDelete, nil)
+	}
+	return err
 }
 
 // GetBlocklistWhitelist retrieves the blocklist whitelist.
@@ -157,7 +172,7 @@ func (s *Store) GetBlocklistWhitelist() ([]string, error) {
 
 // SaveBlocklistWhitelist saves the blocklist whitelist.
 func (s *Store) SaveBlocklistWhitelist(entries []string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(BucketBlocklistWhitelist)
 		if bucket == nil {
 			return fmt.Errorf("bucket not found")
@@ -179,6 +194,11 @@ func (s *Store) SaveBlocklistWhitelist(entries []string) error {
 		}
 		return nil
 	})
+	if err == nil {
+		// Record change for sync so blocklist whitelist works across all cluster servers
+		recordChange(EntityTypeBlocklistWhitelist, "whitelist", "", OpUpdate, entries)
+	}
+	return err
 }
 
 // AddBlockedDomains adds blocked domains for a source.

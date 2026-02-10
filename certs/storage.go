@@ -51,6 +51,7 @@ func (a *certStorageAdapter) StoreCertificate(domain string, certPEM, keyPEM []b
 
 // NewManagerWithStorage creates a certificate manager backed by storage
 func NewManagerWithStorage(store StorageInterface) *Manager {
+	log.Printf("[certs-storage] NewManagerWithStorage called")
 	m := &Manager{
 		// No file paths needed with storage
 		certFile:   "",
@@ -60,14 +61,18 @@ func NewManagerWithStorage(store StorageInterface) *Manager {
 	}
 
 	// Try to load existing certificate from storage
+	log.Printf("[certs-storage] Loading certificate from storage...")
 	cert, err := store.GetCertificate("default")
 	if err != nil || cert == nil {
+		log.Printf("[certs-storage] No existing certificate, generating self-signed...")
 		// No existing certificate, generate a self-signed one in-memory
 		if err := generateSelfSignedInMemory(m, "localhost", []string{"localhost"}, []string{"127.0.0.1", "::1"}); err != nil {
 			log.Printf("Warning: Failed to generate initial certificate: %v", err)
 			return nil
 		}
+		log.Printf("[certs-storage] Self-signed certificate generated")
 	} else {
+		log.Printf("[certs-storage] Certificate found, parsing...")
 		// Load from storage
 		tlsCert, err := tls.X509KeyPair([]byte(cert.CertPEM), []byte(cert.KeyPEM))
 		if err != nil {
@@ -84,8 +89,10 @@ func NewManagerWithStorage(store StorageInterface) *Manager {
 			DNSNames:      cert.DNSNames,
 			IPAddresses:   cert.IPAddresses,
 		}
+		log.Printf("[certs-storage] Certificate loaded successfully")
 	}
 
+	log.Printf("[certs-storage] Returning manager")
 	return m
 }
 

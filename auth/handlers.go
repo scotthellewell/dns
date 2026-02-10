@@ -372,24 +372,35 @@ func (m *Manager) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[auth] handleAuthStatus called from %s", r.RemoteAddr)
+	log.Printf("[auth-status] ====== START handleAuthStatus ======")
+	log.Printf("[auth-status] Called from %s, Method: %s", r.RemoteAddr, r.Method)
+	
 	if r.Method != "GET" {
+		log.Printf("[auth-status] Method not allowed: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	log.Printf("[auth] Building auth status response...")
+	log.Printf("[auth-status] Calling m.IsEnabled()...")
+	isEnabled := m.IsEnabled()
+	log.Printf("[auth-status] IsEnabled() returned: %v", isEnabled)
+	
+	log.Printf("[auth-status] Calling m.NeedsSetup()...")
+	needsSetup := m.NeedsSetup()
+	log.Printf("[auth-status] NeedsSetup() returned: %v", needsSetup)
+	
+	log.Printf("[auth-status] Building response map...")
 	response := map[string]interface{}{
-		"auth_enabled": m.IsEnabled(),
-		"needs_setup":  m.NeedsSetup(),
+		"auth_enabled": isEnabled,
+		"needs_setup":  needsSetup,
 	}
 
 	// Check if user is authenticated
-	log.Printf("[auth] Authenticating request...")
+	log.Printf("[auth-status] Calling authenticateRequest()...")
 	session, err := m.authenticateRequest(r)
-	log.Printf("[auth] authenticateRequest returned: session=%v, err=%v", session != nil, err)
+	log.Printf("[auth-status] authenticateRequest returned: session=%v, err=%v", session != nil, err)
 	if err == nil && session != nil {
-		log.Printf("[auth] User authenticated: %s (role: %s)", session.Username, session.Role)
+		log.Printf("[auth-status] User authenticated: %s (role: %s)", session.Username, session.Role)
 		response["authenticated"] = true
 		response["user"] = map[string]interface{}{
 			"id":             session.UserID,
@@ -402,12 +413,15 @@ func (m *Manager) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		response["auth_method"] = session.AuthMethod
 		response["expires_at"] = session.ExpiresAt
 	} else {
-		log.Printf("[auth] User not authenticated")
+		log.Printf("[auth-status] User not authenticated")
 		response["authenticated"] = false
 	}
 
 	// Include available auth methods
+	log.Printf("[auth-status] Calling m.GetConfig()...")
 	config := m.GetConfig()
+	log.Printf("[auth-status] GetConfig() returned successfully")
+	
 	methods := []string{"password"}
 	if config.WebAuthn != nil && config.WebAuthn.Enabled {
 		methods = append(methods, "webauthn")
@@ -417,9 +431,16 @@ func (m *Manager) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	response["auth_methods"] = methods
 
-	log.Printf("[auth] Sending auth status response: authenticated=%v", response["authenticated"])
+	log.Printf("[auth-status] Setting Content-Type header...")
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	
+	log.Printf("[auth-status] Encoding JSON response...")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("[auth-status] ERROR encoding response: %v", err)
+	} else {
+		log.Printf("[auth-status] Response sent successfully: authenticated=%v", response["authenticated"])
+	}
+	log.Printf("[auth-status] ====== END handleAuthStatus ======")
 }
 
 func (m *Manager) handleMe(w http.ResponseWriter, r *http.Request) {

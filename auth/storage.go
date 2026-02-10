@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,7 @@ type StorageManager struct {
 
 // NewManagerWithStorage creates a new auth manager using storage backend
 func NewManagerWithStorage(store StorageInterface) *Manager {
+	log.Printf("[auth-storage] NewManagerWithStorage called")
 	sm := &StorageManager{
 		store: store,
 		config: &AuthConfig{
@@ -68,9 +70,12 @@ func NewManagerWithStorage(store StorageInterface) *Manager {
 	}
 
 	// Load OIDC/WebAuthn config from storage if available
+	log.Printf("[auth-storage] Loading config from storage...")
 	sm.loadConfig()
+	log.Printf("[auth-storage] Config loaded")
 
 	// Return a Manager that wraps the storage manager
+	log.Printf("[auth-storage] Creating Manager instance...")
 	return &Manager{
 		config:         sm.config,
 		sessions:       make(map[string]*Session),
@@ -225,7 +230,10 @@ func (sm *StorageManager) createSession(user *storage.User, authMethod string) (
 
 // ValidateSession validates a session token
 func (sm *StorageManager) ValidateSession(sessionID string) (*Session, error) {
+	log.Printf("[auth-storage-validate] ValidateSession called for sessionID=%s...", sessionID[:min(len(sessionID), 20)])
+	log.Printf("[auth-storage-validate] Calling store.GetSession...")
 	storageSession, err := sm.store.GetSession(sessionID)
+	log.Printf("[auth-storage-validate] store.GetSession returned: session=%v, err=%v", storageSession != nil, err)
 	if err != nil {
 		return nil, ErrUnauthorized
 	}
@@ -594,11 +602,16 @@ func (sm *StorageManager) GetConfig() AuthConfig {
 
 // NeedsSetup returns true if initial setup is required (no users exist)
 func (sm *StorageManager) NeedsSetup() bool {
+	log.Printf("[auth-storage-needssetup] NeedsSetup() called, calling store.CountUsers...")
 	count, err := sm.store.CountUsers("")
+	log.Printf("[auth-storage-needssetup] CountUsers returned: count=%d, err=%v", count, err)
 	if err != nil {
+		log.Printf("[auth-storage-needssetup] Error counting users, returning true")
 		return true // Assume setup needed if we can't count
 	}
-	return count == 0
+	result := count == 0
+	log.Printf("[auth-storage-needssetup] Returning: %v", result)
+	return result
 }
 
 // Setup performs initial setup creating the main tenant and super admin user

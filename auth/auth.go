@@ -299,14 +299,21 @@ func (m *Manager) GetConfig() AuthConfig {
 
 // IsEnabled returns whether auth is enabled
 func (m *Manager) IsEnabled() bool {
+	log.Printf("[auth-isenabled] IsEnabled() called, storageManager=%v", m.storageManager != nil)
 	// Storage manager is always enabled
 	if m.storageManager != nil {
-		return m.storageManager.IsEnabled()
+		log.Printf("[auth-isenabled] Calling storageManager.IsEnabled()...")
+		result := m.storageManager.IsEnabled()
+		log.Printf("[auth-isenabled] storageManager.IsEnabled() returned: %v", result)
+		return result
 	}
 
+	log.Printf("[auth-isenabled] No storageManager, checking config...")
 	m.configMu.RLock()
 	defer m.configMu.RUnlock()
-	return m.config != nil && m.config.Enabled
+	result := m.config != nil && m.config.Enabled
+	log.Printf("[auth-isenabled] config-based result: %v", result)
+	return result
 }
 
 // HashPassword hashes a password using bcrypt
@@ -1072,14 +1079,21 @@ func (m *Manager) GetWebAuthnCredentials(userID string) ([]WebAuthnCredential, e
 
 // NeedsSetup returns true if initial setup is required (no users exist)
 func (m *Manager) NeedsSetup() bool {
+	log.Printf("[auth-needssetup] NeedsSetup() called, storageManager=%v", m.storageManager != nil)
 	// Delegate to storage manager if available
 	if m.storageManager != nil {
-		return m.storageManager.NeedsSetup()
+		log.Printf("[auth-needssetup] Calling storageManager.NeedsSetup()...")
+		result := m.storageManager.NeedsSetup()
+		log.Printf("[auth-needssetup] storageManager.NeedsSetup() returned: %v", result)
+		return result
 	}
 
+	log.Printf("[auth-needssetup] No storageManager, checking config...")
 	m.configMu.RLock()
 	defer m.configMu.RUnlock()
-	return len(m.config.Users) == 0
+	result := len(m.config.Users) == 0
+	log.Printf("[auth-needssetup] config-based result: %v", result)
+	return result
 }
 
 // Setup performs initial setup creating the main tenant and super admin user

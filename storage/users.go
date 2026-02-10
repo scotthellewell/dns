@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -318,14 +319,19 @@ func (s *Store) GetUserByCredentialID(credentialID []byte) (*User, error) {
 
 // CountUsers returns the number of users, optionally filtered by tenant.
 func (s *Store) CountUsers(tenantID string) (int, error) {
+	log.Printf("[storage-countusers] CountUsers called with tenantID=%q", tenantID)
 	count := 0
 
+	log.Printf("[storage-countusers] Starting db.View transaction...")
 	err := s.db.View(func(tx *bolt.Tx) error {
+		log.Printf("[storage-countusers] Inside View transaction, getting BucketUsers...")
 		b := tx.Bucket(BucketUsers)
 		if b == nil {
+			log.Printf("[storage-countusers] BucketUsers is nil, returning")
 			return nil
 		}
 
+		log.Printf("[storage-countusers] Iterating through users...")
 		return b.ForEach(func(k, v []byte) error {
 			if tenantID == "" {
 				count++
@@ -341,6 +347,7 @@ func (s *Store) CountUsers(tenantID string) (int, error) {
 		})
 	})
 
+	log.Printf("[storage-countusers] View transaction complete, count=%d, err=%v", count, err)
 	return count, err
 }
 

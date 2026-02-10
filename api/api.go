@@ -303,31 +303,41 @@ type StatusResponse struct {
 }
 
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[api-status] handleStatus called from %s", r.RemoteAddr)
+	
 	if r.Method != "GET" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	log.Printf("[api-status] Acquiring configMu.RLock...")
 	h.configMu.RLock()
+	log.Printf("[api-status] configMu.RLock acquired")
 	cfg := h.config
 	h.configMu.RUnlock()
+	log.Printf("[api-status] configMu.RUnlock done")
 
+	log.Printf("[api-status] Acquiring stats.mu.RLock...")
 	h.stats.mu.RLock()
+	log.Printf("[api-status] stats.mu.RLock acquired")
 	queryTypes := make(map[string]uint64)
 	for k, v := range h.stats.QueriesByType {
 		queryTypes[k] = v
 	}
 	h.stats.mu.RUnlock()
+	log.Printf("[api-status] stats.mu.RUnlock done")
 
 	uptime := time.Since(h.stats.StartTime)
 
 	// Check for tenant filter
 	tenantID := r.URL.Query().Get("tenant_id")
+	log.Printf("[api-status] tenantID=%s", tenantID)
 
 	// Try to use storage for tenant-filtered counts
 	var zoneCount, recordCount, secondaryZoneCount int
 
 	if store, ok := h.store.(*storage.Store); ok && tenantID != "" {
+		log.Printf("[api-status] Using storage for tenant-filtered counts...")
 		// Use storage for tenant-filtered counts
 		zones, _ := store.ListZones(tenantID)
 		zoneCount = len(zones)
@@ -345,7 +355,9 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 				secondaryZoneCount++
 			}
 		}
+		log.Printf("[api-status] Tenant counts done: zones=%d, records=%d", zoneCount, recordCount)
 	} else {
+		log.Printf("[api-status] Using config for counts (no tenant filter)...")
 		// No tenant filter or no storage - return all from config
 		zoneCount = len(cfg.Zones)
 		recordCount = len(cfg.ARecords) + len(cfg.AAAARecords) + len(cfg.MXRecords) +
@@ -353,6 +365,7 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 			len(cfg.CNAMERecords) + len(cfg.SRVRecords) + len(cfg.CAARecords) +
 			len(cfg.PTRRecords)
 		secondaryZoneCount = len(cfg.SecondaryZones)
+		log.Printf("[api-status] Config counts done: zones=%d, records=%d", zoneCount, recordCount)
 	}
 
 	resp := StatusResponse{
@@ -367,7 +380,9 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		SecondaryZones: secondaryZoneCount,
 	}
 
+	log.Printf("[api-status] Sending JSON response...")
 	h.jsonResponse(w, resp)
+	log.Printf("[api-status] handleStatus complete")
 }
 
 func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {

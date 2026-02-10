@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -35,10 +36,14 @@ func (s *Store) CreateSession(session *Session) error {
 
 // GetSession retrieves a session by ID.
 func (s *Store) GetSession(id string) (*Session, error) {
+	log.Printf("[storage-getsession] GetSession called for id=%s...", id[:min(len(id), 20)])
 	var session Session
+	log.Printf("[storage-getsession] Starting db.View transaction...")
 	err := s.db.View(func(tx *bolt.Tx) error {
+		log.Printf("[storage-getsession] Inside View transaction, calling getJSON...")
 		return getJSON(tx, BucketSessions, id, &session)
 	})
+	log.Printf("[storage-getsession] db.View returned, err=%v", err)
 	if err != nil {
 		return nil, err
 	}
@@ -50,6 +55,7 @@ func (s *Store) GetSession(id string) (*Session, error) {
 		return nil, ErrNotFound
 	}
 
+	log.Printf("[storage-getsession] Returning session for user=%s", session.Username)
 	return &session, nil
 }
 

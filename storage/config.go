@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -404,7 +405,8 @@ func (s *Store) SaveACMEState(state *ACMEState) error {
 
 // GetConfigValue retrieves a generic configuration value by key.
 func (s *Store) GetConfigValue(key string, v interface{}) error {
-	return s.db.View(func(tx *bolt.Tx) error {
+	log.Printf("[storage] GetConfigValue called for key: %s", key)
+	err := s.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("config"))
 		data := bucket.Get([]byte(key))
 		if data == nil {
@@ -412,6 +414,10 @@ func (s *Store) GetConfigValue(key string, v interface{}) error {
 		}
 		return json.Unmarshal(data, v)
 	})
+	if err != nil && err != ErrNotFound {
+		log.Printf("[storage] GetConfigValue error for key %s: %v", key, err)
+	}
+	return err
 }
 
 // SetConfigValue saves a generic configuration value by key.

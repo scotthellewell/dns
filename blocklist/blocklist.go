@@ -300,6 +300,58 @@ func (m *Manager) SetConfig(cfg *Config) error {
 	return m.store.SaveBlocklistConfig(cfg)
 }
 
+// ReloadConfig reloads the configuration from storage without saving.
+// Used by sync to update in-memory state after remote change.
+func (m *Manager) ReloadConfig() error {
+	cfg, err := m.store.GetBlocklistConfig()
+	if err != nil {
+		return err
+	}
+	if cfg != nil {
+		m.mu.Lock()
+		m.config = cfg
+		m.mu.Unlock()
+		log.Printf("[blocklist] Reloaded config from storage (enabled: %v)", cfg.Enabled)
+	}
+	return nil
+}
+
+// ReloadSources reloads all sources from storage without saving.
+// Used by sync to update in-memory state after remote change.
+func (m *Manager) ReloadSources() error {
+	sources, err := m.store.GetBlocklistSources()
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.sources = make(map[string]*Source)
+	for _, s := range sources {
+		m.sources[s.ID] = s
+	}
+	m.mu.Unlock()
+	log.Printf("[blocklist] Reloaded %d sources from storage", len(sources))
+	return nil
+}
+
+// ReloadWhitelist reloads the whitelist from storage without saving.
+// Used by sync to update in-memory state after remote change.
+func (m *Manager) ReloadWhitelist() error {
+	entries, err := m.store.GetBlocklistWhitelist()
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.whitelist = make(map[string]bool)
+	m.whitelistNet = nil
+	m.mu.Unlock()
+
+	for _, entry := range entries {
+		m.addToWhitelist(entry)
+	}
+	log.Printf("[blocklist] Reloaded %d whitelist entries from storage", len(entries))
+	return nil
+}
+
 // GetSources returns all configured sources.
 func (m *Manager) GetSources() []*Source {
 	m.mu.RLock()

@@ -43,6 +43,11 @@ type Manager struct {
 	// Config refresh callback - called after changes are applied
 	configRefreshCallback func()
 
+	// Blocklist reload callbacks - called after blocklist changes are applied
+	blocklistConfigReloadCallback    func() error
+	blocklistSourcesReloadCallback   func() error
+	blocklistWhitelistReloadCallback func() error
+
 	// Full sync data provider
 	fullSyncProvider FullSyncProvider
 
@@ -100,6 +105,24 @@ func NewManager(db *bolt.DB, config *Config) (*Manager, error) {
 		return nil, fmt.Errorf("create oplog: %w", err)
 	}
 
+	// Prune old oplog entries at startup to keep the database small
+	// This removes entries older than 1 hour to prevent massive initial syncs
+	// We use a short retention time because:
+	// 1. Sessions create lots of churn (creates/deletes)
+	// 2. The oplog is only for catching up - not long-term history
+	// 3. Peers that are offline for >1 hour should do a full sync anyway
+	count, _ := oplog.Count()
+	if count > 50 {
+		log.Printf("[sync] Oplog has %d entries, pruning entries older than 1 hour...", count)
+		pruned, err := oplog.PruneOldEntries(1 * time.Hour)
+		if err != nil {
+			log.Printf("[sync] Warning: failed to prune oplog: %v", err)
+		} else if pruned > 0 {
+			newCount, _ := oplog.Count()
+			log.Printf("[sync] Pruned %d old entries, %d entries remaining", pruned, newCount)
+		}
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	m := &Manager{
@@ -130,6 +153,13 @@ func (m *Manager) SetApplyCallback(cb ApplyCallback) {
 // SetConfigRefreshCallback sets the callback for refreshing DNS config after changes
 func (m *Manager) SetConfigRefreshCallback(cb func()) {
 	m.configRefreshCallback = cb
+}
+
+// SetBlocklistReloadCallbacks sets the callbacks for reloading blocklist state after sync changes
+func (m *Manager) SetBlocklistReloadCallbacks(configReload, sourcesReload, whitelistReload func() error) {
+	m.blocklistConfigReloadCallback = configReload
+	m.blocklistSourcesReloadCallback = sourcesReload
+	m.blocklistWhitelistReloadCallback = whitelistReload
 }
 
 // SetFullSyncProvider sets the callback for providing full sync data
@@ -934,9 +964,33 @@ func (p *peerConn) handleChange(payload *ChangePayload) {
 	if applied && p.manager.applyCallback != nil {
 		if err := p.manager.applyCallback(entry); err != nil {
 			log.Printf("[sync] Apply callback failed for %s: %v", entry.ID, err)
-		} else if p.manager.configRefreshCallback != nil {
-			// Trigger config refresh after successful apply
-			p.manager.configRefreshCallback()
+		} else {
+			// Trigger appropriate reload based on entity type
+			switch entry.EntityType {
+			case EntityBlocklistConfig:
+				if p.manager.blocklistConfigReloadCallback != nil {
+					if err := p.manager.blocklistConfigReloadCallback(); err != nil {
+						log.Printf("[sync] Blocklist config reload failed: %v", err)
+					}
+				}
+			case EntityBlocklistSource:
+				if p.manager.blocklistSourcesReloadCallback != nil {
+					if err := p.manager.blocklistSourcesReloadCallback(); err != nil {
+						log.Printf("[sync] Blocklist sources reload failed: %v", err)
+					}
+				}
+			case EntityBlocklistWhitelist:
+				if p.manager.blocklistWhitelistReloadCallback != nil {
+					if err := p.manager.blocklistWhitelistReloadCallback(); err != nil {
+						log.Printf("[sync] Blocklist whitelist reload failed: %v", err)
+					}
+				}
+			default:
+				// For zone/record/other changes, trigger config refresh
+				if p.manager.configRefreshCallback != nil {
+					p.manager.configRefreshCallback()
+				}
+			}
 		}
 	}
 
@@ -990,8 +1044,15 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 
 	appliedCount := 0
 	var highestHLC HybridLogicalClock
+	startTime := time.Now()
 	
-	for _, entry := range payload.Entries {
+	// Track which entity types were modified for reload callbacks
+	modifiedBlocklistConfig := false
+	modifiedBlocklistSources := false
+	modifiedBlocklistWhitelist := false
+	modifiedOther := false
+	
+	for i, entry := range payload.Entries {
 		entryCopy := entry // avoid loop variable capture
 		
 		// Track the highest HLC we've seen from this peer, regardless of whether we apply it
@@ -1010,10 +1071,37 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 			if p.manager.applyCallback != nil {
 				if err := p.manager.applyCallback(&entryCopy); err != nil {
 					log.Printf("[sync] Apply callback failed for %s: %v", entry.ID, err)
+				} else {
+					// Track which entity types were modified
+					switch entryCopy.EntityType {
+					case EntityBlocklistConfig:
+						modifiedBlocklistConfig = true
+					case EntityBlocklistSource:
+						modifiedBlocklistSources = true
+					case EntityBlocklistWhitelist:
+						modifiedBlocklistWhitelist = true
+					default:
+						modifiedOther = true
+					}
 				}
 			}
 		}
+		
+		// Log progress every 100 entries
+		if (i+1) % 100 == 0 {
+			log.Printf("[sync] Processed %d/%d entries from %s...", i+1, len(payload.Entries), p.serverID)
+		}
+		
+		// Yield periodically to allow other goroutines to run
+		// This prevents the sync from monopolizing the database lock
+		if (i+1) % 50 == 0 {
+			time.Sleep(time.Millisecond)
+		}
 	}
+	
+	elapsed := time.Since(startTime)
+	log.Printf("[sync] Finished processing %d entries from %s in %v (applied: %d)", 
+		len(payload.Entries), p.serverID, elapsed, appliedCount)
 	
 	// Update last HLC to the highest we've seen, even if entries were duplicates
 	// This prevents re-requesting the same entries on every sync
@@ -1023,8 +1111,24 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 
 	if appliedCount > 0 {
 		log.Printf("[sync] Applied %d new entries from %s", appliedCount, p.serverID)
-		// Trigger config refresh after successful batch apply
-		if p.manager.configRefreshCallback != nil {
+		
+		// Trigger appropriate reload callbacks based on what was modified
+		if modifiedBlocklistConfig && p.manager.blocklistConfigReloadCallback != nil {
+			if err := p.manager.blocklistConfigReloadCallback(); err != nil {
+				log.Printf("[sync] Blocklist config reload failed: %v", err)
+			}
+		}
+		if modifiedBlocklistSources && p.manager.blocklistSourcesReloadCallback != nil {
+			if err := p.manager.blocklistSourcesReloadCallback(); err != nil {
+				log.Printf("[sync] Blocklist sources reload failed: %v", err)
+			}
+		}
+		if modifiedBlocklistWhitelist && p.manager.blocklistWhitelistReloadCallback != nil {
+			if err := p.manager.blocklistWhitelistReloadCallback(); err != nil {
+				log.Printf("[sync] Blocklist whitelist reload failed: %v", err)
+			}
+		}
+		if modifiedOther && p.manager.configRefreshCallback != nil {
 			p.manager.configRefreshCallback()
 		}
 	}

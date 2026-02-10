@@ -261,13 +261,17 @@ func main() {
 	})
 
 	// Initialize auth manager with storage backend
+	log.Printf("[init] Creating auth manager...")
 	authMgr := auth.NewManagerWithStorage(store)
+	log.Printf("[init] Auth manager created")
 	if authMgr.IsEnabled() {
 		log.Printf("Authentication enabled")
 	}
 
 	// Initialize ACME manager first (needed for SNI manager)
+	log.Printf("[init] Creating cert manager...")
 	certMgr := certs.NewManagerWithStorage(store)
+	log.Printf("[init] Cert manager created")
 	var acmeMgr *certs.ACMEManager
 	if certMgr != nil {
 		var err error
@@ -320,18 +324,24 @@ func main() {
 		srv.UpdateConfig(newCfg)
 	})
 
-	// Initialize blocklist manager with its own separate database
-	blocklistStore, err := blocklist.NewBlocklistStore(*dataDir)
+	// Initialize blocklist manager with composite storage:
+	// - Main database (store) for config, sources, whitelist (synced across cluster)
+	// - Blocklist database for domain entries only (local, not synced - too large)
+	blocklistDomainStore, err := blocklist.NewBlocklistStore(*dataDir)
 	if err != nil {
 		log.Printf("Warning: Failed to open blocklist database: %v", err)
 	}
 	
 	var blocklistMgr *blocklist.Manager
-	if blocklistStore != nil {
-		blocklistMgr = blocklist.New(blocklistStore)
+	if blocklistDomainStore != nil {
+		// Create adapter for main storage to implement blocklist.MainStorage interface
+		mainStorageAdapter := storage.NewBlocklistMainStorageAdapter(store)
+		// Create composite store: main db for config/sources/whitelist, blocklist.db for domains only
+		compositeStore := blocklist.NewCompositeStore(mainStorageAdapter, blocklistDomainStore)
+		blocklistMgr = blocklist.New(compositeStore)
 		
-		// Load config from storage, or use defaults
-		blocklistConfig, err := blocklistStore.GetBlocklistConfig()
+		// Load config from main storage (synced), or use defaults
+		blocklistConfig, err := compositeStore.GetBlocklistConfig()
 		if err != nil || blocklistConfig == nil {
 			// Use default config with default sources
 			blocklistConfig = &blocklist.Config{
@@ -372,6 +382,15 @@ func main() {
 				log.Printf("[sync] Config refresh failed: %v", err)
 			}
 		})
+
+		// Set up blocklist reload callbacks for sync
+		if blocklistMgr != nil {
+			syncMgr.SetBlocklistReloadCallbacks(
+				blocklistMgr.ReloadConfig,
+				blocklistMgr.ReloadSources,
+				blocklistMgr.ReloadWhitelist,
+			)
+		}
 	}
 
 	// Create web mux and start services
@@ -713,20 +732,34 @@ func initSyncManager(store *storage.Store, cfg *config.SyncConfig) *sync.Manager
 	// Repair: replay oplog entries to catch any that weren't properly applied
 	// This handles the case where an entity type was added after entries were synced
 	// Run in background to avoid blocking server startup
+	log.Printf("[init] Starting sync-repair goroutine...")
 	go func() {
+		log.Printf("[sync-repair] Goroutine started, waiting 2s before repair to let main thread proceed...")
+		time.Sleep(2 * time.Second)
+		log.Printf("[sync-repair] Starting repair process...")
 		repairSyncEntries(mgr, store)
+		log.Printf("[sync-repair] Repair process complete")
 	}()
 
+	log.Printf("[init] Sync manager initialization complete, returning...")
 	return mgr
 }
 
 // repairSyncEntries replays oplog entries from remote servers to ensure they're applied
 // This handles the case where entity type support was added after entries were synced
 func repairSyncEntries(mgr *sync.Manager, store *storage.Store) {
+	log.Printf("[sync-repair] repairSyncEntries called")
 	localServerID := mgr.ServerID()
+	log.Printf("[sync-repair] Local server ID: %s", localServerID)
 	repaired := 0
+	entryCount := 0
 
+	log.Printf("[sync-repair] Calling ReplayAllEntries...")
 	err := mgr.ReplayAllEntries(func(entry *sync.OpLogEntry) error {
+		entryCount++
+		if entryCount%100 == 0 {
+			log.Printf("[sync-repair] Processed %d oplog entries...", entryCount)
+		}
 		// Only repair entries from OTHER servers
 		if entry.ServerID == localServerID {
 			return nil
@@ -848,6 +881,8 @@ func applyDelete(store *storage.Store, entityType, entityID string) error {
 		return store.DeleteSession(entityID)
 	case sync.EntityTLSCert:
 		return store.DeleteCertificate(entityID)
+	case sync.EntityBlocklistSource:
+		return store.DeleteBlocklistSource(entityID)
 	default:
 		log.Printf("[sync] Unknown entity type for delete: %s", entityType)
 		return nil
@@ -1093,6 +1128,37 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 		}
 		log.Printf("[sync] Syncing recursion config (enabled: %v, mode: %s)", cfg.Enabled, cfg.Mode)
 		return store.UpdateRecursionConfig(&cfg)
+
+	case sync.EntityBlocklistConfig:
+		var cfg storage.BlocklistConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return err
+		}
+		log.Printf("[sync] Syncing blocklist config (enabled: %v)", cfg.Enabled)
+		return store.SaveBlocklistConfig(&cfg)
+
+	case sync.EntityBlocklistSource:
+		var source storage.BlocklistSource
+		if err := json.Unmarshal(data, &source); err != nil {
+			return err
+		}
+		existing, _ := store.GetBlocklistSource(source.ID)
+		if existing != nil {
+			if !entityHasChanged(existing, &source) {
+				log.Printf("[sync] Blocklist source %s unchanged, skipping update", source.ID)
+				return nil
+			}
+		}
+		log.Printf("[sync] Syncing blocklist source %s (enabled: %v)", source.ID, source.Enabled)
+		return store.SaveBlocklistSource(&source)
+
+	case sync.EntityBlocklistWhitelist:
+		var entries []string
+		if err := json.Unmarshal(data, &entries); err != nil {
+			return err
+		}
+		log.Printf("[sync] Syncing blocklist whitelist (%d entries)", len(entries))
+		return store.SaveBlocklistWhitelist(entries)
 
 	default:
 		log.Printf("[sync] Unknown entity type: %s", entry.EntityType)
