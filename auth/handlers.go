@@ -1,9 +1,13 @@
 package auth
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +18,7 @@ func (m *Manager) RegisterAuthRoutes(mux *http.ServeMux) {
 	// Setup endpoints (accessible when no users exist)
 	mux.HandleFunc("/api/auth/setup-status", m.corsHandler(m.handleSetupStatus))
 	mux.HandleFunc("/api/auth/setup", m.corsHandler(m.handleSetup))
+	mux.HandleFunc("/api/auth/join-cluster", m.corsHandler(m.handleJoinCluster))
 
 	// Public auth endpoints (no auth required)
 	mux.HandleFunc("/api/auth/login", m.corsHandler(m.handleLogin))
@@ -126,6 +131,163 @@ func (m *Manager) handleSetup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// JoinClusterCallback is called after successfully joining a cluster
+// to configure the sync manager
+type JoinClusterCallback func(clusterConfig *ClusterJoinConfig) error
+
+// ClusterJoinConfig contains configuration obtained from joining a cluster
+type ClusterJoinConfig struct {
+	SharedSecret string       `json:"shared_secret"`
+	Peers        []PeerConfig `json:"peers"`
+	ThisServer   PeerConfig   `json:"this_server"`
+}
+
+// PeerConfig represents a peer server configuration
+type PeerConfig struct {
+	URL      string `json:"url"`
+	Name     string `json:"name,omitempty"`
+	ServerID string `json:"server_id,omitempty"`
+}
+
+// SetJoinClusterCallback sets the callback for cluster join operations
+func (m *Manager) SetJoinClusterCallback(callback JoinClusterCallback) {
+	m.joinClusterCallback = callback
+}
+
+// ACMECertRequest contains all parameters for requesting an ACME certificate
+type ACMECertRequest struct {
+	Email       string   `json:"email"`
+	Domain      string   `json:"domain"`
+	Staging     bool     `json:"staging"`
+	Provider    string   `json:"provider"`     // letsencrypt, zerossl, buypass, google
+	EABKeyID    string   `json:"eab_key_id"`   // For ZeroSSL, Google Trust Services
+	EABHMACKey  string   `json:"eab_hmac_key"` // For ZeroSSL, Google Trust Services
+	PeerURLs    []string `json:"peer_urls"`    // URLs of peers to check for existing certs
+}
+
+// ACMECertCallback is called to request an ACME certificate before cluster join
+type ACMECertCallback func(req ACMECertRequest) error
+
+// SetACMECertCallback sets the callback for ACME certificate requests
+func (m *Manager) SetACMECertCallback(callback ACMECertCallback) {
+	m.acmeCertCallback = callback
+}
+
+// handleJoinCluster handles joining an existing cluster during setup
+func (m *Manager) handleJoinCluster(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Only allow if setup is needed (no users exist)
+	if !m.NeedsSetup() {
+		http.Error(w, "Setup already completed - cannot join cluster on existing server", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		ClusterURL     string `json:"cluster_url"`
+		Username       string `json:"username"`
+		Password       string `json:"password"`
+		ServerURL      string `json:"server_url"` // This server's URL for peers to connect back
+		ServerName     string `json:"server_name"`
+		ACMEEmail      string `json:"acme_email"`
+		ACMEDomain     string `json:"acme_domain"`
+		ACMEStaging    bool   `json:"acme_staging"`
+		ACMEProvider   string `json:"acme_provider"`     // letsencrypt, zerossl, buypass, google
+		ACMEEABKeyID   string `json:"acme_eab_key_id"`   // For ZeroSSL, Google Trust Services
+		ACMEEABHMACKey string `json:"acme_eab_hmac_key"` // For ZeroSSL, Google Trust Services
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.ClusterURL == "" || req.Username == "" || req.Password == "" {
+		http.Error(w, "cluster_url, username, and password are required", http.StatusBadRequest)
+		return
+	}
+
+	if req.ServerURL == "" {
+		http.Error(w, "server_url is required (this server's URL for cluster peers)", http.StatusBadRequest)
+		return
+	}
+
+	// ACME is optional - we'll use self-signed cert if not provided or if rate limited
+	acmeOptional := req.ACMEEmail == "" || req.ACMEDomain == ""
+
+	// Step 1: Request ACME certificate FIRST (before cluster join) - only if ACME details provided
+	if !acmeOptional && m.acmeCertCallback != nil {
+		// Extract peer URL from cluster URL for certificate lookup
+		peerURLs := []string{req.ClusterURL}
+		
+		acmeReq := ACMECertRequest{
+			Email:      req.ACMEEmail,
+			Domain:     req.ACMEDomain,
+			Staging:    req.ACMEStaging,
+			Provider:   req.ACMEProvider,
+			EABKeyID:   req.ACMEEABKeyID,
+			EABHMACKey: req.ACMEEABHMACKey,
+			PeerURLs:   peerURLs,
+		}
+		
+		log.Printf("[cluster-join] Requesting TLS certificate for %s (provider: %s)", req.ACMEDomain, req.ACMEProvider)
+		if err := m.acmeCertCallback(acmeReq); err != nil {
+			// Check if it's a rate limit error - if so, continue with self-signed cert
+			if strings.Contains(err.Error(), "rateLimited") || strings.Contains(err.Error(), "too many") {
+				log.Printf("[cluster-join] ACME rate limited, continuing with existing/self-signed certificate: %v", err)
+			} else {
+				log.Printf("[cluster-join] Failed to obtain TLS certificate: %v", err)
+				http.Error(w, "Failed to obtain TLS certificate: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			log.Printf("[cluster-join] TLS certificate obtained successfully")
+		}
+	} else if acmeOptional {
+		log.Printf("[cluster-join] ACME not configured, using self-signed certificate")
+	} else {
+		log.Printf("[cluster-join] Warning: No ACME callback configured, skipping certificate request")
+	}
+
+	// Step 2: Join the cluster
+	result, err := m.joinCluster(req.ClusterURL, req.Username, req.Password, req.ServerURL, req.ServerName)
+	if err != nil {
+		log.Printf("[cluster-join] Failed to join cluster: %v", err)
+		http.Error(w, "Failed to join cluster: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Create a session for the synced admin user
+	session, err := m.AuthenticatePassword(req.Username, req.Password)
+	if err != nil {
+		// Users should have been synced, but authentication might still work
+		log.Printf("[cluster-join] Warning: Could not authenticate after join: %v", err)
+	}
+
+	// Set session cookie if we have one
+	if session != nil {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "session",
+			Value:    session.ID,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   r.TLS != nil,
+			SameSite: http.SameSiteStrictMode,
+			MaxAge:   int(time.Until(session.ExpiresAt).Seconds()),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Successfully joined cluster",
+		"peers":   result.Peers,
+	})
+}
+
 func (m *Manager) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -141,6 +303,7 @@ func (m *Manager) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
+
 
 	session, err := m.AuthenticatePassword(req.Username, req.Password)
 	if err != nil {
@@ -879,8 +1042,10 @@ func (m *Manager) handleTenant(w http.ResponseWriter, r *http.Request) {
 
 	case "PUT":
 		var req struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
+			Name                 string   `json:"name"`
+			Description          string   `json:"description"`
+			DefaultNameservers   []string `json:"default_nameservers,omitempty"`
+			DefaultNameserverTTL uint32   `json:"default_nameserver_ttl,omitempty"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -888,7 +1053,7 @@ func (m *Manager) handleTenant(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		tenant, err := m.UpdateTenant(tenantID, req.Name, req.Description)
+		tenant, err := m.UpdateTenant(tenantID, req.Name, req.Description, req.DefaultNameservers, req.DefaultNameserverTTL)
 		if err != nil {
 			if err == ErrTenantNotFound {
 				http.Error(w, "Tenant not found", http.StatusNotFound)
@@ -989,4 +1154,218 @@ func (m *Manager) handleTenantUsers(w http.ResponseWriter, r *http.Request, tena
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// joinCluster authenticates with an existing cluster and joins it
+func (m *Manager) joinCluster(clusterURL, username, password, serverURL, serverName string) (*ClusterJoinConfig, error) {
+	// Step 1: Authenticate with the cluster server
+	log.Printf("[cluster-join] Authenticating with cluster at %s", clusterURL)
+	
+	loginReq := map[string]string{
+		"username": username,
+		"password": password,
+	}
+	loginBody, _ := json.Marshal(loginReq)
+	
+	resp, err := http.Post(clusterURL+"/api/auth/login", "application/json", bytes.NewReader(loginBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to cluster: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("authentication failed: %s", string(body))
+	}
+	
+	var loginResp struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&loginResp); err != nil {
+		return nil, fmt.Errorf("failed to parse login response: %w", err)
+	}
+	
+	if loginResp.Token == "" {
+		// Try to get session cookie
+		for _, cookie := range resp.Cookies() {
+			if cookie.Name == "session" {
+				loginResp.Token = cookie.Value
+				break
+			}
+		}
+	}
+	
+	if loginResp.Token == "" {
+		return nil, fmt.Errorf("no authentication token received")
+	}
+	
+	log.Printf("[cluster-join] Authentication successful")
+	
+	// Step 2: Get sync configuration from the cluster
+	log.Printf("[cluster-join] Fetching cluster configuration")
+	
+	req, _ := http.NewRequest("GET", clusterURL+"/api/sync/config", nil)
+	req.Header.Set("Cookie", "session="+loginResp.Token)
+	req.Header.Set("Authorization", "Bearer "+loginResp.Token)
+	
+	client := &http.Client{}
+	resp, err = client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get sync config: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get sync config: %s", string(body))
+	}
+	
+	var syncConfig struct {
+		Enabled      bool   `json:"enabled"`
+		ServerID     string `json:"server_id"`
+		ServerName   string `json:"server_name"`
+		SharedSecret string `json:"shared_secret"`
+		Peers        []struct {
+			URL      string `json:"url"`
+			Name     string `json:"name"`
+			ServerID string `json:"server_id"`
+		} `json:"peers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&syncConfig); err != nil {
+		return nil, fmt.Errorf("failed to parse sync config: %w", err)
+	}
+	
+	log.Printf("[cluster-join] Got sync config: %d existing peers", len(syncConfig.Peers))
+	
+	// Step 3: Get the actual shared secret (the config endpoint masks it)
+	// We'll need a special endpoint or include it differently
+	// For now, we need to get the unmasked secret
+	req, _ = http.NewRequest("GET", clusterURL+"/api/sync/join-secret", nil)
+	req.Header.Set("Cookie", "session="+loginResp.Token)
+	req.Header.Set("Authorization", "Bearer "+loginResp.Token)
+	
+	resp, err = client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get join secret: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	var secretResp struct {
+		SharedSecret string `json:"shared_secret"`
+	}
+	if resp.StatusCode == http.StatusOK {
+		json.NewDecoder(resp.Body).Decode(&secretResp)
+	}
+	
+	if secretResp.SharedSecret == "" {
+		return nil, fmt.Errorf("could not retrieve cluster shared secret - ensure you have super admin access")
+	}
+	
+	// Step 4: Generate a server ID for this server
+	newServerID := uuid.New().String()[:8]
+	if serverName == "" {
+		serverName = "server-" + newServerID
+	}
+	
+	// Step 5: Register this server as a peer on all existing cluster servers
+	thisServer := PeerConfig{
+		URL:      serverURL,
+		Name:     serverName,
+		ServerID: newServerID,
+	}
+	
+	// Add this server to the cluster server
+	log.Printf("[cluster-join] Registering this server with cluster master at %s", clusterURL)
+	peerBody, _ := json.Marshal(thisServer)
+	req, _ = http.NewRequest("POST", clusterURL+"/api/sync/peers", bytes.NewReader(peerBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Cookie", "session="+loginResp.Token)
+	req.Header.Set("Authorization", "Bearer "+loginResp.Token)
+	
+	resp, err = client.Do(req)
+	if err != nil {
+		log.Printf("[cluster-join] Warning: Failed to register with %s: %v", clusterURL, err)
+	} else {
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("[cluster-join] Warning: Failed to register with %s: status %d", clusterURL, resp.StatusCode)
+		} else {
+			log.Printf("[cluster-join] Successfully registered with cluster master")
+		}
+	}
+	
+	// Also register with other peers in the cluster
+	for _, peer := range syncConfig.Peers {
+		log.Printf("[cluster-join] Registering this server with peer at %s", peer.URL)
+		req, _ = http.NewRequest("POST", peer.URL+"/api/sync/peers", bytes.NewReader(peerBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Cookie", "session="+loginResp.Token)
+		req.Header.Set("Authorization", "Bearer "+loginResp.Token)
+		
+		resp, err = client.Do(req)
+		if err != nil {
+			log.Printf("[cluster-join] Warning: Failed to register with peer %s: %v", peer.URL, err)
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("[cluster-join] Warning: Failed to register with peer %s: status %d", peer.URL, resp.StatusCode)
+		} else {
+			log.Printf("[cluster-join] Successfully registered with peer %s", peer.URL)
+		}
+	}
+	
+	// Step 6: Build the list of peers for this server (cluster server + all other peers)
+	peers := []PeerConfig{
+		{
+			URL:      clusterURL,
+			Name:     syncConfig.ServerName,
+			ServerID: syncConfig.ServerID,
+		},
+	}
+	for _, peer := range syncConfig.Peers {
+		peers = append(peers, PeerConfig{
+			URL:      peer.URL,
+			Name:     peer.Name,
+			ServerID: peer.ServerID,
+		})
+	}
+	
+	result := &ClusterJoinConfig{
+		SharedSecret: secretResp.SharedSecret,
+		Peers:        peers,
+		ThisServer:   thisServer,
+	}
+	
+	// Step 7: Call the callback to configure sync
+	if m.joinClusterCallback != nil {
+		log.Printf("[cluster-join] Configuring local sync settings")
+		if err := m.joinClusterCallback(result); err != nil {
+			return nil, fmt.Errorf("failed to configure sync: %w", err)
+		}
+	}
+	
+	// Step 8: Trigger a full sync on the primary server to broadcast existing data
+	log.Printf("[cluster-join] Requesting full sync from primary server")
+	req, _ = http.NewRequest("POST", clusterURL+"/api/sync/full-sync", nil)
+	req.Header.Set("Cookie", "session="+loginResp.Token)
+	req.Header.Set("Authorization", "Bearer "+loginResp.Token)
+	
+	resp, err = client.Do(req)
+	if err != nil {
+		log.Printf("[cluster-join] Warning: Failed to trigger full sync: %v", err)
+	} else {
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			log.Printf("[cluster-join] Full sync triggered on primary server")
+		} else {
+			log.Printf("[cluster-join] Warning: Full sync request returned status %d", resp.StatusCode)
+		}
+	}
+	
+	// Give sync a moment to complete before returning
+	time.Sleep(2 * time.Second)
+	
+	log.Printf("[cluster-join] Successfully joined cluster with %d peers", len(peers))
+	return result, nil
 }

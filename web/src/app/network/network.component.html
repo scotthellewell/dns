@@ -12,64 +12,89 @@
     <mat-card class="config-card cert-card">
       <mat-card-header>
         <mat-icon mat-card-avatar>verified_user</mat-icon>
-        <mat-card-title>TLS Certificate</mat-card-title>
-        <mat-card-subtitle>Shared certificate for Web UI, DoH, and DoT</mat-card-subtitle>
+        <mat-card-title>TLS Certificates</mat-card-title>
+        <mat-card-subtitle>Manage certificates for Web UI, DoH, and DoT</mat-card-subtitle>
       </mat-card-header>
       <mat-card-content>
-        @if (loadingCert) {
+        @if (loadingCertificates) {
           <div class="loading-container">
             <mat-spinner diameter="30"></mat-spinner>
           </div>
-        } @else if (certInfo) {
-          <div class="cert-info">
-            <div class="cert-status" [ngClass]="getCertExpiryClass()">
-              @if (certInfo.is_expired) {
-                <mat-icon>error</mat-icon>
-                <span>Certificate Expired</span>
-              } @else if (certInfo.is_expiring_soon) {
-                <mat-icon>warning</mat-icon>
-                <span>Certificate Expiring Soon</span>
-              } @else {
-                <mat-icon>check_circle</mat-icon>
-                <span>Certificate Valid</span>
-              }
-              @if (certInfo.auto_generated) {
-                <mat-chip>Self-Signed</mat-chip>
-              }
-            </div>
-            <div class="cert-details">
-              <div class="detail-row">
-                <strong>Subject:</strong>
-                <span>{{ certInfo.subject }}</span>
-              </div>
-              <div class="detail-row">
-                <strong>Issuer:</strong>
-                <span>{{ certInfo.issuer }}</span>
-              </div>
-              <div class="detail-row">
-                <strong>Valid From:</strong>
-                <span>{{ formatDate(certInfo.not_before) }}</span>
-              </div>
-              <div class="detail-row">
-                <strong>Valid Until:</strong>
-                <span [ngClass]="getCertExpiryClass()">{{ formatDate(certInfo.not_after) }}</span>
-              </div>
-              @if (certInfo.dns_names && certInfo.dns_names.length > 0) {
-                <div class="detail-row">
-                  <strong>DNS Names:</strong>
-                  <span>{{ certInfo.dns_names.join(', ') }}</span>
-                </div>
-              }
-              @if (certInfo.ip_addresses && certInfo.ip_addresses.length > 0) {
-                <div class="detail-row">
-                  <strong>IP Addresses:</strong>
-                  <span>{{ certInfo.ip_addresses.join(', ') }}</span>
-                </div>
-              }
-            </div>
+        } @else if (certificates.length > 0) {
+          <div class="certificates-table-container">
+            <table mat-table [dataSource]="certificates" class="certificates-table">
+              <!-- Subject Column -->
+              <ng-container matColumnDef="subject">
+                <th mat-header-cell *matHeaderCellDef>Subject</th>
+                <td mat-cell *matCellDef="let cert">{{ cert.subject }}</td>
+              </ng-container>
+
+              <!-- Issuer Column -->
+              <ng-container matColumnDef="issuer">
+                <th mat-header-cell *matHeaderCellDef>Issuer</th>
+                <td mat-cell *matCellDef="let cert">{{ cert.issuer }}</td>
+              </ng-container>
+
+              <!-- Expires Column -->
+              <ng-container matColumnDef="expires">
+                <th mat-header-cell *matHeaderCellDef>Expires</th>
+                <td mat-cell *matCellDef="let cert">
+                  <span [ngClass]="getCertStatusClass(cert)">
+                    {{ formatDate(cert.not_after) }}
+                  </span>
+                </td>
+              </ng-container>
+
+              <!-- Status Column -->
+              <ng-container matColumnDef="status">
+                <th mat-header-cell *matHeaderCellDef>Status</th>
+                <td mat-cell *matCellDef="let cert">
+                  <span class="cert-status-badge" [ngClass]="getCertStatusClass(cert)">
+                    @if (cert.is_expired) {
+                      <mat-icon>error</mat-icon>
+                    } @else if (cert.is_expiring_soon) {
+                      <mat-icon>warning</mat-icon>
+                    } @else {
+                      <mat-icon>check_circle</mat-icon>
+                    }
+                    {{ getCertStatusText(cert) }}
+                  </span>
+                </td>
+              </ng-container>
+
+              <!-- Actions Column -->
+              <ng-container matColumnDef="actions">
+                <th mat-header-cell *matHeaderCellDef>Actions</th>
+                <td mat-cell *matCellDef="let cert">
+                  <button mat-icon-button color="primary" 
+                          matTooltip="Request new certificate via ACME"
+                          (click)="requestCertificateForDomain(cert.domain)"
+                          [disabled]="requestingCertDomain === cert.domain">
+                    @if (requestingCertDomain === cert.domain) {
+                      <mat-spinner diameter="20"></mat-spinner>
+                    } @else {
+                      <mat-icon>refresh</mat-icon>
+                    }
+                  </button>
+                  <button mat-icon-button color="warn" 
+                          matTooltip="Delete certificate"
+                          (click)="deleteCertificate(cert.domain)"
+                          [disabled]="cert.domain === 'default' || deletingCertDomain === cert.domain">
+                    @if (deletingCertDomain === cert.domain) {
+                      <mat-spinner diameter="20"></mat-spinner>
+                    } @else {
+                      <mat-icon>delete</mat-icon>
+                    }
+                  </button>
+                </td>
+              </ng-container>
+
+              <tr mat-header-row *matHeaderRowDef="['subject', 'issuer', 'expires', 'status', 'actions']"></tr>
+              <tr mat-row *matRowDef="let row; columns: ['subject', 'issuer', 'expires', 'status', 'actions'];"></tr>
+            </table>
           </div>
         } @else {
-          <p class="no-cert">No certificate configured</p>
+          <p class="no-cert">No certificates configured</p>
         }
 
         <mat-divider></mat-divider>
@@ -381,7 +406,7 @@
       <mat-card-header>
         <mat-icon mat-card-avatar>web</mat-icon>
         <mat-card-title>Web Admin UI</mat-card-title>
-        <mat-card-subtitle>HTTP/HTTPS server for this admin interface</mat-card-subtitle>
+        <mat-card-subtitle>HTTPS server for this admin interface</mat-card-subtitle>
       </mat-card-header>
       <mat-card-content>
         <div class="config-row">
@@ -389,21 +414,19 @@
             Enable Web UI
           </mat-slide-toggle>
         </div>
-        <div class="config-row">
-          <mat-slide-toggle [(ngModel)]="portsConfig.web.tls" color="primary">
-            Enable HTTPS
-          </mat-slide-toggle>
-          <mat-icon matTooltip="Uses the shared TLS certificate configured above">help_outline</mat-icon>
+        <div class="config-row info-row">
+          <mat-icon color="primary">lock</mat-icon>
+          <span>TLS/HTTPS is always enabled for security</span>
         </div>
         <div class="config-row warning-row">
           <mat-icon color="warn">warning</mat-icon>
-          <span>Changing port or TLS settings will require you to navigate to the new address</span>
+          <span>Changing the port will require you to navigate to the new address</span>
         </div>
         <div class="config-row">
           <mat-form-field appearance="outline">
             <mat-label>Port</mat-label>
             <input matInput type="number" [(ngModel)]="portsConfig.web.port" min="1" max="65535">
-            <mat-hint>Default: 8080 (HTTP) or 8443 (HTTPS)</mat-hint>
+            <mat-hint>Default: 443 or 8443</mat-hint>
           </mat-form-field>
           <mat-form-field appearance="outline">
             <mat-label>Bind Address</mat-label>

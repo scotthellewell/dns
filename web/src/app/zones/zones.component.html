@@ -34,6 +34,7 @@
             </td>
             <td class="actions">
               <button class="btn btn-sm" (click)="openEditForm(zone)">Edit</button>
+              <button class="btn btn-sm" (click)="exportZone(zone.name)" title="Export BIND zone file">Export</button>
               <button class="btn btn-sm btn-danger" (click)="deleteZone(zone)">Delete</button>
             </td>
           </tr>
@@ -75,6 +76,7 @@
             </td>
             <td class="actions">
               <button class="btn btn-sm" (click)="openEditForm(zone)">Edit</button>
+              <button class="btn btn-sm" (click)="exportZone(zone.name)" title="Export BIND zone file">Export</button>
               <button class="btn btn-sm btn-danger" (click)="deleteZone(zone)">Delete</button>
             </td>
           </tr>
@@ -206,11 +208,42 @@
           <!-- Show DS Record for existing DNSSEC zones -->
           <div class="ds-record-section" *ngIf="currentDnssec?.ds_record">
             <label>DS Record (add to your registrar)</label>
-            <div class="ds-record-box">
-              <code>{{ currentDnssec?.ds_record }}</code>
-              <button class="btn btn-sm" (click)="copyDsRecord()" title="Copy">📋</button>
+            
+            <!-- Parsed DS Record Table -->
+            <div class="ds-record-table" *ngIf="parseDsRecord(currentDnssec?.ds_record || '') as parsed">
+              <table class="ds-fields-table">
+                <thead>
+                  <tr>
+                    <th>Key Tag</th>
+                    <th>Algorithm</th>
+                    <th>Digest Type</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>{{ parsed.keyTag }}</code></td>
+                    <td><code>{{ parsed.algorithm }}</code> <small>({{ getAlgorithmName(parsed.algorithm) }})</small></td>
+                    <td><code>{{ parsed.digestType }}</code> <small>({{ getDigestTypeName(parsed.digestType) }})</small></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="ds-digest-field">
+                <label>Digest</label>
+                <div class="digest-box">
+                  <code class="digest-value">{{ parsed.digest }}</code>
+                  <button class="btn btn-sm" (click)="copyDsRecord()" title="Copy full DS record">📋</button>
+                </div>
+              </div>
             </div>
-            <small>Key Tag: {{ currentDnssec?.ksk_key_tag }}</small>
+            
+            <!-- Full DS Record (collapsible) -->
+            <details class="ds-record-full">
+              <summary>Show full DS record (BIND format)</summary>
+              <div class="ds-record-box">
+                <code>{{ currentDnssec?.ds_record }}</code>
+                <button class="btn btn-sm" (click)="copyDsRecord()" title="Copy">📋</button>
+              </div>
+            </details>
           </div>
 
           <!-- Key Export/Import for Secondary Servers -->

@@ -24,15 +24,49 @@ import (
 	"github.com/go-acme/lego/v4/registration"
 )
 
-// ACMEConfig holds ACME/Let's Encrypt configuration
+// ACME Provider constants
+const (
+	ACMEProviderLetsEncrypt = "letsencrypt"
+	ACMEProviderZeroSSL     = "zerossl"
+	ACMEProviderBuypass     = "buypass"
+	ACMEProviderGoogleTrust = "google"
+)
+
+// ACME Directory URLs for different providers
+var ACMEDirectoryURLs = map[string]struct {
+	Production string
+	Staging    string
+}{
+	ACMEProviderLetsEncrypt: {
+		Production: "https://acme-v02.api.letsencrypt.org/directory",
+		Staging:    "https://acme-staging-v02.api.letsencrypt.org/directory",
+	},
+	ACMEProviderZeroSSL: {
+		Production: "https://acme.zerossl.com/v2/DV90",
+		Staging:    "https://acme.zerossl.com/v2/DV90", // ZeroSSL has no staging
+	},
+	ACMEProviderBuypass: {
+		Production: "https://api.buypass.com/acme/directory",
+		Staging:    "https://api.test4.buypass.no/acme/directory",
+	},
+	ACMEProviderGoogleTrust: {
+		Production: "https://dv.acme-v02.api.pki.goog/directory",
+		Staging:    "https://dv.acme-v02.test-api.pki.goog/directory",
+	},
+}
+
+// ACMEConfig holds ACME configuration
 type ACMEConfig struct {
 	Enabled       bool     `json:"enabled"`
 	Email         string   `json:"email"`
 	Domains       []string `json:"domains"`
-	UseStaging    bool     `json:"use_staging"`    // Use Let's Encrypt staging for testing
-	ChallengeType string   `json:"challenge_type"` // "http-01" or "dns-01"
+	Provider      string   `json:"provider"`        // letsencrypt, zerossl, buypass, google
+	UseStaging    bool     `json:"use_staging"`     // Use staging environment for testing
+	ChallengeType string   `json:"challenge_type"`  // "http-01" or "dns-01"
 	AutoRenew     bool     `json:"auto_renew"`
-	RenewBefore   int      `json:"renew_before"` // Days before expiry to renew
+	RenewBefore   int      `json:"renew_before"`    // Days before expiry to renew
+	EABKeyID      string   `json:"eab_key_id"`      // External Account Binding Key ID (for ZeroSSL, Google)
+	EABHMACKey    string   `json:"eab_hmac_key"`    // External Account Binding HMAC Key
 }
 
 // ACMEState holds the current ACME state
@@ -384,12 +418,24 @@ func (m *ACMEManager) RequestCertificate(email string, domains []string) error {
 
 	// Configure ACME client
 	config := lego.NewConfig(user)
+	
+	// Get the directory URL for the configured provider
+	provider := m.config.Provider
+	if provider == "" {
+		provider = ACMEProviderLetsEncrypt // Default to Let's Encrypt
+	}
+	
+	providerURLs, ok := ACMEDirectoryURLs[provider]
+	if !ok {
+		return fmt.Errorf("unknown ACME provider: %s", provider)
+	}
+	
 	if m.config.UseStaging {
-		config.CADirURL = lego.LEDirectoryStaging
-		log.Printf("ACME: Using Let's Encrypt STAGING environment")
+		config.CADirURL = providerURLs.Staging
+		log.Printf("ACME: Using %s STAGING environment (%s)", provider, providerURLs.Staging)
 	} else {
-		config.CADirURL = lego.LEDirectoryProduction
-		log.Printf("ACME: Using Let's Encrypt PRODUCTION environment")
+		config.CADirURL = providerURLs.Production
+		log.Printf("ACME: Using %s PRODUCTION environment (%s)", provider, providerURLs.Production)
 	}
 	config.Certificate.KeyType = certcrypto.EC256
 
@@ -422,10 +468,24 @@ func (m *ACMEManager) RequestCertificate(email string, domains []string) error {
 		}
 	}
 
-	// Register account if needed
-	reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
-	if err != nil {
-		return fmt.Errorf("failed to register ACME account: %v", err)
+	// Register account - use EAB if configured (required for ZeroSSL, Google Trust Services)
+	var reg *registration.Resource
+	if m.config.EABKeyID != "" && m.config.EABHMACKey != "" {
+		log.Printf("ACME: Registering account with External Account Binding (EAB)")
+		reg, err = client.Registration.RegisterWithExternalAccountBinding(registration.RegisterEABOptions{
+			TermsOfServiceAgreed: true,
+			Kid:                  m.config.EABKeyID,
+			HmacEncoded:          m.config.EABHMACKey,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to register ACME account with EAB: %v", err)
+		}
+	} else {
+		// Standard registration (Let's Encrypt, Buypass)
+		reg, err = client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		if err != nil {
+			return fmt.Errorf("failed to register ACME account: %v", err)
+		}
 	}
 	user.Registration = reg
 

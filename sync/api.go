@@ -303,6 +303,64 @@ func (h *APIHandler) HandlePurge(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleJoinSecret returns the shared secret for cluster joining (super admin only)
+// If sync isn't configured yet, it will auto-initialize with a new secret
+func (h *APIHandler) HandleJoinSecret(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// If shared secret is empty, this is the first cluster join - auto-initialize sync
+	if h.manager.config.SharedSecret == "" {
+		// Generate a new shared secret
+		secretBytes := make([]byte, 32)
+		if _, err := rand.Read(secretBytes); err != nil {
+			http.Error(w, "Failed to generate shared secret", http.StatusInternalServerError)
+			return
+		}
+		newSecret := hex.EncodeToString(secretBytes)
+		
+		// Generate a server ID for this (primary) server
+		idBytes := make([]byte, 4)
+		rand.Read(idBytes)
+		serverID := hex.EncodeToString(idBytes)
+		
+		// Initialize sync config for the primary server
+		h.manager.config.Enabled = true
+		h.manager.config.ServerID = serverID
+		if h.manager.config.ServerName == "" {
+			h.manager.config.ServerName = "primary"
+		}
+		h.manager.config.SharedSecret = newSecret
+		
+		// Save the config to storage
+		if h.db != nil {
+			configDTO := SyncConfigDTO{
+				Enabled:                h.manager.config.Enabled,
+				ServerID:               h.manager.config.ServerID,
+				ServerName:             h.manager.config.ServerName,
+				SharedSecret:           h.manager.config.SharedSecret,
+				TombstoneRetentionDays: 7,
+			}
+			data, _ := json.Marshal(configDTO)
+			h.db.Update(func(tx *bolt.Tx) error {
+				bucket, err := tx.CreateBucketIfNotExists([]byte("config"))
+				if err != nil {
+					return err
+				}
+				return bucket.Put([]byte("sync"), data)
+			})
+		}
+	}
+
+	// Return the actual shared secret (only for authenticated super admins)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"shared_secret": h.manager.config.SharedSecret,
+	})
+}
+
 // RegisterRoutesWithAuth registers sync API routes with authentication on the given mux
 func (h *APIHandler) RegisterRoutesWithAuth(mux *http.ServeMux, authMiddleware func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("/api/sync/status", authMiddleware(h.HandleStatus))
@@ -312,6 +370,7 @@ func (h *APIHandler) RegisterRoutesWithAuth(mux *http.ServeMux, authMiddleware f
 	mux.HandleFunc("/api/sync/force", authMiddleware(h.HandleForceSync))
 	mux.HandleFunc("/api/sync/full-sync", authMiddleware(h.HandleFullSync))
 	mux.HandleFunc("/api/sync/purge", authMiddleware(h.HandlePurge))
+	mux.HandleFunc("/api/sync/join-secret", authMiddleware(h.HandleJoinSecret))
 
 	// WebSocket endpoint for peer sync (no auth middleware, uses shared secret)
 	mux.HandleFunc("/sync", h.manager.HandleWebSocket)
@@ -328,6 +387,7 @@ func RegisterRoutes(mux *http.ServeMux, mgr *Manager, corsMiddleware func(http.H
 	mux.HandleFunc("/api/sync/force", corsMiddleware(handler.HandleForceSync))
 	mux.HandleFunc("/api/sync/full-sync", corsMiddleware(handler.HandleFullSync))
 	mux.HandleFunc("/api/sync/purge", corsMiddleware(handler.HandlePurge))
+	mux.HandleFunc("/api/sync/join-secret", corsMiddleware(handler.HandleJoinSecret))
 	// WebSocket endpoint for peer sync
 	mux.HandleFunc("/sync", mgr.HandleWebSocket)
 }

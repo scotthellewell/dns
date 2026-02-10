@@ -173,6 +173,8 @@ const (
 	EntityAPIKey        = "api_key"
 	EntitySettings      = "settings"
 	EntitySession       = "session"
+	EntityTLSCert       = "tls_cert"
+	EntityACMEConfig    = "acme_config"
 )
 
 // OpLogEntry represents a single operation in the operation log

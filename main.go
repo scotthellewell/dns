@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -67,6 +71,79 @@ func (a *dnssecKeyStoreAdapter) GetDNSSECKeys(zoneName string) (server.DNSSECKey
 
 func (a *dnssecKeyStoreAdapter) ListZonesWithDNSSEC() ([]string, error) {
 	return a.store.ListZonesWithDNSSEC()
+}
+
+// fetchCertificateFromPeer attempts to fetch a certificate from a peer server's API
+func fetchCertificateFromPeer(peerURL string, domain string) (*storage.TLSCertificate, error) {
+	// Build the certificate fetch URL
+	// Convert WebSocket URL to HTTPS if needed
+	baseURL := peerURL
+	baseURL = strings.Replace(baseURL, "wss://", "https://", 1)
+	baseURL = strings.Replace(baseURL, "ws://", "http://", 1)
+	// Remove any path (like /sync) and add the cert API endpoint
+	// Find the third "/" (after https://host) to trim the path
+	if len(baseURL) > 8 { // Make sure we have enough characters after "https://"
+		remainder := baseURL[8:] // Skip "https://"
+		if idx := strings.Index(remainder, "/"); idx > 0 {
+			baseURL = baseURL[:8+idx]
+		}
+	}
+	certURL := fmt.Sprintf("%s/api/certs/%s", baseURL, domain)
+	
+	log.Printf("[cluster-join] Fetching certificate from peer: %s", certURL)
+	
+	// Create HTTP client that accepts self-signed certs (for initial cluster join)
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, // Accept self-signed certs during cluster join
+			},
+		},
+	}
+	
+	resp, err := client.Get(certURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch cert from peer: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("certificate not found on peer")
+	}
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("peer returned status %d: %s", resp.StatusCode, string(body))
+	}
+	
+	// Parse the certificate response
+	var certResp struct {
+		Domain      string    `json:"domain"`
+		Certificate string    `json:"certificate"`
+		PrivateKey  string    `json:"private_key"`
+		NotBefore   time.Time `json:"not_before"`
+		NotAfter    time.Time `json:"not_after"`
+		Issuer      string    `json:"issuer"`
+	}
+	
+	if err := json.NewDecoder(resp.Body).Decode(&certResp); err != nil {
+		return nil, fmt.Errorf("failed to decode cert response: %w", err)
+	}
+	
+	// Check if we got the full certificate with private key
+	if certResp.PrivateKey == "" {
+		return nil, fmt.Errorf("peer did not return private key (may not support cert sync)")
+	}
+	
+	return &storage.TLSCertificate{
+		Domain:    certResp.Domain,
+		CertPEM:   certResp.Certificate,
+		KeyPEM:    certResp.PrivateKey,
+		NotBefore: certResp.NotBefore,
+		NotAfter:  certResp.NotAfter,
+		Issuer:    certResp.Issuer,
+	}, nil
 }
 
 func main() {
@@ -166,6 +243,7 @@ func main() {
 	if sniMgr != nil {
 		log.Printf("SNI certificate manager initialized")
 		api.SetCertManager(sniMgr)
+		api.SetCertStore(store) // Set store for certificate sync API
 
 		// Update ACME manager to upload certificates to the SNI manager
 		// so the cache gets updated when new certs are obtained
@@ -199,9 +277,18 @@ func main() {
 		srv.UpdateConfig(newCfg)
 	})
 
+	// Set up sync manager config refresh callback now that we have the API handler
+	if syncMgr != nil {
+		syncMgr.SetConfigRefreshCallback(func() {
+			if err := apiHandler.UpdateConfigFromStorage(); err != nil {
+				log.Printf("[sync] Config refresh failed: %v", err)
+			}
+		})
+	}
+
 	// Create web mux and start services
 	if portMgr != nil && portMgr.GetConfig().Web.Enabled {
-		mux := createWebMux(apiHandler, authMgr, store, syncMgr)
+		mux := createWebMux(apiHandler, authMgr, store, syncMgr, acmeMgr)
 
 		portMgr.SetWebMux(mux)
 		if err := portMgr.Start(); err != nil {
@@ -216,8 +303,127 @@ func main() {
 	select {}
 }
 
-func createWebMux(apiHandler *api.Handler, authMgr *auth.Manager, store *storage.Store, syncMgr *sync.Manager) *http.ServeMux {
+func createWebMux(apiHandler *api.Handler, authMgr *auth.Manager, store *storage.Store, syncMgr *sync.Manager, acmeMgr *certs.ACMEManager) *http.ServeMux {
 	mux := http.NewServeMux()
+
+	// Set up ACME certificate callback for cluster join
+	if authMgr != nil && acmeMgr != nil && store != nil {
+		authMgr.SetACMECertCallback(func(req auth.ACMECertRequest) error {
+			log.Printf("[cluster-join] Configuring ACME for domain: %s (provider: %s)", req.Domain, req.Provider)
+			
+			// Check if we already have a valid certificate for this domain in storage
+			existingCert, err := store.GetCertificate(req.Domain)
+			if err == nil && existingCert != nil && existingCert.NotAfter.After(time.Now().Add(24*time.Hour)) {
+				log.Printf("[cluster-join] Valid certificate already exists for %s (expires %s), skipping ACME request",
+					req.Domain, existingCert.NotAfter.Format(time.RFC3339))
+				return nil
+			}
+			
+			// Try to fetch certificate from peer servers first
+			if len(req.PeerURLs) > 0 {
+				log.Printf("[cluster-join] Checking %d peer(s) for existing certificate for %s", len(req.PeerURLs), req.Domain)
+				for _, peerURL := range req.PeerURLs {
+					cert, err := fetchCertificateFromPeer(peerURL, req.Domain)
+					if err == nil && cert != nil && cert.NotAfter.After(time.Now().Add(24*time.Hour)) {
+						log.Printf("[cluster-join] Found valid certificate on peer %s, importing", peerURL)
+						if err := store.StoreCertificate(cert); err != nil {
+							log.Printf("[cluster-join] Warning: Failed to store peer certificate: %v", err)
+						} else {
+							log.Printf("[cluster-join] Successfully imported certificate from peer for %s", req.Domain)
+							return nil
+						}
+					} else if err != nil {
+						log.Printf("[cluster-join] Could not fetch cert from peer %s: %v", peerURL, err)
+					}
+				}
+			}
+			
+			// Set default provider if not specified
+			provider := req.Provider
+			if provider == "" {
+				provider = certs.ACMEProviderLetsEncrypt
+			}
+			
+			// Update ACME config with provider settings
+			acmeConfig := certs.ACMEConfig{
+				Enabled:       true,
+				Email:         req.Email,
+				Domains:       []string{req.Domain},
+				Provider:      provider,
+				UseStaging:    req.Staging,
+				ChallengeType: "http-01",
+				AutoRenew:     true,
+				RenewBefore:   30,
+				EABKeyID:      req.EABKeyID,
+				EABHMACKey:    req.EABHMACKey,
+			}
+			if err := acmeMgr.UpdateConfig(acmeConfig); err != nil {
+				return errors.New("failed to configure ACME: " + err.Error())
+			}
+			
+			// Request the certificate
+			log.Printf("[cluster-join] Requesting certificate from %s...", provider)
+			if err := acmeMgr.RequestCertificate(req.Email, []string{req.Domain}); err != nil {
+				return errors.New("failed to obtain certificate: " + err.Error())
+			}
+			
+			log.Printf("[cluster-join] Certificate obtained successfully for %s", req.Domain)
+			return nil
+		})
+	}
+
+	// Set up cluster join callback if we have both auth and sync managers
+	if authMgr != nil && syncMgr != nil {
+		authMgr.SetJoinClusterCallback(func(clusterConfig *auth.ClusterJoinConfig) error {
+			log.Printf("[cluster-join] Configuring sync with %d peers", len(clusterConfig.Peers))
+			
+			// Build peer configs
+			peers := make([]sync.PeerConfig, 0, len(clusterConfig.Peers))
+			for _, p := range clusterConfig.Peers {
+				peers = append(peers, sync.PeerConfig{
+					URL: p.URL,
+					ID:  p.ServerID,
+				})
+			}
+			
+			// Update sync config
+			newConfig := &sync.Config{
+				Enabled:            true,
+				ServerID:           clusterConfig.ThisServer.ServerID,
+				ServerName:         clusterConfig.ThisServer.Name,
+				SharedSecret:       clusterConfig.SharedSecret,
+				Peers:              peers,
+				BatchSize:          1000,
+				ReconnectInterval:  5 * time.Second,
+				PingInterval:       30 * time.Second,
+				TombstoneRetention: 7 * 24 * time.Hour,
+			}
+			
+			// Save sync config to storage
+			storeCfg := &config.SyncConfig{
+				Enabled:                true,
+				NodeID:                 clusterConfig.ThisServer.ServerID,
+				ServerName:             clusterConfig.ThisServer.Name,
+				SharedSecret:           clusterConfig.SharedSecret,
+				TombstoneRetentionDays: 7,
+			}
+			for _, p := range clusterConfig.Peers {
+				storeCfg.Peers = append(storeCfg.Peers, config.SyncPeerConfig{
+					ID:      p.ServerID,
+					Address: p.URL,
+				})
+			}
+			if err := store.SaveSyncConfig(storeCfg); err != nil {
+				return errors.New("failed to save sync config: " + err.Error())
+			}
+			
+			// Apply config to running sync manager
+			syncMgr.UpdateConfig(newConfig)
+			
+			log.Printf("[cluster-join] Sync configured successfully")
+			return nil
+		})
+	}
 
 	if authMgr != nil {
 		authMgr.RegisterAuthRoutes(mux)
@@ -537,9 +743,8 @@ func applyDelete(store *storage.Store, entityType, entityID string) error {
 	case sync.EntityZone:
 		return store.DeleteZone(entityID)
 	case sync.EntityRecord:
-		// Records need more context to delete - entityID should contain the info
-		// Format: zone:name:type:recordID
-		return nil // TODO: implement record deletion parsing
+		// Delete record by ID - the ID is all we have from sync
+		return store.DeleteRecordByID(entityID)
 	case sync.EntityUser:
 		return store.DeleteUser(entityID)
 	case sync.EntityTenant:
@@ -550,10 +755,48 @@ func applyDelete(store *storage.Store, entityType, entityID string) error {
 		return store.DeleteAPIKey(entityID)
 	case sync.EntitySession:
 		return store.DeleteSession(entityID)
+	case sync.EntityTLSCert:
+		return store.DeleteCertificate(entityID)
 	default:
 		log.Printf("[sync] Unknown entity type for delete: %s", entityType)
 		return nil
 	}
+}
+
+// entityHasChanged compares two entities to determine if they have meaningful differences.
+// It ignores timestamp fields (CreatedAt, UpdatedAt) to prevent sync loops.
+func entityHasChanged(existing, incoming interface{}) bool {
+	// Marshal both to JSON for comparison, but we need to normalize timestamps
+	existingData, err := json.Marshal(existing)
+	if err != nil {
+		return true // Can't compare, assume changed
+	}
+	incomingData, err := json.Marshal(incoming)
+	if err != nil {
+		return true // Can't compare, assume changed
+	}
+
+	// Unmarshal to maps so we can remove timestamp fields
+	var existingMap, incomingMap map[string]interface{}
+	if err := json.Unmarshal(existingData, &existingMap); err != nil {
+		return true
+	}
+	if err := json.Unmarshal(incomingData, &incomingMap); err != nil {
+		return true
+	}
+
+	// Remove timestamp fields that we want to ignore
+	timestampFields := []string{"created_at", "updated_at", "CreatedAt", "UpdatedAt", "last_sync_time", "LastSyncTime"}
+	for _, field := range timestampFields {
+		delete(existingMap, field)
+		delete(incomingMap, field)
+	}
+
+	// Re-marshal and compare
+	existingNorm, _ := json.Marshal(existingMap)
+	incomingNorm, _ := json.Marshal(incomingMap)
+
+	return string(existingNorm) != string(incomingNorm)
 }
 
 // applyCreateOrUpdate handles creation or update of entities
@@ -577,6 +820,11 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 		// Check if exists
 		existing, _ := store.GetZone(zone.Name)
 		if existing != nil {
+			// Check if anything has actually changed
+			if !entityHasChanged(existing, &zone) {
+				log.Printf("[sync] Zone %s unchanged, skipping update", zone.Name)
+				return nil
+			}
 			return store.UpdateZone(&zone)
 		}
 		return store.CreateZone(&zone)
@@ -586,8 +834,37 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 		if err := json.Unmarshal(data, &record); err != nil {
 			return err
 		}
+		// For records, check if it already exists with same data
 		if entry.Operation == sync.OpCreate {
+			// Check if record already exists
+			existing, err := store.GetRecords(record.Zone, record.Name, record.Type)
+			if err == nil {
+				for _, r := range existing {
+					if r.ID == record.ID {
+						// Record already exists, check if changed
+						if !entityHasChanged(&r, &record) {
+							log.Printf("[sync] Record %s unchanged, skipping create", record.ID)
+							return nil
+						}
+						// Exists but changed, update instead
+						return store.UpdateRecord(&record)
+					}
+				}
+			}
 			return store.CreateRecord(&record)
+		}
+		// For updates, check if record has actually changed
+		existing, err := store.GetRecords(record.Zone, record.Name, record.Type)
+		if err == nil {
+			for _, r := range existing {
+				if r.ID == record.ID {
+					if !entityHasChanged(&r, &record) {
+						log.Printf("[sync] Record %s unchanged, skipping update", record.ID)
+						return nil
+					}
+					break
+				}
+			}
 		}
 		return store.UpdateRecord(&record)
 
@@ -599,6 +876,16 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 		// Check if exists
 		existing, _ := store.GetUser(user.ID)
 		if existing != nil {
+			// Preserve existing password hash if incoming is empty
+			// This handles stale oplog entries that don't include password hash
+			if user.PasswordHash == "" && existing.PasswordHash != "" {
+				user.PasswordHash = existing.PasswordHash
+			}
+			// Check if anything has actually changed
+			if !entityHasChanged(existing, &user) {
+				log.Printf("[sync] User %s unchanged, skipping update", user.ID)
+				return nil
+			}
 			return store.UpdateUser(&user)
 		}
 		return store.CreateUser(&user)
@@ -610,6 +897,11 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 		}
 		existing, _ := store.GetTenant(tenant.ID)
 		if existing != nil {
+			// Check if anything has actually changed
+			if !entityHasChanged(existing, &tenant) {
+				log.Printf("[sync] Tenant %s unchanged, skipping update", tenant.ID)
+				return nil
+			}
 			return store.UpdateTenant(&tenant)
 		}
 		return store.CreateTenant(&tenant)
@@ -618,6 +910,14 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 		var keys storage.DNSSECKeys
 		if err := json.Unmarshal(data, &keys); err != nil {
 			return err
+		}
+		// Check if DNSSEC keys have changed
+		existing, _ := store.GetDNSSECKeys(keys.ZoneName)
+		if existing != nil {
+			if !entityHasChanged(existing, &keys) {
+				log.Printf("[sync] DNSSEC keys for %s unchanged, skipping update", keys.ZoneName)
+				return nil
+			}
 		}
 		return store.SaveDNSSECKeys(&keys)
 
@@ -636,6 +936,11 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 			} else if existing.KeyHash == "synced_from_remote_server_key_not_usable_locally" {
 				// Repair: existing has placeholder hash, use the real one from sync
 				log.Printf("[sync] Repairing API key %s with real hash from sync", apiKey.ID)
+			}
+			// Check if anything has actually changed
+			if !entityHasChanged(existing, &apiKey) {
+				log.Printf("[sync] API key %s unchanged, skipping update", apiKey.ID)
+				return nil
 			}
 			return store.UpdateAPIKey(&apiKey)
 		}
@@ -660,6 +965,43 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 		}
 		log.Printf("[sync] Creating synced session %s for user %s", session.ID, session.Username)
 		return store.CreateSession(&session)
+
+	case sync.EntityTLSCert:
+		var cert storage.TLSCertificate
+		if err := json.Unmarshal(data, &cert); err != nil {
+			return err
+		}
+		// Only sync if the certificate is valid (not expired)
+		if time.Now().After(cert.NotAfter) {
+			log.Printf("[sync] Skipping expired certificate for %s", cert.Domain)
+			return nil
+		}
+		// Check if certificate has actually changed
+		existing, _ := store.GetCertificate(cert.Domain)
+		if existing != nil {
+			if !entityHasChanged(existing, &cert) {
+				log.Printf("[sync] TLS certificate for %s unchanged, skipping update", cert.Domain)
+				return nil
+			}
+		}
+		log.Printf("[sync] Syncing TLS certificate for %s (expires %s)", cert.Domain, cert.NotAfter.Format("2006-01-02"))
+		return store.StoreCertificate(&cert)
+
+	case sync.EntityRecursion:
+		var cfg storage.RecursionConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return err
+		}
+		// Check if recursion config has actually changed
+		existing, _ := store.GetRecursionConfig()
+		if existing != nil {
+			if !entityHasChanged(existing, &cfg) {
+				log.Printf("[sync] Recursion config unchanged, skipping update")
+				return nil
+			}
+		}
+		log.Printf("[sync] Syncing recursion config (enabled: %v, mode: %s)", cfg.Enabled, cfg.Mode)
+		return store.UpdateRecursionConfig(&cfg)
 
 	default:
 		log.Printf("[sync] Unknown entity type: %s", entry.EntityType)
@@ -687,7 +1029,7 @@ func createFullSyncProvider(store *storage.Store) sync.FullSyncProvider {
 			}
 		}
 
-		// Get all users (for each tenant)
+		// Get all users (for each tenant) - include password hash for cluster auth
 		for _, tenant := range tenants {
 			users, err := store.ListUsers(tenant.ID)
 			if err != nil {
@@ -695,29 +1037,12 @@ func createFullSyncProvider(store *storage.Store) sync.FullSyncProvider {
 				continue
 			}
 			for _, user := range users {
-				// Create a sync-safe version (no password hash)
-				syncUser := struct {
-					ID          string `json:"id"`
-					Username    string `json:"username"`
-					TenantID    string `json:"tenant_id"`
-					Email       string `json:"email"`
-					DisplayName string `json:"display_name"`
-					Role        string `json:"role"`
-					CreatedAt   string `json:"created_at"`
-				}{
-					ID:          user.ID,
-					Username:    user.Username,
-					TenantID:    user.TenantID,
-					Email:       user.Email,
-					DisplayName: user.DisplayName,
-					Role:        user.Role,
-					CreatedAt:   user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-				}
+				// Include full user data for cluster sync (password hash needed for auth)
 				items = append(items, sync.FullSyncDataItem{
 					EntityType: sync.EntityUser,
 					EntityID:   user.ID,
 					TenantID:   user.TenantID,
-					Data:       syncUser,
+					Data:       user,
 				})
 			}
 		}
@@ -828,6 +1153,37 @@ func createFullSyncProvider(store *storage.Store) sync.FullSyncProvider {
 					Data:       map[string]string{"key": key, "value": value},
 				})
 			}
+		}
+
+		// Get all TLS certificates (for cluster-wide certificate sharing)
+		certs, err := store.ListCertificates()
+		if err != nil {
+			log.Printf("[sync] Warning: failed to list certificates: %v", err)
+		} else {
+			for _, cert := range certs {
+				// Only sync valid (non-expired) certificates
+				if time.Now().Before(cert.NotAfter) {
+					items = append(items, sync.FullSyncDataItem{
+						EntityType: sync.EntityTLSCert,
+						EntityID:   cert.Domain,
+						TenantID:   "",
+						Data:       cert,
+					})
+				}
+			}
+		}
+
+		// Get recursion config (for cluster-wide recursion settings)
+		recursionCfg, err := store.GetRecursionConfig()
+		if err != nil {
+			log.Printf("[sync] Warning: failed to get recursion config: %v", err)
+		} else {
+			items = append(items, sync.FullSyncDataItem{
+				EntityType: sync.EntityRecursion,
+				EntityID:   storage.ConfigKeyRecursion,
+				TenantID:   "",
+				Data:       recursionCfg,
+			})
 		}
 
 		log.Printf("[sync] Full sync provider collected %d items", len(items))

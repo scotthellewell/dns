@@ -67,6 +67,7 @@ type Manager struct {
 	mu         sync.RWMutex
 	config     Config
 	configPath string
+	storage    StorageInterface // Storage backend for persistence
 
 	// TLS configuration provider
 	tlsProvider TLSConfigProvider

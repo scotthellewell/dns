@@ -45,6 +45,17 @@
             </td>
           </ng-container>
 
+          <ng-container matColumnDef="default_nameservers">
+            <th mat-header-cell *matHeaderCellDef>Default Nameservers</th>
+            <td mat-cell *matCellDef="let tenant">
+              @if (tenant.default_nameservers?.length) {
+                <span class="ns-list">{{ tenant.default_nameservers.join(', ') }}</span>
+              } @else {
+                <span class="no-ns">Inherit from main</span>
+              }
+            </td>
+          </ng-container>
+
           <ng-container matColumnDef="is_main">
             <th mat-header-cell *matHeaderCellDef>Type</th>
             <td mat-cell *matCellDef="let tenant">

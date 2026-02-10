@@ -317,6 +317,13 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 // handleRequest handles incoming DNS requests
 func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
+	// Add panic recovery to catch any issues
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[PANIC] handleRequest panic: %v", r)
+		}
+	}()
+	
 	startTime := time.Now()
 
 	// Extract client IP for RRL and logging
@@ -387,9 +394,12 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 		// Check for delegation before local processing
 		if del, found := cfg.FindDelegation(q.Name); found {
+			log.Printf("[DEBUG] Found delegation for %s -> %s (forward: %v)", q.Name, del.Zone, del.Forward)
 			if s.handleDelegation(w, r, m, q, del, wantDNSSEC) {
+				log.Printf("[DEBUG] Delegation handled, returning")
 				return // Delegation handled the request
 			}
+			log.Printf("[DEBUG] Delegation not handled, continuing to local processing")
 		}
 
 		switch q.Qtype {
@@ -469,7 +479,9 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	w.WriteMsg(m)
+	if err := w.WriteMsg(m); err != nil {
+		log.Printf("WriteMsg error: %v", err)
+	}
 
 	// Log query if enabled
 	if s.querylog != nil {
@@ -748,20 +760,31 @@ func (s *Server) handleCNAME(m *dns.Msg, q dns.Question) {
 	}
 
 	target, ttl, found := s.getResolver().LookupCNAME(q.Name)
-	if !found {
+	if found {
+		rr := &dns.CNAME{
+			Hdr: dns.RR_Header{
+				Name:   q.Name,
+				Rrtype: dns.TypeCNAME,
+				Class:  dns.ClassINET,
+				Ttl:    ttl,
+			},
+			Target: target,
+		}
+		m.Answer = append(m.Answer, rr)
 		return
 	}
 
-	rr := &dns.CNAME{
-		Hdr: dns.RR_Header{
-			Name:   q.Name,
-			Rrtype: dns.TypeCNAME,
-			Class:  dns.ClassINET,
-			Ttl:    ttl,
-		},
-		Target: target,
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeCNAME)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
+		}
 	}
-	m.Answer = append(m.Answer, rr)
 }
 
 // handleMX handles MX queries
@@ -773,22 +796,38 @@ func (s *Server) handleMX(m *dns.Msg, q dns.Question) {
 	}
 
 	records := s.getResolver().LookupMX(q.Name)
-	if len(records) == 0 {
+	if len(records) > 0 {
+		for _, rec := range records {
+			// Ensure target has trailing dot for FQDN
+			target := rec.Target
+			if !strings.HasSuffix(target, ".") {
+				target += "."
+			}
+			rr := &dns.MX{
+				Hdr: dns.RR_Header{
+					Name:   q.Name,
+					Rrtype: dns.TypeMX,
+					Class:  dns.ClassINET,
+					Ttl:    rec.TTL,
+				},
+				Preference: rec.Priority,
+				Mx:         target,
+			}
+			m.Answer = append(m.Answer, rr)
+		}
 		return
 	}
 
-	for _, rec := range records {
-		rr := &dns.MX{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeMX,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
-			Preference: rec.Priority,
-			Mx:         rec.Target,
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeMX)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
 		}
-		m.Answer = append(m.Answer, rr)
 	}
 }
 
@@ -820,21 +859,32 @@ func (s *Server) handleTXT(m *dns.Msg, q dns.Question) {
 	}
 
 	records := s.getResolver().LookupTXT(q.Name)
-	if len(records) == 0 {
+	if len(records) > 0 {
+		for _, rec := range records {
+			rr := &dns.TXT{
+				Hdr: dns.RR_Header{
+					Name:   q.Name,
+					Rrtype: dns.TypeTXT,
+					Class:  dns.ClassINET,
+					Ttl:    rec.TTL,
+				},
+				Txt: rec.Values,
+			}
+			m.Answer = append(m.Answer, rr)
+		}
 		return
 	}
 
-	for _, rec := range records {
-		rr := &dns.TXT{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeTXT,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
-			Txt: rec.Values,
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeTXT)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
 		}
-		m.Answer = append(m.Answer, rr)
 	}
 }
 
@@ -846,22 +896,72 @@ func (s *Server) handleNS(m *dns.Msg, q dns.Question) {
 		return
 	}
 
-	records := s.getResolver().LookupNS(q.Name)
-	if len(records) == 0 {
+	resolver := s.getResolver()
+	records := resolver.LookupNS(q.Name)
+	if len(records) > 0 {
+		for _, rec := range records {
+			rr := &dns.NS{
+				Hdr: dns.RR_Header{
+					Name:   q.Name,
+					Rrtype: dns.TypeNS,
+					Class:  dns.ClassINET,
+					Ttl:    rec.TTL,
+				},
+				Ns: rec.Target,
+			}
+			m.Answer = append(m.Answer, rr)
+
+			// Add glue records (A/AAAA) for the nameserver if we have them
+			s.addGlueRecords(m, rec.Target, rec.TTL)
+		}
 		return
 	}
 
-	for _, rec := range records {
-		rr := &dns.NS{
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeNS)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
+		}
+	}
+}
+
+// addGlueRecords adds A and AAAA records for the given nameserver to the Extra section
+func (s *Server) addGlueRecords(m *dns.Msg, nameserver string, ttl uint32) {
+	resolver := s.getResolver()
+
+	// Look up A records for the nameserver
+	aRecords := resolver.LookupAAll(nameserver)
+	for _, rec := range aRecords {
+		rr := &dns.A{
 			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeNS,
+				Name:   nameserver,
+				Rrtype: dns.TypeA,
 				Class:  dns.ClassINET,
 				Ttl:    rec.TTL,
 			},
-			Ns: rec.Target,
+			A: rec.IP,
 		}
-		m.Answer = append(m.Answer, rr)
+		m.Extra = append(m.Extra, rr)
+	}
+
+	// Look up AAAA records for the nameserver
+	aaaaRecords := resolver.LookupAAAAAll(nameserver)
+	for _, rec := range aaaaRecords {
+		rr := &dns.AAAA{
+			Hdr: dns.RR_Header{
+				Name:   nameserver,
+				Rrtype: dns.TypeAAAA,
+				Class:  dns.ClassINET,
+				Ttl:    rec.TTL,
+			},
+			AAAA: rec.IP,
+		}
+		m.Extra = append(m.Extra, rr)
 	}
 }
 
@@ -874,24 +974,35 @@ func (s *Server) handleSRV(m *dns.Msg, q dns.Question) {
 	}
 
 	records := s.getResolver().LookupSRV(q.Name)
-	if len(records) == 0 {
+	if len(records) > 0 {
+		for _, rec := range records {
+			rr := &dns.SRV{
+				Hdr: dns.RR_Header{
+					Name:   q.Name,
+					Rrtype: dns.TypeSRV,
+					Class:  dns.ClassINET,
+					Ttl:    rec.TTL,
+				},
+				Priority: rec.Priority,
+				Weight:   rec.Weight,
+				Port:     rec.Port,
+				Target:   rec.Target,
+			}
+			m.Answer = append(m.Answer, rr)
+		}
 		return
 	}
 
-	for _, rec := range records {
-		rr := &dns.SRV{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeSRV,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
-			Priority: rec.Priority,
-			Weight:   rec.Weight,
-			Port:     rec.Port,
-			Target:   rec.Target,
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeSRV)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
 		}
-		m.Answer = append(m.Answer, rr)
 	}
 }
 
@@ -911,26 +1022,37 @@ func (s *Server) handleSOA(m *dns.Msg, q dns.Question) {
 	}
 
 	record, found := s.getResolver().LookupSOA(q.Name)
-	if !found {
+	if found {
+		rr := &dns.SOA{
+			Hdr: dns.RR_Header{
+				Name:   q.Name,
+				Rrtype: dns.TypeSOA,
+				Class:  dns.ClassINET,
+				Ttl:    record.TTL,
+			},
+			Ns:      record.MName,
+			Mbox:    record.RName,
+			Serial:  record.Serial,
+			Refresh: record.Refresh,
+			Retry:   record.Retry,
+			Expire:  record.Expire,
+			Minttl:  record.Minimum,
+		}
+		m.Answer = append(m.Answer, rr)
 		return
 	}
 
-	rr := &dns.SOA{
-		Hdr: dns.RR_Header{
-			Name:   q.Name,
-			Rrtype: dns.TypeSOA,
-			Class:  dns.ClassINET,
-			Ttl:    record.TTL,
-		},
-		Ns:      record.MName,
-		Mbox:    record.RName,
-		Serial:  record.Serial,
-		Refresh: record.Refresh,
-		Retry:   record.Retry,
-		Expire:  record.Expire,
-		Minttl:  record.Minimum,
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeSOA)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
+		}
 	}
-	m.Answer = append(m.Answer, rr)
 }
 
 // handleCAA handles CAA queries
@@ -942,23 +1064,34 @@ func (s *Server) handleCAA(m *dns.Msg, q dns.Question) {
 	}
 
 	records := s.getResolver().LookupCAA(q.Name)
-	if len(records) == 0 {
+	if len(records) > 0 {
+		for _, rec := range records {
+			rr := &dns.CAA{
+				Hdr: dns.RR_Header{
+					Name:   q.Name,
+					Rrtype: dns.TypeCAA,
+					Class:  dns.ClassINET,
+					Ttl:    rec.TTL,
+				},
+				Flag:  rec.Flag,
+				Tag:   rec.Tag,
+				Value: rec.Value,
+			}
+			m.Answer = append(m.Answer, rr)
+		}
 		return
 	}
 
-	for _, rec := range records {
-		rr := &dns.CAA{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeCAA,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
-			Flag:  rec.Flag,
-			Tag:   rec.Tag,
-			Value: rec.Value,
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeCAA)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
 		}
-		m.Answer = append(m.Answer, rr)
 	}
 }
 
@@ -1113,123 +1246,178 @@ func (s *Server) handleDelegationReferral(w dns.ResponseWriter, r *dns.Msg, m *d
 // handleSSHFP handles SSHFP queries
 func (s *Server) handleSSHFP(m *dns.Msg, q dns.Question) {
 	records := s.getResolver().LookupSSHFP(q.Name)
-	if len(records) == 0 {
+	if len(records) > 0 {
+		for _, rec := range records {
+			rr := &dns.SSHFP{
+				Hdr: dns.RR_Header{
+					Name:   q.Name,
+					Rrtype: dns.TypeSSHFP,
+					Class:  dns.ClassINET,
+					Ttl:    rec.TTL,
+				},
+				Algorithm:   rec.Algorithm,
+				Type:        rec.Type,
+				FingerPrint: rec.Fingerprint,
+			}
+			m.Answer = append(m.Answer, rr)
+		}
 		return
 	}
 
-	for _, rec := range records {
-		rr := &dns.SSHFP{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeSSHFP,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
-			Algorithm:   rec.Algorithm,
-			Type:        rec.Type,
-			FingerPrint: rec.Fingerprint,
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeSSHFP)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
 		}
-		m.Answer = append(m.Answer, rr)
 	}
 }
 
 // handleTLSA handles TLSA queries (DANE)
 func (s *Server) handleTLSA(m *dns.Msg, q dns.Question) {
 	records := s.getResolver().LookupTLSA(q.Name)
-	if len(records) == 0 {
+	if len(records) > 0 {
+		for _, rec := range records {
+			rr := &dns.TLSA{
+				Hdr: dns.RR_Header{
+					Name:   q.Name,
+					Rrtype: dns.TypeTLSA,
+					Class:  dns.ClassINET,
+					Ttl:    rec.TTL,
+				},
+				Usage:        rec.Usage,
+				Selector:     rec.Selector,
+				MatchingType: rec.MatchingType,
+				Certificate:  rec.Certificate,
+			}
+			m.Answer = append(m.Answer, rr)
+		}
 		return
 	}
 
-	for _, rec := range records {
-		rr := &dns.TLSA{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeTLSA,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
-			Usage:        rec.Usage,
-			Selector:     rec.Selector,
-			MatchingType: rec.MatchingType,
-			Certificate:  rec.Certificate,
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeTLSA)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
 		}
-		m.Answer = append(m.Answer, rr)
 	}
 }
 
 // handleNAPTR handles NAPTR queries
 func (s *Server) handleNAPTR(m *dns.Msg, q dns.Question) {
 	records := s.getResolver().LookupNAPTR(q.Name)
-	if len(records) == 0 {
+	if len(records) > 0 {
+		for _, rec := range records {
+			rr := &dns.NAPTR{
+				Hdr: dns.RR_Header{
+					Name:   q.Name,
+					Rrtype: dns.TypeNAPTR,
+					Class:  dns.ClassINET,
+					Ttl:    rec.TTL,
+				},
+				Order:       rec.Order,
+				Preference:  rec.Preference,
+				Flags:       rec.Flags,
+				Service:     rec.Service,
+				Regexp:      rec.Regexp,
+				Replacement: rec.Replacement,
+			}
+			m.Answer = append(m.Answer, rr)
+		}
 		return
 	}
 
-	for _, rec := range records {
-		rr := &dns.NAPTR{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeNAPTR,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
-			Order:       rec.Order,
-			Preference:  rec.Preference,
-			Flags:       rec.Flags,
-			Service:     rec.Service,
-			Regexp:      rec.Regexp,
-			Replacement: rec.Replacement,
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeNAPTR)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
 		}
-		m.Answer = append(m.Answer, rr)
 	}
 }
 
 // handleSVCB handles SVCB queries
 func (s *Server) handleSVCB(m *dns.Msg, q dns.Question) {
 	records := s.getResolver().LookupSVCB(q.Name)
-	if len(records) == 0 {
+	if len(records) > 0 {
+		for _, rec := range records {
+			rr := &dns.SVCB{
+				Hdr: dns.RR_Header{
+					Name:   q.Name,
+					Rrtype: dns.TypeSVCB,
+					Class:  dns.ClassINET,
+					Ttl:    rec.TTL,
+				},
+				Priority: rec.Priority,
+				Target:   rec.Target,
+			}
+			// Parse SVCB params
+			parseSVCBParams(rr, rec.Params)
+			m.Answer = append(m.Answer, rr)
+		}
 		return
 	}
 
-	for _, rec := range records {
-		rr := &dns.SVCB{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeSVCB,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
-			Priority: rec.Priority,
-			Target:   rec.Target,
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeSVCB)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
 		}
-		// Parse SVCB params
-		parseSVCBParams(rr, rec.Params)
-		m.Answer = append(m.Answer, rr)
 	}
 }
 
 // handleHTTPS handles HTTPS queries (HTTPS-specific SVCB)
 func (s *Server) handleHTTPS(m *dns.Msg, q dns.Question) {
 	records := s.getResolver().LookupHTTPS(q.Name)
-	if len(records) == 0 {
+	if len(records) > 0 {
+		for _, rec := range records {
+			rr := &dns.HTTPS{
+				SVCB: dns.SVCB{
+					Hdr: dns.RR_Header{
+						Name:   q.Name,
+						Rrtype: dns.TypeHTTPS,
+						Class:  dns.ClassINET,
+						Ttl:    rec.TTL,
+					},
+					Priority: rec.Priority,
+					Target:   rec.Target,
+				},
+			}
+			// Parse SVCB params for HTTPS record
+			parseSVCBParams(&rr.SVCB, rec.Params)
+			m.Answer = append(m.Answer, rr)
+		}
 		return
 	}
 
-	for _, rec := range records {
-		rr := &dns.HTTPS{
-			SVCB: dns.SVCB{
-				Hdr: dns.RR_Header{
-					Name:   q.Name,
-					Rrtype: dns.TypeHTTPS,
-					Class:  dns.ClassINET,
-					Ttl:    rec.TTL,
-				},
-				Priority: rec.Priority,
-				Target:   rec.Target,
-			},
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeHTTPS)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
 		}
-		// Parse SVCB params for HTTPS record
-		parseSVCBParams(&rr.SVCB, rec.Params)
-		m.Answer = append(m.Answer, rr)
 	}
 }
 
@@ -1285,34 +1473,45 @@ func parseSVCBParams(rr *dns.SVCB, params map[string]string) {
 // handleLOC handles LOC queries (geographic location)
 func (s *Server) handleLOC(m *dns.Msg, q dns.Question) {
 	records := s.getResolver().LookupLOC(q.Name)
-	if len(records) == 0 {
+	if len(records) > 0 {
+		for _, rec := range records {
+			// Convert lat/lon to LOC format (stored as hundredths of arc seconds + 2^31)
+			// LOC uses unsigned 32-bit values where 2^31 is the equator/prime meridian
+			const base uint32 = 1 << 31 // 2147483648
+			lat := base + uint32(int64(rec.Latitude*3600000))
+			lon := base + uint32(int64(rec.Longitude*3600000))
+			alt := uint32((rec.Altitude + 100000) * 100) // Altitude in cm from -100000m
+
+			rr := &dns.LOC{
+				Hdr: dns.RR_Header{
+					Name:   q.Name,
+					Rrtype: dns.TypeLOC,
+					Class:  dns.ClassINET,
+					Ttl:    rec.TTL,
+				},
+				Version:   0,
+				Size:      sizeToDNS(rec.Size),
+				HorizPre:  sizeToDNS(rec.HorizPre),
+				VertPre:   sizeToDNS(rec.VertPre),
+				Latitude:  lat,
+				Longitude: lon,
+				Altitude:  alt,
+			}
+			m.Answer = append(m.Answer, rr)
+		}
 		return
 	}
 
-	for _, rec := range records {
-		// Convert lat/lon to LOC format (stored as hundredths of arc seconds + 2^31)
-		// LOC uses unsigned 32-bit values where 2^31 is the equator/prime meridian
-		const base uint32 = 1 << 31 // 2147483648
-		lat := base + uint32(int64(rec.Latitude*3600000))
-		lon := base + uint32(int64(rec.Longitude*3600000))
-		alt := uint32((rec.Altitude + 100000) * 100) // Altitude in cm from -100000m
-
-		rr := &dns.LOC{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeLOC,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
-			Version:   0,
-			Size:      sizeToDNS(rec.Size),
-			HorizPre:  sizeToDNS(rec.HorizPre),
-			VertPre:   sizeToDNS(rec.VertPre),
-			Latitude:  lat,
-			Longitude: lon,
-			Altitude:  alt,
+	// No local records - try recursive resolution if enabled in full mode
+	rec := s.getRecursion()
+	cfg := s.getConfig()
+	if cfg.Recursion.Mode == "full" {
+		resp, err := rec.QueryAny(q.Name, dns.TypeLOC)
+		if err == nil && resp != nil && len(resp.Answer) > 0 {
+			m.Answer = append(m.Answer, resp.Answer...)
+			m.Ns = append(m.Ns, resp.Ns...)
+			m.Extra = append(m.Extra, resp.Extra...)
 		}
-		m.Answer = append(m.Answer, rr)
 	}
 }
 

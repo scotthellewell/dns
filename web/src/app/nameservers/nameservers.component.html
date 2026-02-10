@@ -1,0 +1,130 @@
+<div class="page-container">
+  <div class="page-header">
+    <h1>Default Nameservers</h1>
+    <p class="subtitle">Configure default NS records for zones in your tenant</p>
+  </div>
+
+  @if (loading()) {
+    <div class="loading-container">
+      <mat-spinner diameter="40"></mat-spinner>
+    </div>
+  } @else {
+    <!-- Tenant Info -->
+    <mat-card class="content-card">
+      <div class="card-section">
+        <div class="section-header">
+          <h2>Tenant: {{ tenantName() }}</h2>
+          <p class="section-desc">
+            These nameservers will be automatically used for all zones in this tenant 
+            unless a zone has explicit NS records defined.
+          </p>
+        </div>
+      </div>
+    </mat-card>
+
+    <!-- Nameservers Configuration -->
+    <mat-card class="content-card">
+      <div class="card-section">
+        <div class="section-header">
+          <h2>Nameserver Records</h2>
+          <p class="section-desc">
+            Add the nameservers that should be returned for NS queries on your zones.
+            The A/AAAA records for these nameservers should be configured in your DNS records.
+          </p>
+        </div>
+
+        <div class="nameservers-list">
+          @if (nameservers().length === 0) {
+            <div class="empty-state">
+              <mat-icon>dns</mat-icon>
+              <p>No default nameservers configured</p>
+              <p class="hint">
+                @if (tenant()?.is_main) {
+                  Add nameservers below to have them used for all zones
+                } @else {
+                  Zones will inherit nameservers from the main tenant, or add your own below
+                }
+              </p>
+            </div>
+          } @else {
+            <div class="ns-chips">
+              @for (ns of nameservers(); track ns; let i = $index) {
+                <mat-chip-row (removed)="removeNameserver(i)">
+                  <mat-icon matChipAvatar>dns</mat-icon>
+                  {{ ns }}
+                  <button matChipRemove>
+                    <mat-icon>cancel</mat-icon>
+                  </button>
+                </mat-chip-row>
+              }
+            </div>
+          }
+        </div>
+
+        <div class="add-ns-row">
+          <mat-form-field appearance="outline" class="ns-input">
+            <mat-label>Add nameserver</mat-label>
+            <input matInput
+                   [(ngModel)]="newNameserver"
+                   placeholder="ns1.example.com"
+                   (keyup.enter)="addNameserver()">
+            <mat-hint>Enter hostname (FQDN) and press Enter or click Add</mat-hint>
+          </mat-form-field>
+          <button mat-raised-button 
+                  color="accent"
+                  class="add-btn"
+                  (click)="addNameserver()" 
+                  [disabled]="!newNameserver.trim()">
+            <mat-icon>add</mat-icon>
+            Add
+          </button>
+        </div>
+
+        <mat-form-field appearance="outline" class="ttl-field">
+          <mat-label>TTL (seconds)</mat-label>
+          <input matInput
+                 type="number"
+                 [(ngModel)]="nameserverTTL"
+                 (ngModelChange)="nameserverTTL.set($event)"
+                 placeholder="0">
+          <mat-hint>0 = use zone default TTL</mat-hint>
+        </mat-form-field>
+      </div>
+    </mat-card>
+
+    <!-- Glue Records Info -->
+    <mat-card class="content-card info-card">
+      <div class="card-section">
+        <div class="section-header">
+          <mat-icon class="info-icon">info</mat-icon>
+          <div>
+            <h2>About Glue Records</h2>
+            <p class="section-desc">
+              If your nameservers are under a domain you host (e.g., ns1.yourdomain.com for yourdomain.com),
+              you need to have A and/or AAAA records for those nameservers. These "glue records" are automatically
+              included in NS query responses when available.
+            </p>
+          </div>
+        </div>
+      </div>
+    </mat-card>
+
+    <!-- Save Actions -->
+    @if (hasChanges()) {
+      <div class="actions-bar">
+        <button mat-button (click)="reset()">
+          <mat-icon>undo</mat-icon>
+          Reset
+        </button>
+        <button mat-raised-button color="primary" (click)="save()" [disabled]="saving()">
+          @if (saving()) {
+            <mat-spinner diameter="18"></mat-spinner>
+          } @else {
+            <mat-icon>save</mat-icon>
+            Save Changes
+          }
+        </button>
+      </div>
+    }
+  }
+</div>

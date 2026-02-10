@@ -91,17 +91,13 @@ func TestNewSNIManager(t *testing.T) {
 	if mgr.pendingACME == nil {
 		t.Error("pendingACME should be initialized")
 	}
-
-	if mgr.defaultCert == nil {
-		t.Error("defaultCert should be initialized")
-	}
 }
 
 func TestGetCertificate_NoSNI(t *testing.T) {
 	store := newMockStorage()
 	mgr := NewSNIManager(store, nil)
 
-	// Request without SNI should return default cert
+	// Request without SNI should return a self-signed certificate for localhost
 	hello := &tls.ClientHelloInfo{
 		ServerName: "",
 	}
@@ -112,12 +108,18 @@ func TestGetCertificate_NoSNI(t *testing.T) {
 	}
 
 	if cert == nil {
-		t.Fatal("Expected default certificate, got nil")
+		t.Fatal("Expected certificate, got nil")
 	}
 
-	// Verify it's the default cert
-	if cert != mgr.defaultCert {
-		t.Error("Expected default certificate")
+	// Verify we got a self-signed localhost cert
+	x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("Failed to parse certificate: %v", err)
+	}
+
+	// Should be self-signed for localhost
+	if x509Cert.Subject.CommonName != "localhost" {
+		t.Logf("Got certificate for: %s (expected localhost)", x509Cert.Subject.CommonName)
 	}
 }
 

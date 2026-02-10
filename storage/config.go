@@ -35,7 +35,8 @@ func (s *Store) GetServerConfig() (*ServerConfig, error) {
 	})
 
 	if err == ErrNotFound {
-		// Return defaults
+		// Return defaults with Port=0 to indicate "not configured"
+		// Port manager will auto-detect available port on first run
 		return &ServerConfig{
 			DNS: DNSConfig{
 				Enabled: true,
@@ -50,13 +51,13 @@ func (s *Store) GetServerConfig() (*ServerConfig, error) {
 			},
 			DoH: DoHConfig{
 				Enabled: false,
-				Port:    443,
+				Port:    0, // Auto-detect
 				Path:    "/dns-query",
 			},
 			Web: WebConfig{
 				Enabled: true,
-				Port:    8080,
-				TLS:     false,
+				Port:    0, // Auto-detect on first run
+				TLS:     true,
 			},
 		}, nil
 	}
@@ -105,7 +106,7 @@ func (s *Store) GetRecursionConfig() (*RecursionConfig, error) {
 
 // UpdateRecursionConfig saves the recursion configuration.
 func (s *Store) UpdateRecursionConfig(config *RecursionConfig) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("config"))
 		data, err := json.Marshal(config)
 		if err != nil {
@@ -113,6 +114,12 @@ func (s *Store) UpdateRecursionConfig(config *RecursionConfig) error {
 		}
 		return bucket.Put([]byte(ConfigKeyRecursion), data)
 	})
+
+	if err == nil {
+		recordChange(EntityTypeRecursion, ConfigKeyRecursion, "", OpUpdate, config)
+	}
+
+	return err
 }
 
 // GetRateLimitConfig retrieves the rate limit configuration.
@@ -451,7 +458,7 @@ func (s *Store) StoreCertificate(cert *TLSCertificate) error {
 		return fmt.Errorf("certificate domain required")
 	}
 
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("certificates"))
 		data, err := json.Marshal(cert)
 		if err != nil {
@@ -459,6 +466,13 @@ func (s *Store) StoreCertificate(cert *TLSCertificate) error {
 		}
 		return bucket.Put([]byte(cert.Domain), data)
 	})
+	
+	if err == nil {
+		// Record for sync - use "tls_cert" entity type
+		recordChange("tls_cert", cert.Domain, "", "create", cert)
+	}
+	
+	return err
 }
 
 // GetCertificate retrieves a TLS certificate by domain.
@@ -479,10 +493,16 @@ func (s *Store) GetCertificate(domain string) (*TLSCertificate, error) {
 
 // DeleteCertificate deletes a TLS certificate.
 func (s *Store) DeleteCertificate(domain string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("certificates"))
 		return bucket.Delete([]byte(domain))
 	})
+	
+	if err == nil {
+		recordChange("tls_cert", domain, "", "delete", nil)
+	}
+	
+	return err
 }
 
 // ListCertificates lists all TLS certificates.
@@ -503,4 +523,44 @@ func (s *Store) ListCertificates() ([]TLSCertificate, error) {
 	})
 
 	return certs, err
+}
+
+// SyncConfigStorage is the format for storing sync configuration
+type SyncConfigStorage struct {
+	Enabled                bool                    `json:"enabled"`
+	NodeID                 string                  `json:"node_id"`
+	ServerName             string                  `json:"server_name"`
+	SharedSecret           string                  `json:"shared_secret"`
+	TombstoneRetentionDays int                     `json:"tombstone_retention_days"`
+	Peers                  []SyncPeerConfigStorage `json:"peers"`
+}
+
+// SyncPeerConfigStorage is the format for storing peer configuration
+type SyncPeerConfigStorage struct {
+	ID                 string `json:"id"`
+	URL                string `json:"url"`
+	Name               string `json:"name,omitempty"`
+	APIKey             string `json:"api_key,omitempty"`
+	InsecureSkipVerify bool   `json:"insecure_skip_verify,omitempty"`
+}
+
+// SaveSyncConfig saves sync configuration to storage
+func (s *Store) SaveSyncConfig(cfg interface{}) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("config"))
+		if bucket == nil {
+			var err error
+			bucket, err = tx.CreateBucketIfNotExists([]byte("config"))
+			if err != nil {
+				return err
+			}
+		}
+
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			return err
+		}
+
+		return bucket.Put([]byte("sync"), data)
+	})
 }

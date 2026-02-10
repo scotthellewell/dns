@@ -19,6 +19,8 @@ export interface Tenant {
   name: string;
   description?: string;
   is_main?: boolean;
+  default_nameservers?: string[];
+  default_nameserver_ttl?: number;
   created_at?: string;
   created_by?: string;
 }
@@ -447,6 +449,32 @@ export class AuthService {
     );
   }
 
+  /**
+   * Join an existing cluster during setup
+   */
+  joinCluster(data: { 
+    cluster_url: string; 
+    username: string; 
+    password: string; 
+    server_url: string; 
+    server_name?: string;
+    acme_email: string;
+    acme_domain: string;
+    acme_staging?: boolean;
+    acme_provider?: string;
+    acme_eab_key_id?: string;
+    acme_eab_hmac_key?: string;
+  }): Observable<{ success: boolean; message: string; peers: any[] }> {
+    return this.http.post<{ success: boolean; message: string; peers: any[] }>(`${this.baseUrl}/join-cluster`, data).pipe(
+      tap(response => {
+        if (response.success) {
+          this.needsSetup.set(false);
+          this.isAuthenticated.set(true);
+        }
+      })
+    );
+  }
+
   // ============ Tenant Management (Super Admin) ============
 
   /**
@@ -473,7 +501,12 @@ export class AuthService {
   /**
    * Update a tenant
    */
-  updateTenant(tenantId: string, updates: { name?: string; description?: string }): Observable<Tenant> {
+  updateTenant(tenantId: string, updates: { 
+    name?: string; 
+    description?: string;
+    default_nameservers?: string[];
+    default_nameserver_ttl?: number;
+  }): Observable<Tenant> {
     return this.http.put<Tenant>(`${this.baseUrl}/tenants/${tenantId}`, updates);
   }
 

@@ -12,6 +12,7 @@ type Entry struct {
 	CNAMEs    []string
 	TTL       uint32
 	ExpiresAt time.Time
+	Negative  bool // True if this is a negative cache entry (NXDOMAIN/NODATA)
 }
 
 // Cache provides TTL-based caching for DNS responses
@@ -72,13 +73,28 @@ func (c *Cache) Get(key string) (*Entry, bool) {
 
 // Set stores an entry in the cache
 func (c *Cache) Set(key string, ips []net.IP, cnames []string, ttl uint32) {
+	c.SetWithNegative(key, ips, cnames, ttl, false)
+}
+
+// SetNegative stores a negative cache entry (NXDOMAIN/NODATA)
+func (c *Cache) SetNegative(key string, ttl uint32) {
+	c.SetWithNegative(key, nil, nil, ttl, true)
+}
+
+// SetWithNegative stores an entry in the cache with optional negative flag
+func (c *Cache) SetWithNegative(key string, ips []net.IP, cnames []string, ttl uint32, negative bool) {
 	if ttl == 0 {
-		return // Don't cache zero TTL responses
+		ttl = 60 // Default negative cache TTL of 60 seconds
 	}
 
 	// Cap TTL at 1 hour to prevent stale entries
-	if ttl > 3600 {
-		ttl = 3600
+	// For negative entries, cap at 5 minutes to allow faster recovery
+	maxTTL := uint32(3600)
+	if negative && ttl > 300 {
+		maxTTL = 300
+	}
+	if ttl > maxTTL {
+		ttl = maxTTL
 	}
 
 	c.mu.Lock()
@@ -94,6 +110,7 @@ func (c *Cache) Set(key string, ips []net.IP, cnames []string, ttl uint32) {
 		CNAMEs:    cnames,
 		TTL:       ttl,
 		ExpiresAt: time.Now().Add(time.Duration(ttl) * time.Second),
+		Negative:  negative,
 	}
 }
 

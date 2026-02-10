@@ -2,10 +2,11 @@
   <div class="page-header">
     <h1>DNS Records</h1>
     <div class="header-actions">
-      <select *ngIf="auth.isSuperAdmin()" [(ngModel)]="selectedTenant" (change)="onTenantFilterChange()" class="tenant-filter">
-        <option value="">All Tenants</option>
-        <option *ngFor="let tenant of tenants" [value]="tenant.id">{{ tenant.name }}</option>
-      </select>
+      <input type="text" 
+             class="search-filter" 
+             placeholder="Search records..." 
+             [(ngModel)]="searchFilter" 
+             (ngModelChange)="onSearchFilterChange()">
       <select [(ngModel)]="selectedZone" (change)="onZoneFilterChange()" class="zone-filter">
         <option value="">All Zones</option>
         <option *ngFor="let zone of filteredZones" [value]="zone.name">{{ zone.name }}</option>
@@ -24,7 +25,6 @@
         <tr>
           <th>Type</th>
           <th>Zone</th>
-          <th *ngIf="!selectedTenant && auth.isSuperAdmin()">Tenant</th>
           <th>Record</th>
           <th>TTL</th>
           <th>Actions</th>
@@ -32,12 +32,11 @@
       </thead>
       <tbody>
         <tr *ngFor="let record of filteredRecords">
-          <td><span class="type-badge" [attr.data-type]="record.type">{{ record.type }}</span></td>
-          <td><code class="zone-name">{{ record.zone_name || record.zone || '(none)' }}</code></td>
-          <td *ngIf="!selectedTenant && auth.isSuperAdmin()">{{ getTenantNameForRecord(record) }}</td>
-          <td><code>{{ getRecordSummary(record) }}</code></td>
-          <td>{{ record.ttl }}s</td>
-          <td class="actions">
+          <td class="type-col"><span class="type-badge" [attr.data-type]="record.type">{{ record.type }}</span></td>
+          <td class="zone-col"><code class="zone-name">{{ record.zone_name || record.zone || '(none)' }}</code></td>
+          <td class="record-col"><code>{{ getRecordSummary(record) }}</code></td>
+          <td class="ttl-col">{{ record.ttl }}s</td>
+          <td class="actions-col">
             <button class="btn btn-sm" (click)="openEditForm(record)">Edit</button>
             <button class="btn btn-sm btn-danger" (click)="deleteRecord(record)">Delete</button>
           </td>

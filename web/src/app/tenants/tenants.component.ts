@@ -44,7 +44,7 @@ export class TenantsComponent implements OnInit {
 
   tenants = signal<Tenant[]>([]);
   loading = signal(false);
-  displayedColumns = ['name', 'description', 'is_main', 'actions'];
+  displayedColumns = ['name', 'description', 'default_nameservers', 'is_main', 'actions'];
 
   ngOnInit() {
     this.loadTenants();
@@ -110,7 +110,12 @@ export class TenantsComponent implements OnInit {
     });
   }
 
-  updateTenant(id: string, data: { name?: string; description?: string }) {
+  updateTenant(id: string, data: { 
+    name?: string; 
+    description?: string;
+    default_nameservers?: string[];
+    default_nameserver_ttl?: number;
+  }) {
     this.authService.updateTenant(id, data).subscribe({
       next: () => {
         this.snackBar.open('Tenant updated successfully', 'Dismiss', { duration: 3000 });

@@ -8,6 +8,7 @@ import { RecursionComponent } from './recursion/recursion.component';
 import { NetworkComponent } from './network/network.component';
 import { LoginComponent } from './login/login.component';
 import { ProfileComponent } from './profile/profile.component';
+import { NameserversComponent } from './nameservers/nameservers.component';
 import { ApiKeysComponent } from './api-keys/api-keys.component';
 import { SetupComponent } from './setup/setup.component';
 import { TenantsComponent } from './tenants/tenants.component';
@@ -31,5 +32,6 @@ export const routes: Routes = [
   { path: 'tenants', component: TenantsComponent, canActivate: [superAdminGuard] },
   { path: 'users', component: UsersComponent, canActivate: [adminGuard] },
   { path: 'profile', component: ProfileComponent, canActivate: [authGuard] },
+  { path: 'nameservers', component: NameserversComponent, canActivate: [adminGuard] },
   { path: 'api-keys', component: ApiKeysComponent, canActivate: [authGuard] },
 ];

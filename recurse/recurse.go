@@ -294,6 +294,11 @@ func (r *Resolver) resolve(name string, qtype uint16, depth int, forceExternal b
 	// Check cache first
 	cacheKey := cache.Key(name, qtype)
 	if entry, ok := r.cache.Get(cacheKey); ok {
+		// Handle negative cache entries
+		if entry.Negative {
+			// Return empty result for negative cache hit
+			return result
+		}
 		result.IPs = entry.IPs
 		result.CNAMEs = entry.CNAMEs
 		result.TTL = entry.TTL
@@ -315,6 +320,11 @@ func (r *Resolver) resolve(name string, qtype uint16, depth int, forceExternal b
 
 		// Cache the result
 		r.cache.Set(cacheKey, ips, cnames, ttl)
+	} else {
+		// Cache negative result to prevent repeated lookups
+		// Use SOA minimum TTL or 60 seconds as default
+		negativeTTL := uint32(60)
+		r.cache.SetNegative(cacheKey, negativeTTL)
 	}
 
 	return result
@@ -608,4 +618,128 @@ func (r *Resolver) getFinalCNAMETarget(resp *dns.Msg) string {
 		}
 	}
 	return target
+}
+
+// QueryAny performs recursive resolution for any record type.
+// It returns the full DNS response message, handling iterative resolution if configured.
+// This is used for record types like MX, TXT, NS that need external resolution.
+func (r *Resolver) QueryAny(name string, qtype uint16) (*dns.Msg, error) {
+	if !r.config.Enabled {
+		return nil, errors.New("recursion disabled")
+	}
+
+	// Normalize name
+	name = strings.ToLower(name)
+	if !strings.HasSuffix(name, ".") {
+		name += "."
+	}
+
+	if r.iterative {
+		return r.queryAnyIterative(name, qtype, r.servers, 0)
+	}
+	return r.queryAnyForward(name, qtype)
+}
+
+// queryAnyForward queries upstream resolvers for any record type (forwarding mode)
+func (r *Resolver) queryAnyForward(name string, qtype uint16) (*dns.Msg, error) {
+	m := new(dns.Msg)
+	m.SetQuestion(name, qtype)
+	m.RecursionDesired = true
+	m.SetEdns0(4096, true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(r.config.Timeout)*time.Second)
+	defer cancel()
+
+	for _, server := range r.servers {
+		if !strings.Contains(server, ":") {
+			server = server + ":53"
+		}
+		resp, _, err := r.client.ExchangeContext(ctx, m, server)
+		if err != nil {
+			continue
+		}
+		if resp != nil && (resp.Rcode == dns.RcodeSuccess || resp.Rcode == dns.RcodeNameError) {
+			return resp, nil
+		}
+	}
+
+	return nil, errors.New("query failed: no response from upstream servers")
+}
+
+// queryAnyIterative does iterative resolution for any record type starting from root servers
+func (r *Resolver) queryAnyIterative(name string, qtype uint16, nameservers []string, depth int) (*dns.Msg, error) {
+	if depth > r.config.MaxDepth {
+		return nil, errors.New("max recursion depth exceeded")
+	}
+
+	m := new(dns.Msg)
+	m.SetQuestion(name, qtype)
+	m.RecursionDesired = false // Iterative - don't ask for recursion
+	m.SetEdns0(4096, true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	type queryResult struct {
+		resp   *dns.Msg
+		server string
+		err    error
+	}
+
+	results := make(chan queryResult, len(nameservers))
+	for _, server := range nameservers {
+		go func(srv string) {
+			if !strings.Contains(srv, ":") {
+				srv = srv + ":53"
+			}
+			resp, _, err := r.client.ExchangeContext(ctx, m, srv)
+			results <- queryResult{resp: resp, server: srv, err: err}
+		}(server)
+	}
+
+	received := 0
+	for received < len(nameservers) {
+		select {
+		case result := <-results:
+			received++
+			if result.err != nil {
+				continue
+			}
+			if result.resp == nil {
+				continue
+			}
+
+			// Got authoritative answer with records
+			if result.resp.Rcode == dns.RcodeSuccess && len(result.resp.Answer) > 0 {
+				cancel()
+				return result.resp, nil
+			}
+
+			// NXDOMAIN - authoritative negative answer
+			if result.resp.Rcode == dns.RcodeNameError {
+				cancel()
+				return result.resp, nil
+			}
+
+			// Check for delegation (NS records in authority section)
+			if len(result.resp.Ns) > 0 {
+				nextServers := r.extractDelegation(result.resp)
+				if len(nextServers) > 0 {
+					cancel()
+					return r.queryAnyIterative(name, qtype, nextServers, depth+1)
+				}
+			}
+
+			// NODATA response (success but no answers)
+			if result.resp.Rcode == dns.RcodeSuccess && len(result.resp.Answer) == 0 {
+				cancel()
+				return result.resp, nil
+			}
+
+		case <-ctx.Done():
+			break
+		}
+	}
+
+	return nil, errors.New("query failed: no successful response")
 }

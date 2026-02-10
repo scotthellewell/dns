@@ -277,6 +277,147 @@ func (s *Store) UpdateRecord(record *Record) error {
 	return nil
 }
 
+// EnableAllZoneRecords enables all records in a zone
+func (s *Store) EnableAllZoneRecords(zoneName string) (int, error) {
+	count := 0
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		recordsBucket := tx.Bucket([]byte("records"))
+		if recordsBucket == nil {
+			return nil
+		}
+
+		prefix := zoneName + ":"
+		c := recordsBucket.Cursor()
+
+		for k, v := c.Seek([]byte(prefix)); k != nil && strings.HasPrefix(string(k), prefix); k, v = c.Next() {
+			var records []Record
+			if err := json.Unmarshal(v, &records); err != nil {
+				continue
+			}
+
+			modified := false
+			for i := range records {
+				if !records[i].Enabled {
+					records[i].Enabled = true
+					records[i].UpdatedAt = time.Now()
+					modified = true
+					count++
+				}
+			}
+
+			if modified {
+				data, err := json.Marshal(records)
+				if err != nil {
+					continue
+				}
+				if err := recordsBucket.Put(k, data); err != nil {
+					continue
+				}
+			}
+		}
+		return nil
+	})
+	return count, err
+}
+
+// DeleteRecordByID deletes a record by just its ID, searching all records.
+// This is used by sync when we only have the record ID available.
+func (s *Store) DeleteRecordByID(recordID string) error {
+	var zoneName, name, recordType string
+	var found bool
+
+	// First, find the record by scanning all records
+	err := s.db.View(func(tx *bolt.Tx) error {
+		recordsBucket := tx.Bucket([]byte("records"))
+		if recordsBucket == nil {
+			return nil
+		}
+
+		return recordsBucket.ForEach(func(k, v []byte) error {
+			var records []Record
+			if err := json.Unmarshal(v, &records); err != nil {
+				return nil // Skip malformed entries
+			}
+			for _, r := range records {
+				if r.ID == recordID {
+					zoneName = r.Zone
+					name = r.Name
+					recordType = r.Type
+					found = true
+					return nil // Found it, stop iteration
+				}
+			}
+			return nil
+		})
+	})
+
+	if err != nil {
+		return err
+	}
+
+	if !found {
+		// Record not found - this is OK for sync, might already be deleted
+		return nil
+	}
+
+	// Now delete it using the existing DeleteRecord function
+	// But skip the sync hook since this is being called from sync
+	return s.db.Update(func(tx *bolt.Tx) error {
+		recordsBucket := tx.Bucket([]byte("records"))
+		zonesBucket := tx.Bucket([]byte("zones"))
+
+		key := recordKey(zoneName, name, recordType)
+
+		// Get existing records
+		existing := recordsBucket.Get([]byte(key))
+		if existing == nil {
+			return nil // Already gone
+		}
+
+		var records []Record
+		if err := json.Unmarshal(existing, &records); err != nil {
+			return err
+		}
+
+		// Find and remove the matching record
+		newRecords := make([]Record, 0, len(records)-1)
+		for _, r := range records {
+			if r.ID != recordID {
+				newRecords = append(newRecords, r)
+			}
+		}
+
+		// Save or delete key
+		if len(newRecords) == 0 {
+			if err := recordsBucket.Delete([]byte(key)); err != nil {
+				return err
+			}
+		} else {
+			data, err := json.Marshal(newRecords)
+			if err != nil {
+				return err
+			}
+			if err := recordsBucket.Put([]byte(key), data); err != nil {
+				return err
+			}
+		}
+
+		// Update zone serial
+		zoneData := zonesBucket.Get([]byte(zoneName))
+		if zoneData != nil {
+			var zone Zone
+			if err := json.Unmarshal(zoneData, &zone); err == nil {
+				zone.Serial++
+				zone.UpdatedAt = time.Now()
+				zoneData, _ = json.Marshal(&zone)
+				zonesBucket.Put([]byte(zone.Name), zoneData)
+			}
+		}
+
+		return nil
+	})
+}
+
 // DeleteRecord deletes a specific record by ID from a record set.
 // For A/AAAA records, it deletes the associated PTR record.
 func (s *Store) DeleteRecord(zoneName, name, recordType, recordID string) error {

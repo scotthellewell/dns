@@ -1,6 +1,6 @@
 .network-container {
   padding: 24px;
-  max-width: 800px;
+  max-width: 1200px;
   margin: 0 auto;
 }
 
@@ -319,4 +319,91 @@ mat-card-actions {
   mat-icon {
     color: #ffb74d;
   }
+}
+
+// Certificates table styles
+.certificates-table-container {
+  overflow-x: auto;
+  margin-bottom: 16px;
+}
+
+.certificates-table {
+  width: 100%;
+  background-color: transparent;
+
+  th.mat-header-cell {
+    color: rgba(255, 255, 255, 0.7);
+    font-weight: 500;
+    font-size: 12px;
+    text-transform: uppercase;
+    padding: 12px 16px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  td.mat-cell {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.87);
+    font-size: 13px;
+  }
+
+  tr.mat-row:hover {
+    background-color: rgba(255, 255, 255, 0.03);
+  }
+}
+
+.cert-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+
+  mat-icon {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+  }
+
+  &.status-valid {
+    background-color: rgba(76, 175, 80, 0.15);
+    color: #81c784;
+
+    mat-icon {
+      color: #81c784;
+    }
+  }
+
+  &.status-expiring {
+    background-color: rgba(255, 152, 0, 0.15);
+    color: #ffb74d;
+
+    mat-icon {
+      color: #ffb74d;
+    }
+  }
+
+  &.status-expired {
+    background-color: rgba(244, 67, 54, 0.15);
+    color: #e57373;
+
+    mat-icon {
+      color: #e57373;
+    }
+  }
+}
+
+.status-valid {
+  color: #81c784;
+}
+
+.status-expiring {
+  color: #ffb74d;
+}
+
+.status-expired {
+  color: #e57373;
 }

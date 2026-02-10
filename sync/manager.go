@@ -40,6 +40,9 @@ type Manager struct {
 	// Callbacks for applying changes
 	applyCallback ApplyCallback
 
+	// Config refresh callback - called after changes are applied
+	configRefreshCallback func()
+
 	// Full sync data provider
 	fullSyncProvider FullSyncProvider
 
@@ -122,6 +125,11 @@ func NewManager(db *bolt.DB, config *Config) (*Manager, error) {
 // SetApplyCallback sets the callback for applying remote changes
 func (m *Manager) SetApplyCallback(cb ApplyCallback) {
 	m.applyCallback = cb
+}
+
+// SetConfigRefreshCallback sets the callback for refreshing DNS config after changes
+func (m *Manager) SetConfigRefreshCallback(cb func()) {
+	m.configRefreshCallback = cb
 }
 
 // SetFullSyncProvider sets the callback for providing full sync data
@@ -926,14 +934,18 @@ func (p *peerConn) handleChange(payload *ChangePayload) {
 	if applied && p.manager.applyCallback != nil {
 		if err := p.manager.applyCallback(entry); err != nil {
 			log.Printf("[sync] Apply callback failed for %s: %v", entry.ID, err)
+		} else if p.manager.configRefreshCallback != nil {
+			// Trigger config refresh after successful apply
+			p.manager.configRefreshCallback()
 		}
 	}
 
 	// Update peer state (in memory only - save periodically, not on every change)
-	if applied {
+	// Track the highest HLC we've seen, even for duplicates, to avoid re-syncing
+	if entry.HLC.Compare(p.state.LastHLC) > 0 {
 		p.state.LastHLC = entry.HLC
-		p.state.LastSyncTime = time.Now()
 	}
+	p.state.LastSyncTime = time.Now()
 
 	// Send ack
 	ack, _ := NewMessage(MsgChangeAck, &ChangeAckPayload{
@@ -977,8 +989,16 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 	log.Printf("[sync] Received %d entries from %s", len(payload.Entries), p.serverID)
 
 	appliedCount := 0
+	var highestHLC HybridLogicalClock
+	
 	for _, entry := range payload.Entries {
 		entryCopy := entry // avoid loop variable capture
+		
+		// Track the highest HLC we've seen from this peer, regardless of whether we apply it
+		if entryCopy.HLC.Compare(highestHLC) > 0 {
+			highestHLC = entryCopy.HLC
+		}
+		
 		applied, err := p.manager.oplog.ApplyRemote(&entryCopy)
 		if err != nil {
 			log.Printf("[sync] Failed to apply synced entry %s: %v", entry.ID, err)
@@ -992,13 +1012,21 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 					log.Printf("[sync] Apply callback failed for %s: %v", entry.ID, err)
 				}
 			}
-			// Update last HLC only for actually applied entries
-			p.state.LastHLC = entry.HLC
 		}
+	}
+	
+	// Update last HLC to the highest we've seen, even if entries were duplicates
+	// This prevents re-requesting the same entries on every sync
+	if highestHLC.Compare(p.state.LastHLC) > 0 {
+		p.state.LastHLC = highestHLC
 	}
 
 	if appliedCount > 0 {
 		log.Printf("[sync] Applied %d new entries from %s", appliedCount, p.serverID)
+		// Trigger config refresh after successful batch apply
+		if p.manager.configRefreshCallback != nil {
+			p.manager.configRefreshCallback()
+		}
 	}
 
 	p.state.LastSyncTime = time.Now()

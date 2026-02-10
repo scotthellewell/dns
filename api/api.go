@@ -175,6 +175,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Zones (reverse DNS patterns)
 	mux.HandleFunc("/api/zones", h.corsMiddleware(h.handleZones))
 	mux.HandleFunc("/api/zones/import", h.corsMiddleware(h.handleZoneImport)) // Zone file import
+	mux.HandleFunc("/api/zones/export/", h.corsMiddleware(h.handleZoneExport)) // Zone file export
+	mux.HandleFunc("/api/zones/enable-records/", h.corsMiddleware(h.handleEnableZoneRecords)) // Enable all records in zone
 	mux.HandleFunc("/api/zones/", h.corsMiddleware(h.handleZone))
 
 	// DNS Records
@@ -219,6 +221,8 @@ func (h *Handler) RegisterRoutesWithAuth(mux *http.ServeMux, authMgr AuthMiddlew
 	mux.HandleFunc("/api/config", wrap(h.handleConfig))
 	mux.HandleFunc("/api/zones", wrap(h.handleZones))
 	mux.HandleFunc("/api/zones/import", wrap(h.handleZoneImport)) // Zone file import
+	mux.HandleFunc("/api/zones/export/", wrap(h.handleZoneExport)) // Zone file export
+	mux.HandleFunc("/api/zones/enable-records/", wrap(h.handleEnableZoneRecords)) // Enable all records in zone
 	mux.HandleFunc("/api/zones/", wrap(h.handleZone))
 	mux.HandleFunc("/api/records", wrap(h.handleRecords))
 	mux.HandleFunc("/api/records/", wrap(h.handleRecord))
@@ -445,12 +449,12 @@ type RecordResponse struct {
 	Value    string `json:"value,omitempty"`
 	TTL      uint32 `json:"ttl"`
 	// Type-specific fields
-	IP       string   `json:"ip,omitempty"`       // A, AAAA
-	Target   string   `json:"target,omitempty"`   // CNAME, MX, NS, PTR, SRV
-	Priority int      `json:"priority,omitempty"` // MX, SRV
-	Weight   int      `json:"weight,omitempty"`   // SRV
-	Port     int      `json:"port,omitempty"`     // SRV
-	Values   []string `json:"values,omitempty"`   // TXT
+	IP       string   `json:"ip,omitempty"`     // A, AAAA
+	Target   string   `json:"target,omitempty"` // CNAME, MX, NS, PTR, SRV
+	Priority int      `json:"priority"`         // MX, SRV - don't use omitempty, 0 is valid
+	Weight   int      `json:"weight,omitempty"` // SRV
+	Port     int      `json:"port,omitempty"`   // SRV
+	Values   []string `json:"values,omitempty"` // TXT
 }
 
 // getEffectiveZoneName returns the effective zone name from a ZoneConfig

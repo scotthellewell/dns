@@ -9,7 +9,7 @@
 
 .setup-card {
   width: 100%;
-  max-width: 480px;
+  max-width: 520px;
   padding: 24px;
 
   mat-card-header {
@@ -40,6 +40,10 @@
   }
 }
 
+.tab-content {
+  padding-top: 16px;
+}
+
 .setup-info {
   text-align: center;
   color: var(--mat-card-subtitle-text-color, rgba(255, 255, 255, 0.7));
@@ -68,5 +72,48 @@
 
   mat-spinner {
     display: inline-block;
+  }
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 8px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-weight: 500;
+  color: var(--mat-card-subtitle-text-color, rgba(255, 255, 255, 0.7));
+  
+  mat-icon {
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+  }
+}
+
+.config-row {
+  margin: 8px 0;
+}
+
+.eab-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  margin: 8px 0;
+  background: rgba(255, 193, 7, 0.15);
+  border-radius: 4px;
+  border-left: 3px solid #ffc107;
+  
+  mat-icon {
+    color: #ffc107;
+    flex-shrink: 0;
+  }
+  
+  span {
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--mat-card-subtitle-text-color, rgba(255, 255, 255, 0.85));
   }
 }

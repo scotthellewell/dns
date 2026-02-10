@@ -631,12 +631,14 @@ func (sm *StorageManager) ListTenants() []Tenant {
 	result := make([]Tenant, 0, len(tenants))
 	for _, t := range tenants {
 		result = append(result, Tenant{
-			ID:          t.ID,
-			Name:        t.Name,
-			Description: t.Description,
-			IsMain:      t.IsMain,
-			CreatedAt:   t.CreatedAt,
-			CreatedBy:   t.CreatedBy,
+			ID:                   t.ID,
+			Name:                 t.Name,
+			Description:          t.Description,
+			IsMain:               t.IsMain,
+			DefaultNameservers:   t.DefaultNameservers,
+			DefaultNameserverTTL: t.DefaultNameserverTTL,
+			CreatedAt:            t.CreatedAt,
+			CreatedBy:            t.CreatedBy,
 		})
 	}
 	return result
@@ -649,12 +651,14 @@ func (sm *StorageManager) GetTenant(tenantID string) (*Tenant, error) {
 		return nil, ErrTenantNotFound
 	}
 	return &Tenant{
-		ID:          t.ID,
-		Name:        t.Name,
-		Description: t.Description,
-		IsMain:      t.IsMain,
-		CreatedAt:   t.CreatedAt,
-		CreatedBy:   t.CreatedBy,
+		ID:                   t.ID,
+		Name:                 t.Name,
+		Description:          t.Description,
+		IsMain:               t.IsMain,
+		DefaultNameservers:   t.DefaultNameservers,
+		DefaultNameserverTTL: t.DefaultNameserverTTL,
+		CreatedAt:            t.CreatedAt,
+		CreatedBy:            t.CreatedBy,
 	}, nil
 }
 
@@ -687,7 +691,7 @@ func (sm *StorageManager) CreateTenant(id, name, description, createdBy string) 
 }
 
 // UpdateTenant updates a tenant in storage
-func (sm *StorageManager) UpdateTenant(tenantID, name, description string) (*Tenant, error) {
+func (sm *StorageManager) UpdateTenant(tenantID, name, description string, defaultNameservers []string, defaultNameserverTTL uint32) (*Tenant, error) {
 	t, err := sm.store.GetTenant(tenantID)
 	if err != nil {
 		return nil, ErrTenantNotFound
@@ -695,18 +699,22 @@ func (sm *StorageManager) UpdateTenant(tenantID, name, description string) (*Ten
 
 	t.Name = name
 	t.Description = description
+	t.DefaultNameservers = defaultNameservers
+	t.DefaultNameserverTTL = defaultNameserverTTL
 
 	if err := sm.store.UpdateTenant(t); err != nil {
 		return nil, err
 	}
 
 	return &Tenant{
-		ID:          t.ID,
-		Name:        t.Name,
-		Description: t.Description,
-		IsMain:      t.IsMain,
-		CreatedAt:   t.CreatedAt,
-		CreatedBy:   t.CreatedBy,
+		ID:                   t.ID,
+		Name:                 t.Name,
+		Description:          t.Description,
+		IsMain:               t.IsMain,
+		DefaultNameservers:   t.DefaultNameservers,
+		DefaultNameserverTTL: t.DefaultNameserverTTL,
+		CreatedAt:            t.CreatedAt,
+		CreatedBy:            t.CreatedBy,
 	}, nil
 }
 

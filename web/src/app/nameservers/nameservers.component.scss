@@ -1,0 +1,164 @@
+.page-container {
+  padding: 24px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.page-header {
+  margin-bottom: 24px;
+
+  h1 {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 500;
+    color: #e2e8f0;
+  }
+
+  .subtitle {
+    margin: 4px 0 0 0;
+    color: #94a3b8;
+    font-size: 14px;
+  }
+}
+
+.loading-container {
+  display: flex;
+  justify-content: center;
+  padding: 48px;
+}
+
+.content-card {
+  margin-bottom: 16px;
+
+  .card-section {
+    padding: 20px;
+  }
+
+  .section-header {
+    margin-bottom: 16px;
+
+    h2 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 500;
+      color: #e2e8f0;
+    }
+
+    .section-desc {
+      margin: 4px 0 0 0;
+      color: #94a3b8;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+  }
+}
+
+.nameservers-list {
+  margin-bottom: 24px;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+
+  mat-icon {
+    font-size: 48px;
+    width: 48px;
+    height: 48px;
+    color: #60a5fa;
+    opacity: 0.5;
+    margin-bottom: 12px;
+  }
+
+  p {
+    margin: 0;
+    color: #94a3b8;
+    font-size: 14px;
+
+    &.hint {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #64748b;
+    }
+  }
+}
+
+.ns-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+
+  mat-chip-row {
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 13px;
+  }
+}
+
+.add-ns-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 16px;
+
+  .ns-input {
+    flex: 1;
+  }
+
+  .add-btn {
+    margin-top: 8px;
+
+    mat-icon {
+      margin-right: 4px;
+    }
+  }
+}
+
+.ttl-field {
+  width: 200px;
+  margin-top: 16px;
+}
+
+.info-card {
+  background: rgba(96, 165, 250, 0.1);
+  border: 1px solid rgba(96, 165, 250, 0.2);
+
+  .section-header {
+    display: flex;
+    gap: 12px;
+  }
+
+  .info-icon {
+    color: #60a5fa;
+    font-size: 24px;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+}
+
+.actions-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 0;
+  position: sticky;
+  bottom: 0;
+  background: linear-gradient(transparent, var(--mat-sidenav-content-background-color, #1e1e2e) 20%);
+
+  button {
+    mat-icon {
+      margin-right: 4px;
+    }
+  }
+}

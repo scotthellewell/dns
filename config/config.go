@@ -668,6 +668,12 @@ type QueryLogConfig struct {
 	LogErrors   bool // Log error responses
 }
 
+// TenantDefaults holds default NS settings for a tenant
+type TenantDefaults struct {
+	Nameservers []string // Default nameservers (e.g., ["ns1.example.com.", "ns2.example.com."])
+	TTL         uint32   // TTL for default NS records (0 = use zone default)
+}
+
 type ParsedConfig struct {
 	Listen         string
 	Zones          []ParsedZone          // Sorted by prefix length (most specific first)
@@ -678,6 +684,11 @@ type ParsedConfig struct {
 	SecondaryZones []ParsedSecondaryZone // Secondary zones to pull via AXFR
 	RateLimit      RateLimitConfig       // Response rate limiting
 	QueryLog       QueryLogConfig        // Query logging settings
+
+	// Tenant settings
+	TenantDefaults    map[string]TenantDefaults // TenantID -> defaults
+	ZoneTenants       map[string]string         // ZoneName -> TenantID
+	MainTenantID      string                    // The ID of the main tenant
 
 	// Static records
 	ARecords     map[string][]ParsedARecord     // Name -> A records

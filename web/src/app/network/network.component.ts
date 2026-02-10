@@ -14,7 +14,8 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatExpansionModule } from '@angular/material/expansion';
 import { MatChipsModule } from '@angular/material/chips';
 import { MatSelectModule } from '@angular/material/select';
-import { ApiService, PortsConfig, DNSPortConfig, DoTPortConfig, DoHPortConfig, WebPortConfig, CertificateInfo, GenerateCertRequest, ACMEConfig } from '../services/api.service';
+import { MatTableModule } from '@angular/material/table';
+import { ApiService, PortsConfig, DNSPortConfig, DoTPortConfig, DoHPortConfig, WebPortConfig, CertificateInfo, CertificateListItem, GenerateCertRequest, ACMEConfig } from '../services/api.service';
 
 @Component({
   selector: 'app-network',
@@ -34,7 +35,8 @@ import { ApiService, PortsConfig, DNSPortConfig, DoTPortConfig, DoHPortConfig, W
     MatTooltipModule,
     MatExpansionModule,
     MatChipsModule,
-    MatSelectModule
+    MatSelectModule,
+    MatTableModule
   ],
   templateUrl: './network.component.html',
   styleUrls: ['./network.component.scss']
@@ -52,9 +54,13 @@ export class NetworkComponent implements OnInit {
 
   // Certificate management
   certInfo: CertificateInfo | null = null;
+  certificates: CertificateListItem[] = [];
   loadingCert = false;
+  loadingCertificates = false;
   generatingCert = false;
   uploadingCert = false;
+  requestingCertDomain: string | null = null;
+  deletingCertDomain: string | null = null;
   generateRequest: GenerateCertRequest = {
     common_name: 'localhost',
     dns_names: ['localhost'],
@@ -92,6 +98,7 @@ export class NetworkComponent implements OnInit {
   ngOnInit(): void {
     this.loadConfig();
     this.loadCertificate();
+    this.loadCertificates();
     this.loadACMEConfig();
   }
 
@@ -126,6 +133,69 @@ export class NetworkComponent implements OnInit {
         console.error('Failed to load certificate info:', err);
       }
     });
+  }
+
+  loadCertificates(): void {
+    this.loadingCertificates = true;
+    this.apiService.listCertificates().subscribe({
+      next: (certs) => {
+        this.certificates = certs || [];
+        this.loadingCertificates = false;
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.loadingCertificates = false;
+        this.cdr.detectChanges();
+        console.error('Failed to load certificates:', err);
+      }
+    });
+  }
+
+  requestCertificateForDomain(domain: string): void {
+    this.requestingCertDomain = domain;
+    this.apiService.requestCertificate(domain).subscribe({
+      next: () => {
+        this.requestingCertDomain = null;
+        this.snackBar.open(`Certificate requested for ${domain}`, 'Close', { duration: 3000 });
+        this.loadCertificates();
+      },
+      error: (err) => {
+        this.requestingCertDomain = null;
+        this.cdr.detectChanges();
+        this.snackBar.open('Failed to request certificate: ' + (err.error?.error || err.message), 'Close', { duration: 5000 });
+      }
+    });
+  }
+
+  deleteCertificate(domain: string): void {
+    if (!confirm(`Are you sure you want to delete the certificate for "${domain}"?`)) {
+      return;
+    }
+    this.deletingCertDomain = domain;
+    this.apiService.deleteCertificate(domain).subscribe({
+      next: () => {
+        this.deletingCertDomain = null;
+        this.snackBar.open(`Certificate deleted for ${domain}`, 'Close', { duration: 3000 });
+        this.loadCertificates();
+      },
+      error: (err) => {
+        this.deletingCertDomain = null;
+        this.cdr.detectChanges();
+        this.snackBar.open('Failed to delete certificate: ' + (err.error?.error || err.message), 'Close', { duration: 5000 });
+      }
+    });
+  }
+
+  getCertStatusClass(cert: CertificateListItem): string {
+    if (cert.is_expired) return 'status-expired';
+    if (cert.is_expiring_soon) return 'status-expiring';
+    return 'status-valid';
+  }
+
+  getCertStatusText(cert: CertificateListItem): string {
+    if (cert.is_expired) return 'Expired';
+    if (cert.is_expiring_soon) return `Expires in ${cert.days_until_expiry} days`;
+    return `Valid (${cert.days_until_expiry} days)`;
   }
 
   generateCertificate(): void {

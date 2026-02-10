@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/scott/dns/certs"
+	"github.com/scott/dns/storage"
 )
 
 // CertManagerInterface defines the interface for certificate managers
@@ -25,6 +27,9 @@ var certManager CertManagerInterface
 // acmeManager holds reference to the ACME manager
 var acmeManager *certs.ACMEManager
 
+// certStore holds reference to the storage for certificate operations
+var certStore *storage.Store
+
 // SetCertManager sets the certificate manager for API handlers
 func SetCertManager(cm CertManagerInterface) {
 	certManager = cm
@@ -35,14 +40,24 @@ func SetACMEManager(am *certs.ACMEManager) {
 	acmeManager = am
 }
 
+// SetCertStore sets the storage for certificate API handlers
+func SetCertStore(s *storage.Store) {
+	certStore = s
+}
+
 // RegisterCertRoutes registers certificate management API routes
 func RegisterCertRoutes(mux *http.ServeMux, corsMiddleware func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("/api/certs", corsMiddleware(handleCerts))
+	mux.HandleFunc("/api/certs/list", corsMiddleware(handleCertsList))
 	mux.HandleFunc("/api/certs/generate", corsMiddleware(handleCertsGenerate))
 	mux.HandleFunc("/api/certs/upload", corsMiddleware(handleCertsUpload))
 	mux.HandleFunc("/api/certs/acme", corsMiddleware(handleACME))
 	mux.HandleFunc("/api/certs/acme/request", corsMiddleware(handleACMERequest))
 	mux.HandleFunc("/api/certs/acme/renew", corsMiddleware(handleACMERenew))
+	mux.HandleFunc("/api/certs/request/", corsMiddleware(handleCertRequest))
+	mux.HandleFunc("/api/certs/delete/", corsMiddleware(handleCertDelete))
+	// Route for fetching certificates by domain (for cluster sync)
+	mux.HandleFunc("/api/certs/", corsMiddleware(handleCertByDomain))
 }
 
 // RegisterCertRoutesWithAuth registers certificate routes with auth
@@ -51,11 +66,16 @@ func RegisterCertRoutesWithAuth(mux *http.ServeMux, corsMiddleware func(http.Han
 		return corsMiddleware(authMiddleware(h))
 	}
 	mux.HandleFunc("/api/certs", wrap(handleCerts))
+	mux.HandleFunc("/api/certs/list", wrap(handleCertsList))
 	mux.HandleFunc("/api/certs/generate", wrap(handleCertsGenerate))
 	mux.HandleFunc("/api/certs/upload", wrap(handleCertsUpload))
 	mux.HandleFunc("/api/certs/acme", wrap(handleACME))
 	mux.HandleFunc("/api/certs/acme/request", wrap(handleACMERequest))
 	mux.HandleFunc("/api/certs/acme/renew", wrap(handleACMERenew))
+	mux.HandleFunc("/api/certs/request/", wrap(handleCertRequest))
+	mux.HandleFunc("/api/certs/delete/", wrap(handleCertDelete))
+	// Route for fetching certificates by domain (for cluster sync) - requires auth
+	mux.HandleFunc("/api/certs/", wrap(handleCertByDomain))
 }
 
 // CertInfoResponse contains certificate information
@@ -387,6 +407,228 @@ func handleACMERenew(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
 			"message": "Certificate renewed successfully",
+		})
+
+	case http.MethodOptions:
+		w.WriteHeader(http.StatusOK)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleCertByDomain handles GET /api/certs/{domain} - fetches a specific certificate by domain
+// This is used for cluster certificate synchronization
+func handleCertByDomain(w http.ResponseWriter, r *http.Request) {
+	if certStore == nil {
+		http.Error(w, "Certificate store not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Extract domain from path: /api/certs/{domain}
+	path := strings.TrimPrefix(r.URL.Path, "/api/certs/")
+	domain := strings.TrimSuffix(path, "/")
+	
+	// Skip if it's actually one of the other routes
+	if domain == "" || domain == "generate" || domain == "upload" || strings.HasPrefix(domain, "acme") {
+		http.Error(w, "Invalid certificate domain", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		cert, err := certStore.GetCertificate(domain)
+		if err != nil {
+			http.Error(w, "Certificate not found: "+err.Error(), http.StatusNotFound)
+			return
+		}
+		
+		if cert == nil {
+			http.Error(w, "Certificate not found", http.StatusNotFound)
+			return
+		}
+
+		// Return full certificate info including private key (for cluster sync)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"domain":      cert.Domain,
+			"certificate": cert.CertPEM,
+			"private_key": cert.KeyPEM,
+			"not_before":  cert.NotBefore,
+			"not_after":   cert.NotAfter,
+			"issuer":      cert.Issuer,
+		})
+
+	case http.MethodOptions:
+		w.WriteHeader(http.StatusOK)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// CertListItem represents a certificate in the list response
+type CertListItem struct {
+	Domain          string   `json:"domain"`
+	Subject         string   `json:"subject"`
+	Issuer          string   `json:"issuer"`
+	NotBefore       string   `json:"not_before"`
+	NotAfter        string   `json:"not_after"`
+	DNSNames        []string `json:"dns_names"`
+	IPAddresses     []string `json:"ip_addresses"`
+	AutoGenerated   bool     `json:"auto_generated"`
+	IsExpired       bool     `json:"is_expired"`
+	IsExpiringSoon  bool     `json:"is_expiring_soon"`
+	DaysUntilExpiry int      `json:"days_until_expiry"`
+}
+
+// handleCertsList handles GET /api/certs/list - returns all certificates
+func handleCertsList(w http.ResponseWriter, r *http.Request) {
+	if certStore == nil {
+		http.Error(w, "Certificate store not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		certs, err := certStore.ListCertificates()
+		if err != nil {
+			http.Error(w, "Failed to list certificates: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		now := time.Now()
+		var resp []CertListItem
+		
+		// Deduplicate certificates by subject+notAfter (same cert stored under multiple domains)
+		seen := make(map[string]bool)
+		
+		for _, cert := range certs {
+			// Skip legacy "default" entries - they're no longer used
+			if cert.Domain == "default" {
+				continue
+			}
+			
+			// Create a unique key based on subject and expiration (same cert = same key)
+			dedupeKey := cert.Subject + "|" + cert.NotAfter.Format(time.RFC3339)
+			if seen[dedupeKey] {
+				continue // Skip duplicate
+			}
+			seen[dedupeKey] = true
+			
+			isExpired := now.After(cert.NotAfter)
+			isExpiringSoon := !isExpired && cert.NotAfter.Before(now.Add(30*24*time.Hour))
+			daysUntilExpiry := int(cert.NotAfter.Sub(now).Hours() / 24)
+			if daysUntilExpiry < 0 {
+				daysUntilExpiry = 0
+			}
+
+			item := CertListItem{
+				Domain:          cert.Domain,
+				Subject:         cert.Subject,
+				Issuer:          cert.Issuer,
+				NotBefore:       cert.NotBefore.Format("2006-01-02T15:04:05Z"),
+				NotAfter:        cert.NotAfter.Format("2006-01-02T15:04:05Z"),
+				DNSNames:        cert.DNSNames,
+				IPAddresses:     cert.IPAddresses,
+				AutoGenerated:   cert.AutoGenerated,
+				IsExpired:       isExpired,
+				IsExpiringSoon:  isExpiringSoon,
+				DaysUntilExpiry: daysUntilExpiry,
+			}
+			resp = append(resp, item)
+		}
+
+		// Ensure empty array instead of null
+		if resp == nil {
+			resp = []CertListItem{}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+
+	case http.MethodOptions:
+		w.WriteHeader(http.StatusOK)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleCertRequest handles POST /api/certs/request/{domain} - requests a certificate for a domain via ACME
+func handleCertRequest(w http.ResponseWriter, r *http.Request) {
+	if acmeManager == nil {
+		http.Error(w, "ACME manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Extract domain from path: /api/certs/request/{domain}
+	path := strings.TrimPrefix(r.URL.Path, "/api/certs/request/")
+	domain := strings.TrimSuffix(path, "/")
+
+	if domain == "" {
+		http.Error(w, "Domain required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		// Get the email from the current ACME config
+		acmeConfig := acmeManager.GetConfig()
+		if acmeConfig.Email == "" {
+			http.Error(w, "ACME email not configured. Please configure ACME settings first.", http.StatusBadRequest)
+			return
+		}
+
+		// Request certificate for the specific domain
+		err := acmeManager.RequestCertificate(acmeConfig.Email, []string{domain})
+		if err != nil {
+			http.Error(w, "Failed to request certificate: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Certificate requested successfully for " + domain,
+		})
+
+	case http.MethodOptions:
+		w.WriteHeader(http.StatusOK)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleCertDelete handles DELETE /api/certs/delete/{domain} - deletes a certificate
+func handleCertDelete(w http.ResponseWriter, r *http.Request) {
+	if certStore == nil {
+		http.Error(w, "Certificate store not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Extract domain from path: /api/certs/delete/{domain}
+	path := strings.TrimPrefix(r.URL.Path, "/api/certs/delete/")
+	domain := strings.TrimSuffix(path, "/")
+
+	if domain == "" {
+		http.Error(w, "Domain required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		err := certStore.DeleteCertificate(domain)
+		if err != nil {
+			http.Error(w, "Failed to delete certificate: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Certificate deleted successfully for " + domain,
 		})
 
 	case http.MethodOptions:

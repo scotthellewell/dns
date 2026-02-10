@@ -35,9 +35,6 @@ type SNIManager struct {
 	pendingACME map[string]bool
 	pendingMu   sync.Mutex
 
-	// Default certificate for fallback
-	defaultCert *tls.Certificate
-
 	// ACME configuration
 	acmeEmail string
 
@@ -80,25 +77,14 @@ func (m *SNIManager) SetOnCertObtained(fn func(domain string)) {
 	m.onCertObtained = fn
 }
 
-// loadDefaultCert loads or generates the default certificate
+// loadDefaultCert is a no-op - we no longer use a default certificate
+// Certificates are selected based on SNI or found by searching all stored certs
 func (m *SNIManager) loadDefaultCert() {
-	// Try to load from storage
-	cert, err := m.store.GetCertificate("default")
-	if err == nil && cert != nil {
-		tlsCert, err := tls.X509KeyPair([]byte(cert.CertPEM), []byte(cert.KeyPEM))
-		if err == nil {
-			m.defaultCert = &tlsCert
-			return
-		}
-	}
-
-	// Generate self-signed default cert
-	tlsCert, err := m.generateSelfSigned("localhost", []string{"localhost"})
-	if err != nil {
-		log.Printf("Warning: Failed to generate default certificate: %v", err)
-		return
-	}
-	m.defaultCert = tlsCert
+	// Legacy function kept for compatibility but no longer creates/loads a default cert
+	// Certificate selection now works as follows:
+	// 1. If SNI provided: Look for exact match, then search all certs for wildcard/SAN match
+	// 2. If no match: Generate self-signed for the specific domain (triggers ACME if configured)
+	// 3. If no SNI: Return any valid cert we have, or generate self-signed for localhost
 }
 
 // GetTLSConfig returns a TLS configuration with SNI-based certificate selection
@@ -114,11 +100,13 @@ func (m *SNIManager) GetTLSConfig() (*tls.Config, error) {
 func (m *SNIManager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	serverName := hello.ServerName
 	if serverName == "" {
-		// No SNI, return default cert
-		m.mu.RLock()
-		cert := m.defaultCert
-		m.mu.RUnlock()
-		return cert, nil
+		// No SNI - try to find any certificate, or generate self-signed
+		cert := m.findAnyValidCert()
+		if cert != nil {
+			return cert, nil
+		}
+		// Generate self-signed for localhost as fallback
+		return m.getOrCreateSelfSigned("localhost")
 	}
 
 	// Normalize server name (lowercase, no trailing dot)
@@ -132,7 +120,7 @@ func (m *SNIManager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificat
 	}
 	m.mu.RUnlock()
 
-	// Try to load from storage
+	// Try to load from storage by exact domain match
 	storedCert, err := m.store.GetCertificate(serverName)
 	if err == nil && storedCert != nil {
 		// Check if certificate is valid (not expired)
@@ -150,20 +138,117 @@ func (m *SNIManager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificat
 		}
 	}
 
+	// Try to find any cert that covers this domain (wildcards, multi-SAN)
+	matchingCert := m.findCertForDomain(serverName)
+	if matchingCert != nil {
+		return matchingCert, nil
+	}
+
 	// No valid certificate found - start ACME request in background and return self-signed
 	m.startACMERequest(serverName)
 
 	// Generate and return self-signed certificate for immediate use
 	selfSigned, err := m.getOrCreateSelfSigned(serverName)
 	if err != nil {
-		// Fall back to default
-		m.mu.RLock()
-		cert := m.defaultCert
-		m.mu.RUnlock()
-		return cert, nil
+		// Last resort: return any cert we have or generate localhost self-signed
+		cert := m.findAnyValidCert()
+		if cert != nil {
+			return cert, nil
+		}
+		return m.getOrCreateSelfSigned("localhost")
 	}
 
 	return selfSigned, nil
+}
+
+// findCertForDomain searches all stored certificates to find one that matches the domain
+// This handles wildcards and multi-domain certificates
+func (m *SNIManager) findCertForDomain(domain string) *tls.Certificate {
+	certs, err := m.store.ListCertificates()
+	if err != nil {
+		return nil
+	}
+
+	now := time.Now()
+	for _, cert := range certs {
+		// Skip expired certs
+		if now.After(cert.NotAfter) {
+			continue
+		}
+		// Skip the "default" placeholder if it exists
+		if cert.Domain == "default" {
+			continue
+		}
+
+		// Check if this cert covers the requested domain
+		if m.certMatchesDomain(&cert, domain) {
+			tlsCert, err := tls.X509KeyPair([]byte(cert.CertPEM), []byte(cert.KeyPEM))
+			if err == nil {
+				// Cache by the requested domain name for future lookups
+				m.mu.Lock()
+				m.certCache[domain] = &tlsCert
+				m.mu.Unlock()
+				return &tlsCert
+			}
+		}
+	}
+	return nil
+}
+
+// certMatchesDomain checks if a stored certificate covers the given domain
+func (m *SNIManager) certMatchesDomain(cert *storage.TLSCertificate, domain string) bool {
+	// Check exact domain match
+	if strings.EqualFold(cert.Domain, domain) {
+		return true
+	}
+
+	// Check DNS names in the certificate
+	for _, dnsName := range cert.DNSNames {
+		dnsName = strings.ToLower(strings.TrimSuffix(dnsName, "."))
+		if dnsName == domain {
+			return true
+		}
+		// Check wildcard match
+		if strings.HasPrefix(dnsName, "*.") {
+			wildcardBase := dnsName[2:] // Remove "*."
+			if strings.HasSuffix(domain, "."+wildcardBase) || domain == wildcardBase {
+				// domain matches *.example.com (e.g., sub.example.com or example.com)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// findAnyValidCert returns any valid (non-expired) certificate from storage
+// Used as fallback when no SNI is provided or no specific match found
+func (m *SNIManager) findAnyValidCert() *tls.Certificate {
+	certs, err := m.store.ListCertificates()
+	if err != nil {
+		return nil
+	}
+
+	now := time.Now()
+	for _, cert := range certs {
+		// Skip expired certs
+		if now.After(cert.NotAfter) {
+			continue
+		}
+		// Skip the "default" placeholder and self-signed localhost certs
+		if cert.Domain == "default" || cert.Domain == "localhost" {
+			continue
+		}
+		// Skip very short-lived self-signed certs (less than 2 days validity)
+		if cert.NotAfter.Sub(cert.NotBefore) < 48*time.Hour {
+			continue
+		}
+
+		tlsCert, err := tls.X509KeyPair([]byte(cert.CertPEM), []byte(cert.KeyPEM))
+		if err == nil {
+			return &tlsCert
+		}
+	}
+	return nil
 }
 
 // getOrCreateSelfSigned gets a cached self-signed cert or creates a new one
@@ -462,62 +547,96 @@ func (m *SNIManager) IsPendingACME(domain string) bool {
 }
 
 // GetConfig returns the current certificate configuration (for compatibility)
+// Now returns info about the first valid certificate found
 func (m *SNIManager) GetConfig() Config {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	// Try to find any valid certificate
+	certs, err := m.store.ListCertificates()
+	if err != nil || len(certs) == 0 {
+		return Config{}
+	}
 
-	// Return info about default cert
-	if m.defaultCert != nil && len(m.defaultCert.Certificate) > 0 {
-		x509Cert, err := x509.ParseCertificate(m.defaultCert.Certificate[0])
-		if err == nil {
-			var ips []string
-			for _, ip := range x509Cert.IPAddresses {
-				ips = append(ips, ip.String())
-			}
-			return Config{
-				AutoGenerated: strings.Contains(x509Cert.Issuer.CommonName, "Self-Signed") ||
-					x509Cert.Subject.CommonName == x509Cert.Issuer.CommonName,
-				Subject:     x509Cert.Subject.CommonName,
-				Issuer:      x509Cert.Issuer.CommonName,
-				NotBefore:   x509Cert.NotBefore,
-				NotAfter:    x509Cert.NotAfter,
-				DNSNames:    x509Cert.DNSNames,
-				IPAddresses: ips,
-			}
+	now := time.Now()
+	for _, cert := range certs {
+		// Skip expired certs and legacy "default" entries
+		if now.After(cert.NotAfter) || cert.Domain == "default" {
+			continue
+		}
+		
+		return Config{
+			AutoGenerated: cert.AutoGenerated || strings.Contains(cert.Issuer, "Self-Signed"),
+			Subject:       cert.Subject,
+			Issuer:        cert.Issuer,
+			NotBefore:     cert.NotBefore,
+			NotAfter:      cert.NotAfter,
+			DNSNames:      cert.DNSNames,
+			IPAddresses:   cert.IPAddresses,
 		}
 	}
 
 	return Config{}
 }
 
-// GetCertificatePEM returns the default certificate in PEM format (for compatibility)
+// GetCertificatePEM returns the first valid certificate in PEM format (for compatibility)
 func (m *SNIManager) GetCertificatePEM() ([]byte, error) {
-	cert, err := m.store.GetCertificate("default")
+	certs, err := m.store.ListCertificates()
 	if err != nil {
 		return nil, err
 	}
-	return []byte(cert.CertPEM), nil
+	
+	now := time.Now()
+	for _, cert := range certs {
+		// Skip expired certs and legacy "default" entries
+		if now.After(cert.NotAfter) || cert.Domain == "default" {
+			continue
+		}
+		return []byte(cert.CertPEM), nil
+	}
+	return nil, fmt.Errorf("no valid certificate found")
 }
 
-// IsExpiringSoon returns true if the default certificate expires within the given duration
+// IsExpiringSoon returns true if any certificate expires within the given duration
 func (m *SNIManager) IsExpiringSoon(within time.Duration) bool {
-	cert, err := m.store.GetCertificate("default")
-	if err != nil {
-		return true
+	certs, err := m.store.ListCertificates()
+	if err != nil || len(certs) == 0 {
+		return true // No certs = expiring soon (need one)
 	}
-	return time.Until(cert.NotAfter) < within
+	
+	now := time.Now()
+	for _, cert := range certs {
+		// Skip legacy "default" entries
+		if cert.Domain == "default" {
+			continue
+		}
+		// If any valid cert exists that's not expiring soon, return false
+		if now.Before(cert.NotAfter) && time.Until(cert.NotAfter) >= within {
+			return false
+		}
+	}
+	return true // All certs are expired or expiring soon
 }
 
-// IsExpired returns true if the default certificate has expired
+// IsExpired returns true if there are no valid (non-expired) certificates
 func (m *SNIManager) IsExpired() bool {
-	cert, err := m.store.GetCertificate("default")
-	if err != nil {
-		return true
+	certs, err := m.store.ListCertificates()
+	if err != nil || len(certs) == 0 {
+		return true // No certs = expired
 	}
-	return time.Now().After(cert.NotAfter)
+	
+	now := time.Now()
+	for _, cert := range certs {
+		// Skip legacy "default" entries
+		if cert.Domain == "default" {
+			continue
+		}
+		// If any valid cert exists, not expired
+		if now.Before(cert.NotAfter) {
+			return false
+		}
+	}
+	return true // All certs are expired
 }
 
-// UploadCertificate uploads a certificate and stores it as the default
+// UploadCertificate uploads a certificate and stores it by its DNS names
 func (m *SNIManager) UploadCertificate(certPEM, keyPEM []byte) error {
 	// Validate the certificate and key
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
@@ -537,9 +656,22 @@ func (m *SNIManager) UploadCertificate(certPEM, keyPEM []byte) error {
 		ipAddresses = append(ipAddresses, ip.String())
 	}
 
-	// Store as default
+	// Determine the primary domain name to store under
+	// Use the first DNS name if available, otherwise use Subject CN
+	primaryDomain := ""
+	if len(x509Cert.DNSNames) > 0 {
+		primaryDomain = strings.ToLower(strings.TrimSuffix(x509Cert.DNSNames[0], "."))
+	} else if x509Cert.Subject.CommonName != "" {
+		primaryDomain = strings.ToLower(x509Cert.Subject.CommonName)
+	}
+
+	if primaryDomain == "" || primaryDomain == "localhost" {
+		return fmt.Errorf("certificate must have at least one DNS name or valid Common Name")
+	}
+
+	// Store by the primary domain name
 	if err := m.store.StoreCertificate(&storage.TLSCertificate{
-		Domain:        "default",
+		Domain:        primaryDomain,
 		CertPEM:       string(certPEM),
 		KeyPEM:        string(keyPEM),
 		AutoGenerated: false,
@@ -553,28 +685,8 @@ func (m *SNIManager) UploadCertificate(certPEM, keyPEM []byte) error {
 		return err
 	}
 
-	// Also store by domain name if it has DNS names
-	for _, name := range x509Cert.DNSNames {
-		name = strings.ToLower(strings.TrimSuffix(name, "."))
-		if name != "default" && name != "localhost" {
-			m.store.StoreCertificate(&storage.TLSCertificate{
-				Domain:        name,
-				CertPEM:       string(certPEM),
-				KeyPEM:        string(keyPEM),
-				AutoGenerated: false,
-				Subject:       x509Cert.Subject.CommonName,
-				Issuer:        x509Cert.Issuer.CommonName,
-				NotBefore:     x509Cert.NotBefore,
-				NotAfter:      x509Cert.NotAfter,
-				DNSNames:      x509Cert.DNSNames,
-				IPAddresses:   ipAddresses,
-			})
-		}
-	}
-
-	// Update cache
+	// Update cache for all DNS names covered by this cert
 	m.mu.Lock()
-	m.defaultCert = &cert
 	for _, name := range x509Cert.DNSNames {
 		name = strings.ToLower(strings.TrimSuffix(name, "."))
 		m.certCache[name] = &cert

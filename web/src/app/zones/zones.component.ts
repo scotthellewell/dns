@@ -306,6 +306,51 @@ export class ZonesComponent implements OnInit {
     }
   }
 
+  // Parse DS record into individual components for registrar submission
+  // Format: "zone. TTL IN DS keytag algorithm digesttype digest"
+  parseDsRecord(dsRecord: string): { keyTag: string; algorithm: string; digestType: string; digest: string } | null {
+    if (!dsRecord) return null;
+    // DS record format: zone. TTL IN DS keytag algorithm digesttype digest
+    // Example: example.com. 3600 IN DS 12345 13 2 ABCD1234...
+    const parts = dsRecord.trim().split(/\s+/);
+    // Find the DS keyword position
+    const dsIndex = parts.findIndex(p => p.toUpperCase() === 'DS');
+    if (dsIndex === -1 || dsIndex + 4 > parts.length) return null;
+    
+    return {
+      keyTag: parts[dsIndex + 1],
+      algorithm: parts[dsIndex + 2],
+      digestType: parts[dsIndex + 3],
+      digest: parts.slice(dsIndex + 4).join('') // Digest might be split across spaces
+    };
+  }
+
+  // Get algorithm name from number
+  getAlgorithmName(alg: string): string {
+    const algMap: { [key: string]: string } = {
+      '5': 'RSASHA1',
+      '7': 'RSASHA1-NSEC3-SHA1',
+      '8': 'RSASHA256',
+      '10': 'RSASHA512',
+      '13': 'ECDSAP256SHA256',
+      '14': 'ECDSAP384SHA384',
+      '15': 'ED25519',
+      '16': 'ED448'
+    };
+    return algMap[alg] || `Algorithm ${alg}`;
+  }
+
+  // Get digest type name from number
+  getDigestTypeName(dt: string): string {
+    const dtMap: { [key: string]: string } = {
+      '1': 'SHA-1',
+      '2': 'SHA-256',
+      '3': 'GOST R 34.11-94',
+      '4': 'SHA-384'
+    };
+    return dtMap[dt] || `Type ${dt}`;
+  }
+
   // Key Download/Upload for Secondary Servers
   downloadKeys(): void {
     const zoneName = this.formData.name;
@@ -382,6 +427,27 @@ export class ZonesComponent implements OnInit {
       },
       error: (err) => {
         this.toast.error('Failed to delete zone');
+      }
+    });
+  }
+
+  exportZone(zoneName: string): void {
+    this.api.exportZone(zoneName).subscribe({
+      next: (blob) => {
+        // Create download link
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${zoneName.replace(/\.$/, '')}.zone`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        this.toast.success('Zone file exported successfully');
+      },
+      error: (err) => {
+        this.toast.error('Failed to export zone file');
+        console.error('Export error:', err);
       }
     });
   }

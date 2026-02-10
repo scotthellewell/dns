@@ -17,21 +17,38 @@ import (
 // This allows the existing server code to work with the new storage layer.
 func (s *Store) BuildParsedConfig() (*config.ParsedConfig, error) {
 	parsed := &config.ParsedConfig{
-		Zones:        []config.ParsedZone{},
-		DNSSEC:       []config.DNSSECKeyConfig{},
-		ARecords:     make(map[string][]config.ParsedARecord),
-		AAAARecords:  make(map[string][]config.ParsedAAAARecord),
-		CNAMERecords: make(map[string]config.ParsedCNAMERecord),
-		MXRecords:    make(map[string][]config.ParsedMXRecord),
-		TXTRecords:   make(map[string][]config.ParsedTXTRecord),
-		NSRecords:    make(map[string][]config.ParsedNSRecord),
-		PTRRecords:   make(map[string]config.ParsedPTRRecord),
-		SRVRecords:   make(map[string][]config.ParsedSRVRecord),
-		SOARecords:   make(map[string]config.ParsedSOARecord),
-		CAARecords:   make(map[string][]config.ParsedCAARecord),
-		SSHFPRecords: make(map[string][]config.ParsedSSHFPRecord),
-		TLSARecords:  make(map[string][]config.ParsedTLSARecord),
-		NAPTRRecords: make(map[string][]config.ParsedNAPTRRecord),
+		Zones:          []config.ParsedZone{},
+		DNSSEC:         []config.DNSSECKeyConfig{},
+		TenantDefaults: make(map[string]config.TenantDefaults),
+		ZoneTenants:    make(map[string]string),
+		MainTenantID:   MainTenantID,
+		ARecords:       make(map[string][]config.ParsedARecord),
+		AAAARecords:    make(map[string][]config.ParsedAAAARecord),
+		CNAMERecords:   make(map[string]config.ParsedCNAMERecord),
+		MXRecords:      make(map[string][]config.ParsedMXRecord),
+		TXTRecords:     make(map[string][]config.ParsedTXTRecord),
+		NSRecords:      make(map[string][]config.ParsedNSRecord),
+		PTRRecords:     make(map[string]config.ParsedPTRRecord),
+		SRVRecords:     make(map[string][]config.ParsedSRVRecord),
+		SOARecords:     make(map[string]config.ParsedSOARecord),
+		CAARecords:     make(map[string][]config.ParsedCAARecord),
+		SSHFPRecords:   make(map[string][]config.ParsedSSHFPRecord),
+		TLSARecords:    make(map[string][]config.ParsedTLSARecord),
+		NAPTRRecords:   make(map[string][]config.ParsedNAPTRRecord),
+	}
+
+	// Load tenants and populate tenant defaults
+	tenants, err := s.ListTenants()
+	if err != nil {
+		return nil, fmt.Errorf("list tenants: %w", err)
+	}
+	for _, tenant := range tenants {
+		if len(tenant.DefaultNameservers) > 0 {
+			parsed.TenantDefaults[tenant.ID] = config.TenantDefaults{
+				Nameservers: tenant.DefaultNameservers,
+				TTL:         tenant.DefaultNameserverTTL,
+			}
+		}
 	}
 
 	// Load zones
@@ -41,9 +58,22 @@ func (s *Store) BuildParsedConfig() (*config.ParsedConfig, error) {
 	}
 
 	for _, zone := range zones {
+		// Normalize zone name with trailing dot for DNS compatibility
+		zoneName := zone.Name
+		if !strings.HasSuffix(zoneName, ".") {
+			zoneName += "."
+		}
+
+		// Track zone to tenant mapping
+		tenantID := zone.TenantID
+		if tenantID == "" {
+			tenantID = MainTenantID
+		}
+		parsed.ZoneTenants[zoneName] = tenantID
+
 		// Build ParsedZone
 		pz := config.ParsedZone{
-			Name: zone.Name,
+			Name: zoneName,
 			Type: config.ZoneType(zone.Type),
 			TTL:  zone.TTL,
 		}
@@ -67,7 +97,7 @@ func (s *Store) BuildParsedConfig() (*config.ParsedConfig, error) {
 
 		// Build SOA record
 		soa := config.ParsedSOARecord{
-			Name:    zone.Name,
+			Name:    zoneName,
 			MName:   zone.PrimaryNS,
 			RName:   zone.AdminEmail,
 			Serial:  zone.Serial,
@@ -78,10 +108,10 @@ func (s *Store) BuildParsedConfig() (*config.ParsedConfig, error) {
 			TTL:     zone.TTL,
 		}
 		if soa.MName == "" {
-			soa.MName = "ns1." + zone.Name
+			soa.MName = "ns1." + zoneName
 		}
 		if soa.RName == "" {
-			soa.RName = "hostmaster." + zone.Name
+			soa.RName = "hostmaster." + zoneName
 		}
 		if soa.Refresh == 0 {
 			soa.Refresh = 3600
@@ -95,9 +125,9 @@ func (s *Store) BuildParsedConfig() (*config.ParsedConfig, error) {
 		if soa.Minimum == 0 {
 			soa.Minimum = 300
 		}
-		parsed.SOARecords[zone.Name] = soa
+		parsed.SOARecords[zoneName] = soa
 
-		// Load records for zone
+		// Load records for zone (use original zone.Name for database query)
 		records, err := s.GetAllZoneRecords(zone.Name)
 		if err != nil {
 			return nil, fmt.Errorf("get records for zone %s: %w", zone.Name, err)
@@ -108,12 +138,16 @@ func (s *Store) BuildParsedConfig() (*config.ParsedConfig, error) {
 				continue
 			}
 
-			// Build FQDN
+			// Build FQDN with trailing dot
 			var fqdn string
 			if rec.Name == "@" {
-				fqdn = zone.Name
+				fqdn = zoneName
 			} else {
-				fqdn = rec.Name + "." + zone.Name
+				fqdn = rec.Name + "." + zoneName
+			}
+			// Ensure trailing dot for DNS lookups
+			if !strings.HasSuffix(fqdn, ".") {
+				fqdn += "."
 			}
 
 			ttl := rec.TTL
@@ -211,7 +245,7 @@ func (s *Store) addRecordToParsed(parsed *config.ParsedConfig, rec *Record, fqdn
 		}
 		parsed.ARecords[fqdn] = append(parsed.ARecords[fqdn], config.ParsedARecord{
 			Name: fqdn,
-			IP:   net.ParseIP(data.IP),
+			IP:   net.ParseIP(data.GetIP()),
 			TTL:  ttl,
 		})
 
@@ -222,7 +256,7 @@ func (s *Store) addRecordToParsed(parsed *config.ParsedConfig, rec *Record, fqdn
 		}
 		parsed.AAAARecords[fqdn] = append(parsed.AAAARecords[fqdn], config.ParsedAAAARecord{
 			Name: fqdn,
-			IP:   net.ParseIP(data.IP),
+			IP:   net.ParseIP(data.GetIP()),
 			TTL:  ttl,
 		})
 
@@ -244,8 +278,8 @@ func (s *Store) addRecordToParsed(parsed *config.ParsedConfig, rec *Record, fqdn
 		}
 		parsed.MXRecords[fqdn] = append(parsed.MXRecords[fqdn], config.ParsedMXRecord{
 			Name:     fqdn,
-			Priority: data.Priority,
-			Target:   data.Target,
+			Priority: data.GetPriority(),
+			Target:   data.GetTarget(),
 			TTL:      ttl,
 		})
 

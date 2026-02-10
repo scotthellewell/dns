@@ -225,6 +225,71 @@ func (h *Handler) handleZonesStorage(w http.ResponseWriter, r *http.Request, ses
 	}
 }
 
+// handleEnableZoneRecords enables all records in a zone
+func (h *Handler) handleEnableZoneRecords(w http.ResponseWriter, r *http.Request) {
+	session := auth.GetSession(r.Context())
+	
+	// Extract zone name from path: /api/zones/enable-records/{zone}
+	zoneName := strings.TrimPrefix(r.URL.Path, "/api/zones/enable-records/")
+	zoneName, _ = url.QueryUnescape(zoneName)
+	if zoneName == "" {
+		h.errorResponse(w, "Zone name required", http.StatusBadRequest)
+		return
+	}
+
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	store := h.getStore()
+	if store == nil {
+		h.errorResponse(w, "Storage not available", http.StatusInternalServerError)
+		return
+	}
+
+	// Check zone exists and user has access
+	zone, err := store.GetZone(zoneName)
+	if err != nil {
+		h.errorResponse(w, "Zone not found", http.StatusNotFound)
+		return
+	}
+
+	// Check tenant access
+	if session != nil && !session.IsSuperAdmin {
+		sessionTenant := session.TenantID
+		if sessionTenant == "" {
+			sessionTenant = auth.MainTenantID
+		}
+		zoneTenant := zone.TenantID
+		if zoneTenant == "" {
+			zoneTenant = auth.MainTenantID
+		}
+		if sessionTenant != zoneTenant {
+			h.errorResponse(w, "Access denied", http.StatusForbidden)
+			return
+		}
+	}
+
+	// Enable all records
+	count, err := store.EnableAllZoneRecords(zoneName)
+	if err != nil {
+		h.errorResponse(w, "Failed to enable records: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Rebuild config
+	if err := h.UpdateConfigFromStorage(); err != nil {
+		h.errorResponse(w, "Failed to update config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	h.jsonResponse(w, map[string]interface{}{
+		"status":          "ok",
+		"records_enabled": count,
+	})
+}
+
 // handleZoneStorage handles single zone API using storage backend
 func (h *Handler) handleZoneStorage(w http.ResponseWriter, r *http.Request, session *auth.Session, zoneID string) {
 	store := h.getStore()
@@ -410,11 +475,22 @@ func (h *Handler) handleRecordsStorage(w http.ResponseWriter, r *http.Request, s
 								resp.Value = v
 							}
 						case "MX":
+							// Handle both new format (priority/target) and old format (preference/exchange)
 							if v, ok := data["target"].(string); ok {
 								resp.Target = v
 								resp.Value = v
+							} else if v, ok := data["exchange"].(string); ok {
+								resp.Target = v
+								resp.Value = v
 							}
+							// Check for priority in multiple type formats
 							if v, ok := data["priority"].(float64); ok {
+								resp.Priority = int(v)
+							} else if v, ok := data["priority"].(int); ok {
+								resp.Priority = v
+							} else if v, ok := data["priority"].(int64); ok {
+								resp.Priority = int(v)
+							} else if v, ok := data["preference"].(float64); ok {
 								resp.Priority = int(v)
 							}
 						case "TXT":
@@ -1804,6 +1880,71 @@ type RecordResult struct {
 	RawData string          `json:"raw_data,omitempty"` // Human-readable data
 }
 
+// handleZoneExport handles zone file export in BIND format
+func (h *Handler) handleZoneExport(w http.ResponseWriter, r *http.Request) {
+	session := auth.GetSession(r.Context())
+	if session == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Only GET for export
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract zone name from URL path: /api/zones/export/{zoneName}
+	path := strings.TrimPrefix(r.URL.Path, "/api/zones/export/")
+	zoneName := strings.TrimSuffix(path, "/")
+	if zoneName == "" {
+		http.Error(w, "Zone name required", http.StatusBadRequest)
+		return
+	}
+
+	// URL decode the zone name
+	zoneName, err := url.QueryUnescape(zoneName)
+	if err != nil {
+		http.Error(w, "Invalid zone name encoding", http.StatusBadRequest)
+		return
+	}
+
+	// Normalize zone name
+	if !strings.HasSuffix(zoneName, ".") {
+		zoneName = zoneName + "."
+	}
+
+	store, ok := h.store.(*storage.Store)
+	if !ok || store == nil {
+		http.Error(w, "Storage backend not available", http.StatusInternalServerError)
+		return
+	}
+
+	// Check if tenant user has access to this zone
+	if !session.IsSuperAdmin && session.TenantID != "" {
+		zone, err := store.GetZone(zoneName)
+		if err != nil {
+			http.Error(w, "Zone not found", http.StatusNotFound)
+			return
+		}
+		if zone.TenantID != session.TenantID {
+			http.Error(w, "Access denied to this zone", http.StatusForbidden)
+			return
+		}
+	}
+
+	// Set headers for file download
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.zone\"", strings.TrimSuffix(zoneName, ".")))
+
+	// Export zone file
+	if err := store.ExportZoneFile(zoneName, w); err != nil {
+		// If headers haven't been written yet, we can send an error
+		http.Error(w, "Failed to export zone: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
 // handleZoneImport handles zone file import
 func (h *Handler) handleZoneImport(w http.ResponseWriter, r *http.Request) {
 	session := auth.GetSession(r.Context())
@@ -1882,12 +2023,13 @@ func (h *Handler) importZoneFile(store *storage.Store, session *auth.Session, re
 
 	// Convert records to result format
 	for _, rec := range parsed.records {
+		rawData := formatRecordData(rec.Type, rec.Data)
 		rr := &RecordResult{
 			Name:    rec.Name,
 			Type:    rec.Type,
 			TTL:     rec.TTL,
 			Data:    rec.Data,
-			RawData: formatRecordData(rec.Type, rec.Data),
+			RawData: rawData,
 		}
 		result.Records = append(result.Records, rr)
 	}
@@ -1965,12 +2107,22 @@ func formatRecordData(rtype string, data json.RawMessage) string {
 			return d.Target
 		}
 	case "MX":
+		// Handle both new format (priority/target) and old format (preference/exchange)
 		var d struct {
+			Priority   uint16 `json:"priority"`
+			Target     string `json:"target"`
 			Preference uint16 `json:"preference"`
 			Exchange   string `json:"exchange"`
 		}
 		if json.Unmarshal(data, &d) == nil {
-			return fmt.Sprintf("%d %s", d.Preference, d.Exchange)
+			// Prefer new format, fall back to old
+			priority := d.Priority
+			target := d.Target
+			if target == "" {
+				priority = d.Preference
+				target = d.Exchange
+			}
+			return fmt.Sprintf("%d %s", priority, target)
 		}
 	case "TXT":
 		var d struct{ Text string `json:"text"` }
@@ -2197,10 +2349,23 @@ func (p *zoneFileParser) parseRecord(line, prevName string) (*storage.Record, st
 }
 
 func (p *zoneFileParser) buildRecord(name string, ttl uint32, rtype string, data []string) (*storage.Record, error) {
+	// Normalize the name: strip trailing dot and zone suffix to get relative name
+	name = strings.TrimSuffix(name, ".")
+	zoneName := strings.TrimSuffix(p.origin, ".")
+	
+	// If name equals zone, use @ (apex)
+	if name == zoneName {
+		name = "@"
+	} else if strings.HasSuffix(name, "."+zoneName) {
+		// Strip zone suffix to get relative name
+		name = strings.TrimSuffix(name, "."+zoneName)
+	}
+	
 	record := &storage.Record{
-		Name: strings.TrimSuffix(name, "."),
-		Type: rtype,
-		TTL:  ttl,
+		Name:    name,
+		Type:    rtype,
+		TTL:     ttl,
+		Enabled: true,
 	}
 
 	switch rtype {
@@ -2229,7 +2394,7 @@ func (p *zoneFileParser) buildRecord(name string, ttl uint32, rtype string, data
 		}
 		pref, _ := strconv.ParseUint(data[0], 10, 16)
 		exchange := p.expandName(data[1])
-		record.Data = json.RawMessage(fmt.Sprintf(`{"preference":%d,"exchange":"%s"}`, pref, strings.TrimSuffix(exchange, ".")))
+		record.Data = json.RawMessage(fmt.Sprintf(`{"priority":%d,"target":"%s"}`, pref, strings.TrimSuffix(exchange, ".")))
 
 	case "TXT":
 		// Join all data and handle quotes

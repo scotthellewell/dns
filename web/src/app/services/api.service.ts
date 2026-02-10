@@ -221,6 +221,20 @@ export interface CertificateInfo {
   is_expiring_soon: boolean;
 }
 
+export interface CertificateListItem {
+  domain: string;
+  subject: string;
+  issuer: string;
+  not_before: string;
+  not_after: string;
+  dns_names: string[];
+  ip_addresses: string[];
+  auto_generated: boolean;
+  is_expired: boolean;
+  is_expiring_soon: boolean;
+  days_until_expiry: number;
+}
+
 export interface GenerateCertRequest {
   common_name: string;
   dns_names: string[];
@@ -385,6 +399,13 @@ export class ApiService {
     return this.importZone({ zone_name: zoneName, zone_file: zoneFile, preview: true });
   }
 
+  // Zone Export
+  exportZone(zoneName: string): Observable<Blob> {
+    return this.http.get(`${this.baseUrl}/zones/export/${encodeURIComponent(zoneName)}`, {
+      responseType: 'blob'
+    });
+  }
+
   // Transfer Settings
   getTransferConfig(): Observable<TransferConfig> {
     return this.http.get<TransferConfig>(`${this.baseUrl}/transfer`);
@@ -493,6 +514,18 @@ export class ApiService {
   // Certificate Management
   getCertificate(): Observable<CertificateInfo> {
     return this.http.get<CertificateInfo>(`${this.baseUrl}/certs`);
+  }
+
+  listCertificates(): Observable<CertificateListItem[]> {
+    return this.http.get<CertificateListItem[]>(`${this.baseUrl}/certs/list`);
+  }
+
+  requestCertificate(domain: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/certs/request/${encodeURIComponent(domain)}`, {});
+  }
+
+  deleteCertificate(domain: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/certs/delete/${encodeURIComponent(domain)}`);
   }
 
   generateCertificate(request: GenerateCertRequest): Observable<any> {

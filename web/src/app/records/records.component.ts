@@ -1,9 +1,10 @@
-import { Component, OnInit, ChangeDetectorRef, inject } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef, inject, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService, DnsRecord, Zone, Delegation, GlueRecord, DsRecordData } from '../services/api.service';
 import { ToastService } from '../services/toast.service';
 import { AuthService, Tenant } from '../services/auth.service';
+import { TenantContextService } from '../services/tenant-context.service';
 
 @Component({
   selector: 'app-records',
@@ -15,6 +16,7 @@ import { AuthService, Tenant } from '../services/auth.service';
 export class RecordsComponent implements OnInit {
   private toast = inject(ToastService);
   readonly auth = inject(AuthService);
+  readonly tenantContext = inject(TenantContextService);
   
   records: DnsRecord[] = [];
   filteredRecords: DnsRecord[] = [];
@@ -22,10 +24,12 @@ export class RecordsComponent implements OnInit {
   filteredZones: Zone[] = [];
   formZones: Zone[] = [];  // Zones filtered for the add/edit form
   tenants: Tenant[] = [];
-  selectedTenant = '';
   formTenant = '';  // Tenant selected in the add record form
   showForm = false;
   editingRecord: { record: DnsRecord; index: number } | null = null;
+  
+  // Text filter for searching records
+  searchFilter = '';
   
   recordTypes = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SOA', 'SRV', 'CAA', 'PTR', 'ALIAS', 'SSHFP', 'TLSA', 'NAPTR', 'SVCB', 'HTTPS', 'LOC', 'Delegation'];
   selectedType = '';
@@ -44,7 +48,14 @@ export class RecordsComponent implements OnInit {
   showDelegationForm = false;
   delegations: Delegation[] = [];
 
-  constructor(private api: ApiService, private cdr: ChangeDetectorRef) {}
+  constructor(private api: ApiService, private cdr: ChangeDetectorRef) {
+    // React to tenant context changes
+    effect(() => {
+      const tenantId = this.tenantContext.currentTenantId();
+      this.filterZonesByTenant();
+      this.filterRecords();
+    });
+  }
 
   ngOnInit(): void {
     this.loadTenants();
@@ -59,12 +70,6 @@ export class RecordsComponent implements OnInit {
     this.auth.getTenants().subscribe({
       next: (tenants) => {
         this.tenants = tenants;
-        // Default to main tenant
-        const mainTenant = tenants.find(t => t.is_main);
-        if (mainTenant && !this.selectedTenant) {
-          this.selectedTenant = mainTenant.id;
-          this.filterZonesByTenant();
-        }
         this.cdr.detectChanges();
       },
       error: (err) => {
@@ -73,19 +78,12 @@ export class RecordsComponent implements OnInit {
     });
   }
 
-  onTenantFilterChange(): void {
-    this.filterZonesByTenant();
-    // Reset zone filter when tenant changes
-    this.selectedZone = '';
-    this.loadRecords();
-    this.loadDelegations();
-  }
-
   filterZonesByTenant(): void {
-    if (!this.selectedTenant || !this.auth.isSuperAdmin()) {
-      this.filteredZones = this.zones;
+    const currentTenant = this.tenantContext.currentTenantId();
+    if (this.auth.isSuperAdmin() && currentTenant) {
+      this.filteredZones = this.zones.filter(z => z.tenant_id === currentTenant);
     } else {
-      this.filteredZones = this.zones.filter(z => z.tenant_id === this.selectedTenant);
+      this.filteredZones = this.zones;
     }
     this.cdr.detectChanges();
   }
@@ -93,7 +91,8 @@ export class RecordsComponent implements OnInit {
   // Filter zones for the add/edit form based on formTenant
   filterFormZones(): void {
     if (!this.formTenant || !this.auth.isSuperAdmin()) {
-      this.formZones = this.zones;
+      // Use the current tenant context zones
+      this.formZones = this.filteredZones;
     } else {
       this.formZones = this.zones.filter(z => z.tenant_id === this.formTenant);
     }
@@ -166,12 +165,21 @@ export class RecordsComponent implements OnInit {
   filterRecords(): void {
     let filtered = this.records;
     
-    // Filter by tenant (using zone names from filtered zones)
-    if (this.selectedTenant && this.auth.isSuperAdmin()) {
+    // Filter by tenant (using the current tenant context)
+    const currentTenant = this.tenantContext.currentTenantId();
+    if (currentTenant && this.auth.isSuperAdmin()) {
       const tenantZoneNames = this.filteredZones.map(z => z.name);
       filtered = filtered.filter(r => {
         const zoneName = r.zone_name || r.zone;
         return zoneName && tenantZoneNames.includes(zoneName);
+      });
+    }
+    
+    // Filter by zone (client-side to ensure filtering works with other filters)
+    if (this.selectedZone) {
+      filtered = filtered.filter(r => {
+        const zoneName = r.zone_name || r.zone;
+        return zoneName === this.selectedZone;
       });
     }
     
@@ -180,7 +188,39 @@ export class RecordsComponent implements OnInit {
       filtered = filtered.filter(r => r.type === this.selectedType);
     }
     
+    // Filter by search text (searches across multiple fields)
+    if (this.searchFilter.trim()) {
+      const searchLower = this.searchFilter.toLowerCase().trim();
+      filtered = filtered.filter(r => {
+        // Search in name/host
+        if (r.name?.toLowerCase().includes(searchLower)) return true;
+        // Search in zone
+        const zoneName = r.zone_name || r.zone || '';
+        if (zoneName.toLowerCase().includes(searchLower)) return true;
+        // Search in type
+        if (r.type?.toLowerCase().includes(searchLower)) return true;
+        // Search in value/data (various record types)
+        if (r.value?.toLowerCase().includes(searchLower)) return true;
+        if (r.target?.toLowerCase().includes(searchLower)) return true;
+        if (r.ip?.toLowerCase().includes(searchLower)) return true;
+        // Search in hostname
+        if (r.hostname?.toLowerCase().includes(searchLower)) return true;
+        // Search in SSHFP fingerprint
+        if (r.fingerprint?.toLowerCase().includes(searchLower)) return true;
+        // Search in NAPTR replacement/service
+        if (r.replacement?.toLowerCase().includes(searchLower)) return true;
+        if (r.service?.toLowerCase().includes(searchLower)) return true;
+        // Search in values array
+        if (r.values?.some(v => v.toLowerCase().includes(searchLower))) return true;
+        return false;
+      });
+    }
+    
     this.filteredRecords = filtered;
+  }
+
+  onSearchFilterChange(): void {
+    this.filterRecords();
   }
 
   onTypeFilterChange(): void {
@@ -308,7 +348,7 @@ export class RecordsComponent implements OnInit {
       this.formData = this.getEmptyRecord(type);
       this.editingRecord = null;
       // Initialize form tenant to match page tenant selection
-      this.formTenant = this.selectedTenant;
+      this.formTenant = this.tenantContext.currentTenantId();
       this.filterFormZones();
       this.showForm = true;
       this.showDelegationForm = false;
@@ -410,40 +450,65 @@ export class RecordsComponent implements OnInit {
   }
 
   getRecordSummary(record: DnsRecord): string {
+    const shortName = this.getShortName(record);
     switch (record.type) {
       case 'A':
       case 'AAAA':
-        return `${record.name} → ${record.ip}`;
+        return `${shortName} → ${record.ip}`;
       case 'MX':
-        return `${record.name} → ${record.priority} ${record.target}`;
+        return `${shortName} → ${record.priority} ${record.target}`;
       case 'TXT':
-        return `${record.name} → "${record.values?.join(', ')}"`;
+        return `${shortName} → "${record.values?.join(', ')}"`;
       case 'NS':
       case 'CNAME':
       case 'ALIAS':
-        return `${record.name} → ${record.target}`;
+        return `${shortName} → ${record.target}`;
       case 'SOA':
-        return `${record.name} (serial: ${record.serial})`;
+        return `${shortName} (serial: ${record.serial})`;
       case 'SRV':
-        return `${record.name} → ${record.target}:${record.port}`;
+        return `${shortName} → ${record.target}:${record.port}`;
       case 'CAA':
-        return `${record.name} ${record.tag} ${record.value}`;
+        return `${shortName} ${record.tag} ${record.value}`;
       case 'PTR':
         return `${record.ip} → ${record.hostname}`;
       case 'SSHFP':
-        return `${record.name} (alg: ${record.algorithm}, type: ${record.fp_type})`;
+        return `${shortName} (alg: ${record.algorithm}, type: ${record.fp_type})`;
       case 'TLSA':
-        return `${record.name} (usage: ${record.usage})`;
+        return `${shortName} (usage: ${record.usage})`;
       case 'NAPTR':
-        return `${record.name} → ${record.replacement || record.regexp}`;
+        return `${shortName} → ${record.replacement || record.regexp}`;
       case 'SVCB':
       case 'HTTPS':
-        return `${record.name} → ${record.target} (pri: ${record.priority})`;
+        return `${shortName} → ${record.target} (pri: ${record.priority})`;
       case 'LOC':
-        return `${record.name} (${record.latitude}, ${record.longitude})`;
+        return `${shortName} (${record.latitude}, ${record.longitude})`;
       default:
-        return record.name || '';
+        return shortName;
     }
+  }
+
+  // Get short record name, stripping the zone suffix
+  getShortName(record: DnsRecord): string {
+    const name = record.name || '';
+    const zone = record.zone_name || record.zone || '';
+    
+    // If name is exactly the zone, show '@'
+    if (name === zone || name === zone + '.') {
+      return '@';
+    }
+    
+    // Strip the zone suffix from the name
+    const zoneSuffix = '.' + zone;
+    const zoneSuffixDot = '.' + zone + '.';
+    
+    if (name.endsWith(zoneSuffixDot)) {
+      return name.slice(0, -zoneSuffixDot.length) || '@';
+    }
+    if (name.endsWith(zoneSuffix)) {
+      return name.slice(0, -zoneSuffix.length) || '@';
+    }
+    
+    return name || '@';
   }
 
   // Delegation Methods

@@ -29,8 +29,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o d
 # Final stage - minimal runtime image
 FROM alpine:3.21
 
-# Install ca-certificates for HTTPS and tzdata for timezones
-RUN apk add --no-cache ca-certificates tzdata
+# Install ca-certificates for HTTPS, tzdata for timezones, iproute2 for IPv6 config
+RUN apk add --no-cache ca-certificates tzdata iproute2
 
 # Create non-root user
 RUN adduser -D -u 1000 dnsuser
@@ -43,6 +43,10 @@ WORKDIR /app
 
 # Copy the binary from go-builder
 COPY --from=go-builder /app/dns-server /app/dns-server
+
+# Copy the entrypoint script
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 # Copy the web UI from web-builder
 COPY --from=web-builder /app/web/dist/dns-admin/browser /app/web/dist/dns-admin/browser
@@ -71,6 +75,6 @@ VOLUME ["/app/data"]
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider --no-check-certificate https://localhost:443/api/health || exit 1
 
-# Default command
-ENTRYPOINT ["/app/dns-server"]
+# Default command - use entrypoint script for IPv6 setup
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["-data", "/app/data"]

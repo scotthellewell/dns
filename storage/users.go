@@ -51,10 +51,8 @@ func (s *Store) CreateUser(user *User) error {
 	})
 
 	if err == nil {
-		// Record change for sync (exclude password hash from sync data)
-		syncUser := *user
-		syncUser.PasswordHash = "" // Don't sync password hashes
-		recordChange(EntityTypeUser, user.ID, user.TenantID, OpCreate, &syncUser)
+		// Record change for sync - include password hash for cluster auth to work
+		recordChange(EntityTypeUser, user.ID, user.TenantID, OpCreate, user)
 	}
 
 	return err
@@ -124,10 +122,8 @@ func (s *Store) UpdateUser(user *User) error {
 	})
 
 	if err == nil {
-		// Record change for sync (exclude password hash)
-		syncUser := *user
-		syncUser.PasswordHash = ""
-		recordChange(EntityTypeUser, user.ID, user.TenantID, OpUpdate, &syncUser)
+		// Record change for sync - include password hash for cluster auth to work
+		recordChange(EntityTypeUser, user.ID, user.TenantID, OpUpdate, user)
 	}
 
 	return err

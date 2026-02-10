@@ -303,10 +303,25 @@ func (s *Store) UpdateZone(zone *Zone) error {
 func (s *Store) DeleteZone(name string) error {
 	name = strings.TrimSuffix(strings.ToLower(name), ".")
 
+	// Track records to notify sync about after transaction completes
+	type recordInfo struct {
+		id       string
+		tenantID string
+	}
+	var deletedRecords []recordInfo
+	var zoneTenantID string
+
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(BucketZones)
-		if b.Get([]byte(name)) == nil {
+		zoneData := b.Get([]byte(name))
+		if zoneData == nil {
 			return ErrNotFound
+		}
+
+		// Get the zone's tenant ID for sync
+		var zone Zone
+		if err := json.Unmarshal(zoneData, &zone); err == nil {
+			zoneTenantID = zone.TenantID
 		}
 
 		// Check for dependent zones (subzones using delegations)
@@ -319,14 +334,24 @@ func (s *Store) DeleteZone(name string) error {
 			}
 		}
 
-		// Delete all records in this zone
+		// Delete all records in this zone, collecting their IDs for sync
 		records := tx.Bucket(BucketRecords)
 		if records != nil {
 			c := records.Cursor()
 			prefix := []byte(name + ":")
 			var toDelete [][]byte
-			for k, _ := c.Seek(prefix); k != nil && strings.HasPrefix(string(k), string(prefix)); k, _ = c.Next() {
+			for k, v := c.Seek(prefix); k != nil && strings.HasPrefix(string(k), string(prefix)); k, v = c.Next() {
 				toDelete = append(toDelete, append([]byte{}, k...))
+				// Parse record data to get individual record IDs
+				var recs []Record
+				if err := json.Unmarshal(v, &recs); err == nil {
+					for _, rec := range recs {
+						deletedRecords = append(deletedRecords, recordInfo{
+							id:       rec.ID,
+							tenantID: zoneTenantID,
+						})
+					}
+				}
 			}
 			for _, k := range toDelete {
 				records.Delete(k)
@@ -360,8 +385,13 @@ func (s *Store) DeleteZone(name string) error {
 
 	if err == nil {
 		s.refreshZoneCache()
-		// Record change for sync (we don't have tenantID here, but it's in the zone)
-		recordChange(EntityTypeZone, name, "", OpDelete, nil)
+		// Record delete operations for each record in the zone for sync
+		// This ensures other servers will delete these records when they process the oplog
+		for _, rec := range deletedRecords {
+			recordChange(EntityTypeRecord, rec.id, rec.tenantID, OpDelete, nil)
+		}
+		// Record the zone deletion for sync
+		recordChange(EntityTypeZone, name, zoneTenantID, OpDelete, nil)
 	}
 
 	return err

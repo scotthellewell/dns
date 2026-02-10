@@ -44,12 +44,14 @@ const MainTenantID = "main"
 
 // Tenant represents an organization/tenant in the multi-tenant system
 type Tenant struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	IsMain      bool      `json:"is_main,omitempty"` // Main tenant has super-admin privileges
-	CreatedAt   time.Time `json:"created_at"`
-	CreatedBy   string    `json:"created_by,omitempty"`
+	ID                   string    `json:"id"`
+	Name                 string    `json:"name"`
+	Description          string    `json:"description,omitempty"`
+	IsMain               bool      `json:"is_main,omitempty"` // Main tenant has super-admin privileges
+	DefaultNameservers   []string  `json:"default_nameservers,omitempty"`    // Default NS records for zones in this tenant
+	DefaultNameserverTTL uint32    `json:"default_nameserver_ttl,omitempty"` // TTL for default NS records (0 = use zone default)
+	CreatedAt            time.Time `json:"created_at"`
+	CreatedBy            string    `json:"created_by,omitempty"`
 }
 
 // AuthConfig holds authentication configuration
@@ -147,13 +149,15 @@ type Session struct {
 
 // Manager handles authentication
 type Manager struct {
-	config         *AuthConfig
-	configPath     string
-	sessionsPath   string
-	sessions       map[string]*Session
-	mu             sync.RWMutex
-	configMu       sync.RWMutex
-	storageManager *StorageManager // Optional storage backend
+	config              *AuthConfig
+	configPath          string
+	sessionsPath        string
+	sessions            map[string]*Session
+	mu                  sync.RWMutex
+	configMu            sync.RWMutex
+	storageManager      *StorageManager // Optional storage backend
+	joinClusterCallback JoinClusterCallback
+	acmeCertCallback    ACMECertCallback
 }
 
 // NewManager creates a new auth manager
@@ -1193,10 +1197,10 @@ func (m *Manager) CreateTenant(id, name, description, createdBy string) (*Tenant
 	return &tenant, nil
 }
 
-// UpdateTenant updates a tenant's name and description
-func (m *Manager) UpdateTenant(tenantID, name, description string) (*Tenant, error) {
+// UpdateTenant updates a tenant's name, description, and default nameservers
+func (m *Manager) UpdateTenant(tenantID, name, description string, defaultNameservers []string, defaultNameserverTTL uint32) (*Tenant, error) {
 	if m.storageManager != nil {
-		return m.storageManager.UpdateTenant(tenantID, name, description)
+		return m.storageManager.UpdateTenant(tenantID, name, description, defaultNameservers, defaultNameserverTTL)
 	}
 
 	m.configMu.Lock()
@@ -1206,6 +1210,8 @@ func (m *Manager) UpdateTenant(tenantID, name, description string) (*Tenant, err
 		if t.ID == tenantID {
 			m.config.Tenants[i].Name = name
 			m.config.Tenants[i].Description = description
+			m.config.Tenants[i].DefaultNameservers = defaultNameservers
+			m.config.Tenants[i].DefaultNameserverTTL = defaultNameserverTTL
 
 			if err := m.saveConfigLocked(); err != nil {
 				return nil, err

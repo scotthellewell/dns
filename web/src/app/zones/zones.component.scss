@@ -396,6 +396,119 @@
   }
 }
 
+// DS Record Parsed Fields Table
+.ds-fields-table {
+  width: 100%;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 12px;
+
+  th, td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid #334155;
+  }
+
+  th {
+    background: #0f172a;
+    color: #94a3b8;
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  td {
+    font-family: 'Fira Code', 'Monaco', monospace;
+    font-size: 0.875rem;
+    color: #f1f5f9;
+
+    .copy-btn {
+      margin-left: 8px;
+      padding: 2px 6px;
+      font-size: 0.7rem;
+      opacity: 0.7;
+      
+      &:hover {
+        opacity: 1;
+      }
+    }
+  }
+
+  tr:last-child td {
+    border-bottom: none;
+  }
+
+  .algorithm-name,
+  .digest-type-name {
+    color: #64748b;
+    font-size: 0.75rem;
+    margin-left: 4px;
+  }
+}
+
+.ds-digest-field {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+
+  label {
+    display: block;
+    color: #94a3b8;
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+
+  .digest-value {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+
+    code {
+      flex: 1;
+      font-family: 'Fira Code', 'Monaco', monospace;
+      font-size: 0.8rem;
+      color: #60a5fa;
+      word-break: break-all;
+      line-height: 1.5;
+    }
+
+    .btn {
+      flex-shrink: 0;
+    }
+  }
+}
+
+.ds-record-full {
+  margin-top: 8px;
+
+  summary {
+    cursor: pointer;
+    color: #64748b;
+    font-size: 0.8rem;
+    padding: 4px 0;
+
+    &:hover {
+      color: #94a3b8;
+    }
+
+    &::marker {
+      color: #64748b;
+    }
+  }
+
+  .ds-record-box {
+    margin-top: 8px;
+  }
+}
+
 .btn-xs {
   padding: 2px 6px;
   font-size: 0.75rem;

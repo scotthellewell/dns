@@ -5,74 +5,213 @@
         <mat-icon>dns</mat-icon>
         DNS Server Initial Setup
       </mat-card-title>
-      <mat-card-subtitle>Create your administrator account</mat-card-subtitle>
+      <mat-card-subtitle>Configure your DNS server</mat-card-subtitle>
     </mat-card-header>
 
     <mat-card-content>
-      <p class="setup-info">
-        Welcome! This is the first time you're setting up the DNS server. 
-        Please create an administrator account to get started.
-      </p>
+      <mat-tab-group [(selectedIndex)]="selectedTab">
+        <!-- New Server Tab -->
+        <mat-tab label="New Server">
+          <div class="tab-content">
+            <p class="setup-info">
+              Create a new standalone DNS server with an administrator account.
+            </p>
 
-      <form (ngSubmit)="setup()" class="setup-form">
-        <mat-form-field appearance="outline" class="full-width">
-          <mat-label>Username</mat-label>
-          <input matInput [(ngModel)]="username" name="username" 
-                 autocomplete="username" [disabled]="loading()" required>
-          <mat-icon matPrefix>person</mat-icon>
-        </mat-form-field>
+            <form (ngSubmit)="setup()" class="setup-form">
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Username</mat-label>
+                <input matInput [(ngModel)]="username" name="username" 
+                       autocomplete="username" [disabled]="loading()" required>
+                <mat-icon matPrefix>person</mat-icon>
+              </mat-form-field>
 
-        <mat-form-field appearance="outline" class="full-width">
-          <mat-label>Email (optional)</mat-label>
-          <input matInput [(ngModel)]="email" name="email" type="email"
-                 autocomplete="email" [disabled]="loading()">
-          <mat-icon matPrefix>email</mat-icon>
-        </mat-form-field>
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Email (optional)</mat-label>
+                <input matInput [(ngModel)]="email" name="email" type="email"
+                       autocomplete="email" [disabled]="loading()">
+                <mat-icon matPrefix>email</mat-icon>
+              </mat-form-field>
 
-        <mat-form-field appearance="outline" class="full-width">
-          <mat-label>Display Name (optional)</mat-label>
-          <input matInput [(ngModel)]="displayName" name="displayName"
-                 [disabled]="loading()">
-          <mat-icon matPrefix>badge</mat-icon>
-        </mat-form-field>
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Display Name (optional)</mat-label>
+                <input matInput [(ngModel)]="displayName" name="displayName"
+                       [disabled]="loading()">
+                <mat-icon matPrefix>badge</mat-icon>
+              </mat-form-field>
 
-        <mat-form-field appearance="outline" class="full-width">
-          <mat-label>Password</mat-label>
-          <input matInput [(ngModel)]="password" name="password"
-                 [type]="hidePassword() ? 'password' : 'text'"
-                 autocomplete="new-password" [disabled]="loading()" required>
-          <mat-icon matPrefix>lock</mat-icon>
-          <button mat-icon-button matSuffix type="button"
-                  (click)="hidePassword.set(!hidePassword())">
-            <mat-icon>{{hidePassword() ? 'visibility_off' : 'visibility'}}</mat-icon>
-          </button>
-          <mat-hint>Minimum 8 characters</mat-hint>
-        </mat-form-field>
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Password</mat-label>
+                <input matInput [(ngModel)]="password" name="password"
+                       [type]="hidePassword() ? 'password' : 'text'"
+                       autocomplete="new-password" [disabled]="loading()" required>
+                <mat-icon matPrefix>lock</mat-icon>
+                <button mat-icon-button matSuffix type="button"
+                        (click)="hidePassword.set(!hidePassword())">
+                  <mat-icon>{{hidePassword() ? 'visibility_off' : 'visibility'}}</mat-icon>
+                </button>
+                <mat-hint>Minimum 8 characters</mat-hint>
+              </mat-form-field>
 
-        <mat-form-field appearance="outline" class="full-width">
-          <mat-label>Confirm Password</mat-label>
-          <input matInput [(ngModel)]="confirmPassword" name="confirmPassword"
-                 [type]="hideConfirmPassword() ? 'password' : 'text'"
-                 autocomplete="new-password" [disabled]="loading()" required>
-          <mat-icon matPrefix>lock_outline</mat-icon>
-          <button mat-icon-button matSuffix type="button"
-                  (click)="hideConfirmPassword.set(!hideConfirmPassword())">
-            <mat-icon>{{hideConfirmPassword() ? 'visibility_off' : 'visibility'}}</mat-icon>
-          </button>
-        </mat-form-field>
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Confirm Password</mat-label>
+                <input matInput [(ngModel)]="confirmPassword" name="confirmPassword"
+                       [type]="hideConfirmPassword() ? 'password' : 'text'"
+                       autocomplete="new-password" [disabled]="loading()" required>
+                <mat-icon matPrefix>lock_outline</mat-icon>
+                <button mat-icon-button matSuffix type="button"
+                        (click)="hideConfirmPassword.set(!hideConfirmPassword())">
+                  <mat-icon>{{hideConfirmPassword() ? 'visibility_off' : 'visibility'}}</mat-icon>
+                </button>
+              </mat-form-field>
 
-        <button mat-raised-button color="primary" type="submit" 
-                class="full-width setup-button" [disabled]="loading()">
-          @if (loading()) {
-            <mat-spinner diameter="20"></mat-spinner>
-          } @else {
-            <ng-container>
-              <mat-icon>rocket_launch</mat-icon>
-              Complete Setup
-            </ng-container>
-          }
-        </button>
-      </form>
+              <button mat-raised-button color="primary" type="submit" 
+                      class="full-width setup-button" [disabled]="loading()">
+                @if (loading()) {
+                  <mat-spinner diameter="20"></mat-spinner>
+                } @else {
+                  <ng-container>
+                    <mat-icon>rocket_launch</mat-icon>
+                    Complete Setup
+                  </ng-container>
+                }
+              </button>
+            </form>
+          </div>
+        </mat-tab>
+
+        <!-- Join Cluster Tab -->
+        <mat-tab label="Join Cluster">
+          <div class="tab-content">
+            <p class="setup-info">
+              Join an existing DNS server cluster. You'll need super admin credentials 
+              from an existing server in the cluster.
+            </p>
+
+            <form (ngSubmit)="joinCluster()" class="setup-form">
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Cluster Server URL</mat-label>
+                <input matInput [(ngModel)]="clusterUrl" name="clusterUrl" 
+                       placeholder="https://dns-1.example.com"
+                       [disabled]="loading()" required>
+                <mat-icon matPrefix>cloud</mat-icon>
+                <mat-hint>URL of an existing server in the cluster</mat-hint>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Cluster Admin Username</mat-label>
+                <input matInput [(ngModel)]="clusterUsername" name="clusterUsername" 
+                       autocomplete="username" [disabled]="loading()" required>
+                <mat-icon matPrefix>person</mat-icon>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Cluster Admin Password</mat-label>
+                <input matInput [(ngModel)]="clusterPassword" name="clusterPassword"
+                       [type]="hideClusterPassword() ? 'password' : 'text'"
+                       autocomplete="current-password" [disabled]="loading()" required>
+                <mat-icon matPrefix>lock</mat-icon>
+                <button mat-icon-button matSuffix type="button"
+                        (click)="hideClusterPassword.set(!hideClusterPassword())">
+                  <mat-icon>{{hideClusterPassword() ? 'visibility_off' : 'visibility'}}</mat-icon>
+                </button>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>This Server's URL</mat-label>
+                <input matInput [(ngModel)]="serverUrl" name="serverUrl" 
+                       placeholder="https://dns-2.example.com"
+                       [disabled]="loading()" required>
+                <mat-icon matPrefix>computer</mat-icon>
+                <mat-hint>URL where other servers can reach this server</mat-hint>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Server Name (optional)</mat-label>
+                <input matInput [(ngModel)]="serverName" name="serverName"
+                       placeholder="dns-2"
+                       [disabled]="loading()">
+                <mat-icon matPrefix>label</mat-icon>
+                <mat-hint>Friendly name for this server in the cluster</mat-hint>
+              </mat-form-field>
+
+              <div class="section-header">
+                <mat-icon>security</mat-icon>
+                <span>TLS Certificate (ACME)</span>
+              </div>
+              
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Certificate Provider</mat-label>
+                <mat-select [(ngModel)]="acmeProvider" name="acmeProvider">
+                  @for (provider of acmeProviders; track provider.id) {
+                    <mat-option [value]="provider.id">{{provider.name}}</mat-option>
+                  }
+                </mat-select>
+                <mat-icon matPrefix>verified_user</mat-icon>
+                <mat-hint>Select ACME certificate provider</mat-hint>
+              </mat-form-field>
+              
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>ACME Email</mat-label>
+                <input matInput [(ngModel)]="acmeEmail" name="acmeEmail" 
+                       type="email" placeholder="admin@example.com"
+                       [disabled]="loading()" required>
+                <mat-icon matPrefix>email</mat-icon>
+                <mat-hint>Email for certificate notifications</mat-hint>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Domain Name</mat-label>
+                <input matInput [(ngModel)]="acmeDomain" name="acmeDomain" 
+                       placeholder="dns-2.example.com"
+                       [disabled]="loading()" required>
+                <mat-icon matPrefix>language</mat-icon>
+                <mat-hint>Domain for the TLS certificate (must point to this server)</mat-hint>
+              </mat-form-field>
+              
+              @if (getSelectedProvider()?.requiresEAB) {
+                <div class="eab-notice">
+                  <mat-icon>info</mat-icon>
+                  <span>{{getSelectedProvider()?.eabInstructions}}</span>
+                </div>
+                
+                <mat-form-field appearance="outline" class="full-width">
+                  <mat-label>EAB Key ID</mat-label>
+                  <input matInput [(ngModel)]="acmeEABKeyID" name="acmeEABKeyID"
+                         [disabled]="loading()" required>
+                  <mat-icon matPrefix>key</mat-icon>
+                  <mat-hint>External Account Binding Key ID</mat-hint>
+                </mat-form-field>
+                
+                <mat-form-field appearance="outline" class="full-width">
+                  <mat-label>EAB HMAC Key</mat-label>
+                  <input matInput [(ngModel)]="acmeEABHMACKey" name="acmeEABHMACKey"
+                         [disabled]="loading()" required>
+                  <mat-icon matPrefix>vpn_key</mat-icon>
+                  <mat-hint>External Account Binding HMAC Key</mat-hint>
+                </mat-form-field>
+              }
+
+              <div class="config-row">
+                <mat-slide-toggle [(ngModel)]="useStaging" name="useStaging" color="primary">
+                  Use Staging Environment (for testing)
+                </mat-slide-toggle>
+              </div>
+
+              <button mat-raised-button color="primary" type="submit" 
+                      class="full-width setup-button" [disabled]="loading()">
+                @if (loading()) {
+                  <mat-spinner diameter="20"></mat-spinner>
+                } @else {
+                  <ng-container>
+                    <mat-icon>group_add</mat-icon>
+                    Join Cluster
+                  </ng-container>
+                }
+              </button>
+            </form>
+          </div>
+        </mat-tab>
+      </mat-tab-group>
     </mat-card-content>
   </mat-card>
 </div>

@@ -35,12 +35,14 @@ const (
 
 // Tenant represents an organization in the multi-tenant system.
 type Tenant struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	IsMain      bool      `json:"is_main,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	CreatedBy   string    `json:"created_by,omitempty"`
+	ID                   string    `json:"id"`
+	Name                 string    `json:"name"`
+	Description          string    `json:"description,omitempty"`
+	IsMain               bool      `json:"is_main,omitempty"`
+	DefaultNameservers   []string  `json:"default_nameservers,omitempty"`   // Default NS records for zones in this tenant
+	DefaultNameserverTTL uint32    `json:"default_nameserver_ttl,omitempty"` // TTL for default NS records (0 = use zone default)
+	CreatedAt            time.Time `json:"created_at"`
+	CreatedBy            string    `json:"created_by,omitempty"`
 }
 
 // User represents a user account.
@@ -146,13 +148,33 @@ type Record struct {
 // Record data types for each DNS record type
 
 // ARecordData holds A record data.
+// Supports both "ip" (from manual creation) and "address" (from zone file import)
 type ARecordData struct {
-	IP string `json:"ip"`
+	IP      string `json:"ip,omitempty"`
+	Address string `json:"address,omitempty"`
+}
+
+// GetIP returns the IP address from either field
+func (a ARecordData) GetIP() string {
+	if a.IP != "" {
+		return a.IP
+	}
+	return a.Address
 }
 
 // AAAARecordData holds AAAA record data.
+// Supports both "ip" (from manual creation) and "address" (from zone file import)
 type AAAARecordData struct {
-	IP string `json:"ip"`
+	IP      string `json:"ip,omitempty"`
+	Address string `json:"address,omitempty"`
+}
+
+// GetIP returns the IP address from either field
+func (a AAAARecordData) GetIP() string {
+	if a.IP != "" {
+		return a.IP
+	}
+	return a.Address
 }
 
 // CNAMERecordData holds CNAME record data.
@@ -161,9 +183,28 @@ type CNAMERecordData struct {
 }
 
 // MXRecordData holds MX record data.
+// Supports both new format (priority/target) and old import format (preference/exchange)
 type MXRecordData struct {
-	Priority uint16 `json:"priority"`
-	Target   string `json:"target"`
+	Priority   uint16 `json:"priority"`
+	Preference uint16 `json:"preference"` // Old format, for backwards compat
+	Target     string `json:"target"`
+	Exchange   string `json:"exchange"` // Old format, for backwards compat
+}
+
+// GetPriority returns priority, preferring the new field name
+func (m MXRecordData) GetPriority() uint16 {
+	if m.Priority != 0 {
+		return m.Priority
+	}
+	return m.Preference
+}
+
+// GetTarget returns target, preferring the new field name
+func (m MXRecordData) GetTarget() string {
+	if m.Target != "" {
+		return m.Target
+	}
+	return m.Exchange
 }
 
 // TXTRecordData holds TXT record data.

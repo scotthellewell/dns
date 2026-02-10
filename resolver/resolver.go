@@ -387,17 +387,69 @@ func (r *Resolver) LookupTXT(hostname string) []config.ParsedTXTRecord {
 	return nil
 }
 
-// LookupNS resolves NS records for a zone
+// LookupNS resolves NS records for a zone.
+// Priority: 1) Explicit NS records for the zone, 2) Tenant default nameservers,
+// 3) Main tenant default nameservers.
 func (r *Resolver) LookupNS(hostname string) []config.ParsedNSRecord {
 	hostname = strings.ToLower(hostname)
 	if !strings.HasSuffix(hostname, ".") {
 		hostname += "."
 	}
 
+	// First check for explicit NS records
 	if records, ok := r.config.NSRecords[hostname]; ok {
 		return records
 	}
+
+	// If no explicit records, try tenant defaults
+	if r.config.ZoneTenants != nil {
+		tenantID := r.config.ZoneTenants[hostname]
+		if tenantID == "" {
+			tenantID = r.config.MainTenantID
+		}
+
+		// Check tenant defaults
+		if defaults, ok := r.config.TenantDefaults[tenantID]; ok && len(defaults.Nameservers) > 0 {
+			return r.makeNSRecords(hostname, defaults.Nameservers, defaults.TTL)
+		}
+
+		// Fall back to main tenant defaults (if not already the main tenant)
+		if tenantID != r.config.MainTenantID {
+			if defaults, ok := r.config.TenantDefaults[r.config.MainTenantID]; ok && len(defaults.Nameservers) > 0 {
+				return r.makeNSRecords(hostname, defaults.Nameservers, defaults.TTL)
+			}
+		}
+	}
+
 	return nil
+}
+
+// makeNSRecords converts nameserver strings to ParsedNSRecord slice
+func (r *Resolver) makeNSRecords(hostname string, nameservers []string, ttl uint32) []config.ParsedNSRecord {
+	records := make([]config.ParsedNSRecord, 0, len(nameservers))
+	
+	// Use zone TTL if tenant TTL not specified
+	if ttl == 0 {
+		if soa, ok := r.config.SOARecords[hostname]; ok {
+			ttl = soa.TTL
+		}
+		if ttl == 0 {
+			ttl = 3600 // Default to 1 hour
+		}
+	}
+
+	for _, ns := range nameservers {
+		target := strings.ToLower(ns)
+		if !strings.HasSuffix(target, ".") {
+			target += "."
+		}
+		records = append(records, config.ParsedNSRecord{
+			Name:   hostname,
+			Target: target,
+			TTL:    ttl,
+		})
+	}
+	return records
 }
 
 // LookupSRV resolves SRV records for a service
