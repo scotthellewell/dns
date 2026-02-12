@@ -29,6 +29,7 @@ var (
 	BucketBlocklistDomains  = []byte("blocklist_domains")
 	BucketBlocklistConfig   = []byte("blocklist_config")
 	BucketBlocklistWhitelist = []byte("blocklist_whitelist")
+	BucketRedirects         = []byte("redirects")        // DNS redirect rules
 	BucketConfig            = []byte("config")
 	BucketSettings          = []byte("settings")
 	BucketCertificates      = []byte("certificates")
@@ -58,6 +59,7 @@ var allBuckets = [][]byte{
 	BucketBlocklistDomains,
 	BucketBlocklistConfig,
 	BucketBlocklistWhitelist,
+	BucketRedirects,
 	BucketConfig,
 	BucketSettings,
 	BucketCertificates,
@@ -351,4 +353,97 @@ func randomString(n int) string {
 		time.Sleep(time.Nanosecond) // Ensure different values
 	}
 	return string(b)
+}
+
+// Compact compacts the database to reclaim unused space.
+// This creates a new database file and copies all data to it.
+// The Store must be the only open handle to the database.
+func (s *Store) Compact() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	dbPath := filepath.Join(s.dataDir, "data.db")
+	tmpPath := filepath.Join(s.dataDir, "data.db.compact")
+
+	// Create new compacted database
+	dst, err := bolt.Open(tmpPath, 0600, nil)
+	if err != nil {
+		return fmt.Errorf("create compact db: %w", err)
+	}
+
+	// Compact
+	if err := bolt.Compact(dst, s.db, 0); err != nil {
+		dst.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("compact: %w", err)
+	}
+
+	dst.Close()
+
+	// Close current database
+	if err := s.db.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close original: %w", err)
+	}
+
+	// Rename files
+	backupPath := dbPath + ".backup"
+	os.Remove(backupPath) // Remove any existing backup
+	if err := os.Rename(dbPath, backupPath); err != nil {
+		// Try to reopen original
+		s.db, _ = bolt.Open(dbPath, 0600, nil)
+		os.Remove(tmpPath)
+		return fmt.Errorf("backup original: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, dbPath); err != nil {
+		// Restore from backup
+		os.Rename(backupPath, dbPath)
+		s.db, _ = bolt.Open(dbPath, 0600, nil)
+		return fmt.Errorf("rename compact: %w", err)
+	}
+
+	// Reopen compacted database
+	s.db, err = bolt.Open(dbPath, 0600, &bolt.Options{
+		Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		// Restore from backup
+		os.Remove(dbPath)
+		os.Rename(backupPath, dbPath)
+		s.db, _ = bolt.Open(dbPath, 0600, nil)
+		return fmt.Errorf("reopen compact: %w", err)
+	}
+
+	// Success - remove backup
+	os.Remove(backupPath)
+
+	// Refresh zone cache
+	s.refreshZoneCache()
+
+	return nil
+}
+
+// DatabaseSize returns the current database file size in bytes.
+func (s *Store) DatabaseSize() (int64, error) {
+	dbPath := filepath.Join(s.dataDir, "data.db")
+	fi, err := os.Stat(dbPath)
+	if err != nil {
+		return 0, err
+	}
+	return fi.Size(), nil
+}
+
+// DataSize returns the approximate size of actual data in the database.
+func (s *Store) DataSize() (int64, error) {
+	var total int64
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.ForEach(func(name []byte, b *bolt.Bucket) error {
+			return b.ForEach(func(k, v []byte) error {
+				total += int64(len(k) + len(v))
+				return nil
+			})
+		})
+	})
+	return total, err
 }

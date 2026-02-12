@@ -52,9 +52,18 @@ type Server struct {
 	// DNSSEC key store for loading keys from database
 	dnssecKeyStore DNSSECKeyStore
 
+	// Redirect checker for safe search enforcement
+	redirectChecker RedirectChecker
+
 	// ACME challenge records (temporary TXT records for DNS-01 validation)
 	acmeRecords   map[string]string
 	acmeRecordsMu sync.RWMutex
+}
+
+// RedirectChecker interface for DNS redirect functionality
+type RedirectChecker interface {
+	// Match checks if a domain should be redirected and returns the target host
+	Match(domain string) (targetHost string, found bool)
 }
 
 // New creates a new DNS server
@@ -315,6 +324,20 @@ func (s *Server) getBlocklist() BlocklistChecker {
 	return s.blocklist
 }
 
+// SetRedirectChecker sets the redirect checker for safe search enforcement.
+func (s *Server) SetRedirectChecker(rc RedirectChecker) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.redirectChecker = rc
+}
+
+// getRedirectChecker returns the current redirect checker with read lock.
+func (s *Server) getRedirectChecker() RedirectChecker {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.redirectChecker
+}
+
 // lookupSecondaryRecords looks up records from secondary zones
 func (s *Server) lookupSecondaryRecords(name string, qtype uint16) []dns.RR {
 	sec := s.getSecondary()
@@ -362,6 +385,99 @@ func (s *Server) isAuthoritative(name string, cfg *config.ParsedConfig) bool {
 	}
 	
 	return false
+}
+
+// handleRedirect handles DNS redirects by looking up the target host and returning its IPs
+// This is used for safe search enforcement (e.g., google.com -> forcesafesearch.google.com)
+func (s *Server) handleRedirect(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg, originalDomain string, targetHost string, startTime time.Time, clientIP string) bool {
+	if len(r.Question) == 0 {
+		return false
+	}
+
+	q := r.Question[0]
+
+	// Only handle A and AAAA queries
+	if q.Qtype != dns.TypeA && q.Qtype != dns.TypeAAAA {
+		return false
+	}
+
+	// Resolve the target host to get its IPs
+	var ips []net.IP
+	var err error
+
+	switch q.Qtype {
+	case dns.TypeA:
+		ips, err = net.LookupIP(targetHost)
+		if err != nil {
+			log.Printf("[redirect] Failed to resolve %s: %v", targetHost, err)
+			return false
+		}
+		// Filter to IPv4 only
+		var ipv4s []net.IP
+		for _, ip := range ips {
+			if ip.To4() != nil {
+				ipv4s = append(ipv4s, ip.To4())
+			}
+		}
+		ips = ipv4s
+	case dns.TypeAAAA:
+		ips, err = net.LookupIP(targetHost)
+		if err != nil {
+			log.Printf("[redirect] Failed to resolve %s: %v", targetHost, err)
+			return false
+		}
+		// Filter to IPv6 only
+		var ipv6s []net.IP
+		for _, ip := range ips {
+			if ip.To4() == nil && ip.To16() != nil {
+				ipv6s = append(ipv6s, ip)
+			}
+		}
+		ips = ipv6s
+	}
+
+	if len(ips) == 0 {
+		log.Printf("[redirect] No IPs found for %s (qtype=%s)", targetHost, dns.TypeToString[q.Qtype])
+		return false
+	}
+
+	// Build response with redirected IPs
+	log.Printf("[redirect] %s -> %s (resolved to %d IPs)", originalDomain, targetHost, len(ips))
+
+	for _, ip := range ips {
+		if q.Qtype == dns.TypeA {
+			m.Answer = append(m.Answer, &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   q.Name,
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET,
+					Ttl:    300,
+				},
+				A: ip.To4(),
+			})
+		} else {
+			m.Answer = append(m.Answer, &dns.AAAA{
+				Hdr: dns.RR_Header{
+					Name:   q.Name,
+					Rrtype: dns.TypeAAAA,
+					Class:  dns.ClassINET,
+					Ttl:    300,
+				},
+				AAAA: ip,
+			})
+		}
+	}
+
+	if err := w.WriteMsg(m); err != nil {
+		log.Printf("WriteMsg error (redirect): %v", err)
+	}
+
+	// Log the redirect
+	if s.querylog != nil {
+		s.querylog.Log(clientIP, r, m, time.Since(startTime))
+	}
+
+	return true
 }
 
 // sendBlockedResponse sends a blocked response based on blocklist configuration.
@@ -525,6 +641,12 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
+	
+	// Set RecursionAvailable flag based on recursion config
+	cfg := s.getConfig()
+	if cfg.Recursion.Enabled {
+		m.RecursionAvailable = true
+	}
 
 	// Check for DNSSEC OK (DO) bit in EDNS
 	wantDNSSEC := false
@@ -538,8 +660,6 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		edns.SetDo(opt.Do())
 		m.Extra = append(m.Extra, edns)
 	}
-
-	cfg := s.getConfig()
 
 	// Blocklist check - only for recursive queries (non-authoritative domains)
 	// and only if recursion is enabled
@@ -556,6 +676,16 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					s.querylog.Log(clientIPStr, r, m, time.Since(startTime))
 				}
 				return
+			}
+
+			// Check for redirect rules (e.g., safe search enforcement)
+			rc := s.getRedirectChecker()
+			if rc != nil {
+				if targetHost, found := rc.Match(qname); found {
+					if s.handleRedirect(w, r, m, qname, targetHost, startTime, clientIPStr) {
+						return
+					}
+				}
 			}
 		}
 	}

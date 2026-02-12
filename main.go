@@ -375,6 +375,9 @@ func main() {
 		apiHandler.SetBlocklistManager(blocklistMgr)
 	}
 
+	// Wire up redirect checker to DNS server
+	srv.SetRedirectChecker(server.NewStorageRedirectChecker(store))
+
 	// Set up sync manager config refresh callback now that we have the API handler
 	if syncMgr != nil {
 		syncMgr.SetConfigRefreshCallback(func() {

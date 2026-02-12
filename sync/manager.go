@@ -377,8 +377,23 @@ func (m *Manager) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 func (m *Manager) Status() *ClusterStatus {
 	// Get oplog info first, outside the peersMu lock to avoid potential deadlocks
 	currentHLC := m.oplog.CurrentHLC()
-	// Skip Count() as it can be slow with large oplogs - it's not critical info
-	// count, _ := m.oplog.Count()
+	// Note: Count() can block if a write transaction is in progress
+	// Using a goroutine with timeout to prevent API hangs
+	var count int64 = -1
+	done := make(chan struct{})
+	go func() {
+		c, err := m.oplog.Count()
+		if err == nil {
+			count = c
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+		// Got count
+	case <-time.After(100 * time.Millisecond):
+		// Timeout - leave count as -1
+	}
 
 	m.peersMu.RLock()
 	defer m.peersMu.RUnlock()
@@ -388,7 +403,7 @@ func (m *Manager) Status() *ClusterStatus {
 		ServerName:   m.serverName,
 		Enabled:      m.config.Enabled,
 		CurrentHLC:   currentHLC,
-		OpLogEntries: -1, // Indicate we're not counting
+		OpLogEntries: count,
 		Peers:        make([]PeerState, 0, len(m.peers)),
 	}
 
@@ -719,7 +734,19 @@ func (m *Manager) performHandshake(peer *peerConn, isInitiator bool) error {
 		log.Printf("[sync] Accepted peer %s (%s)", peer.serverName, peer.serverID)
 	}
 
-	// Save peer state
+	// Load existing peer state to preserve LastHLC across restarts
+	existingState, err := m.oplog.GetPeerState(peer.serverID)
+	if err != nil {
+		log.Printf("[sync] Error loading existing state for peer %s: %v", peer.serverID, err)
+	}
+	if existingState != nil && !existingState.LastHLC.IsZero() {
+		// Preserve the LastHLC from previous connection
+		peer.state.LastHLC = existingState.LastHLC
+		log.Printf("[sync] Restored LastHLC for peer %s: Physical=%d Logical=%d",
+			peer.serverID, existingState.LastHLC.Physical, existingState.LastHLC.Logical)
+	}
+
+	// Save peer state (now with merged LastHLC if it existed)
 	m.oplog.SavePeerState(peer.state)
 
 	return nil
@@ -730,9 +757,16 @@ func (m *Manager) performSync(peer *peerConn) {
 	lastKnown := make(map[string]HybridLogicalClock)
 
 	// Get saved state for this peer
-	savedState, _ := m.oplog.GetPeerState(peer.serverID)
-	if savedState != nil {
+	savedState, err := m.oplog.GetPeerState(peer.serverID)
+	if err != nil {
+		log.Printf("[sync] Error loading saved state for peer %s: %v", peer.serverID, err)
+	}
+	if savedState != nil && !savedState.LastHLC.IsZero() {
 		lastKnown[peer.serverID] = savedState.LastHLC
+		log.Printf("[sync] Loaded saved state for peer %s: LastHLC=%s (Physical=%d, Logical=%d)",
+			peer.serverID, savedState.LastHLC.ServerID, savedState.LastHLC.Physical, savedState.LastHLC.Logical)
+	} else {
+		log.Printf("[sync] No saved state for peer %s, will request full sync", peer.serverID)
 	}
 
 	// Request changes
@@ -809,6 +843,9 @@ func (m *Manager) savePeerStates() {
 
 	for _, peer := range m.peers {
 		if peer.state != nil && peer.state.Connected {
+			// Log the state being saved for debugging
+			log.Printf("[sync] Saving peer state for %s: LastHLC Physical=%d Logical=%d ServerID=%s",
+				peer.serverID, peer.state.LastHLC.Physical, peer.state.LastHLC.Logical, peer.state.LastHLC.ServerID)
 			if err := m.oplog.SavePeerState(peer.state); err != nil {
 				log.Printf("[sync] Failed to save peer state for %s: %v", peer.serverID, err)
 			}
@@ -994,12 +1031,19 @@ func (p *peerConn) handleChange(payload *ChangePayload) {
 		}
 	}
 
-	// Update peer state (in memory only - save periodically, not on every change)
+	// Update peer state
 	// Track the highest HLC we've seen, even for duplicates, to avoid re-syncing
 	if entry.HLC.Compare(p.state.LastHLC) > 0 {
 		p.state.LastHLC = entry.HLC
 	}
 	p.state.LastSyncTime = time.Now()
+	
+	// Save state after every change to ensure we don't re-sync on restart
+	log.Printf("[sync] Saving peer state for %s after change: LastHLC Physical=%d Logical=%d ServerID=%s",
+		p.serverID, p.state.LastHLC.Physical, p.state.LastHLC.Logical, p.state.LastHLC.ServerID)
+	if err := p.manager.oplog.SavePeerState(p.state); err != nil {
+		log.Printf("[sync] Failed to save peer state for %s: %v", p.serverID, err)
+	}
 
 	// Send ack
 	ack, _ := NewMessage(MsgChangeAck, &ChangeAckPayload{
@@ -1134,7 +1178,16 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 	}
 
 	p.state.LastSyncTime = time.Now()
-	// Don't save peer state here - let the periodic saver handle it
+	
+	// Save peer state immediately after processing sync response
+	// This ensures we don't re-sync the same data if the server restarts
+	if highestHLC.Compare(HybridLogicalClock{}) > 0 { // Only save if we actually received entries
+		log.Printf("[sync] Saving peer state for %s after sync: LastHLC Physical=%d Logical=%d",
+			p.serverID, p.state.LastHLC.Physical, p.state.LastHLC.Logical)
+		if err := p.manager.oplog.SavePeerState(p.state); err != nil {
+			log.Printf("[sync] Failed to save peer state for %s: %v", p.serverID, err)
+		}
+	}
 
 	// Request more if available
 	if payload.HasMore {

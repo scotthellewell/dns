@@ -186,9 +186,10 @@ func (p *Parser) parseRecord(line, prevName string) (*storage.Record, string, er
 
 func (p *Parser) buildRecord(name string, ttl uint32, rtype string, data []string) (*storage.Record, error) {
 	record := &storage.Record{
-		Name: name,
-		Type: rtype,
-		TTL:  ttl,
+		Name:    name,
+		Type:    rtype,
+		TTL:     ttl,
+		Enabled: true,
 	}
 
 	switch rtype {

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -204,6 +205,13 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Audit logs
 	mux.HandleFunc("/api/audit", h.corsMiddleware(h.handleAudit))
 
+	// Database maintenance
+	mux.HandleFunc("/api/maintenance", h.corsMiddleware(h.handleMaintenance))
+
+	// DNS redirects (safe search, etc.)
+	mux.HandleFunc("/api/redirects", h.corsMiddleware(h.handleRedirects))
+	mux.HandleFunc("/api/redirects/", h.corsMiddleware(h.handleRedirect))
+
 	// Blocklist management
 	mux.HandleFunc("/api/blocklist", h.corsMiddleware(h.handleBlocklist))
 	mux.HandleFunc("/api/blocklist/sources", h.corsMiddleware(h.handleBlocklistSources))
@@ -247,6 +255,13 @@ func (h *Handler) RegisterRoutesWithAuth(mux *http.ServeMux, authMgr AuthMiddlew
 	mux.HandleFunc("/api/dnssec", wrap(h.handleDNSSEC))
 	mux.HandleFunc("/api/settings", wrap(h.handleSettings))
 	mux.HandleFunc("/api/audit", wrap(h.handleAudit))
+
+	// Database maintenance
+	mux.HandleFunc("/api/maintenance", wrap(h.handleMaintenance))
+
+	// DNS redirects (safe search, etc.)
+	mux.HandleFunc("/api/redirects", wrap(h.handleRedirects))
+	mux.HandleFunc("/api/redirects/", wrap(h.handleRedirect))
 
 	// Blocklist management
 	mux.HandleFunc("/api/blocklist", wrap(h.handleBlocklist))
@@ -1790,6 +1805,105 @@ func (h *Handler) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.jsonResponse(w, entries)
+}
+
+// handleMaintenance handles database maintenance operations
+func (h *Handler) handleMaintenance(w http.ResponseWriter, r *http.Request) {
+	store, ok := h.store.(*storage.Store)
+	if !ok || store == nil {
+		http.Error(w, "Maintenance requires storage backend", http.StatusNotImplemented)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		// Return database statistics
+		dbSize, err := store.DatabaseSize()
+		if err != nil {
+			h.errorResponse(w, fmt.Sprintf("Failed to get database size: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		dataSize, err := store.DataSize()
+		if err != nil {
+			h.errorResponse(w, fmt.Sprintf("Failed to get data size: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		utilization := float64(0)
+		if dbSize > 0 {
+			utilization = float64(dataSize) / float64(dbSize) * 100
+		}
+
+		h.jsonResponse(w, map[string]interface{}{
+			"database_size":       dbSize,
+			"database_size_human": formatBytes(dbSize),
+			"data_size":           dataSize,
+			"data_size_human":     formatBytes(dataSize),
+			"utilization_percent": utilization,
+			"fragmented":          utilization < 50, // Consider fragmented if <50% utilized
+		})
+
+	case "POST":
+		// Trigger compaction
+		action := r.URL.Query().Get("action")
+		if action != "compact" {
+			h.errorResponse(w, "Invalid action. Use ?action=compact", http.StatusBadRequest)
+			return
+		}
+
+		log.Printf("[maintenance] Starting database compaction...")
+
+		// Get sizes before compaction
+		sizeBefore, _ := store.DatabaseSize()
+
+		if err := store.Compact(); err != nil {
+			log.Printf("[maintenance] Compaction failed: %v", err)
+			h.errorResponse(w, fmt.Sprintf("Compaction failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Get sizes after compaction
+		sizeAfter, _ := store.DatabaseSize()
+		dataSize, _ := store.DataSize()
+
+		reduction := int64(0)
+		if sizeBefore > sizeAfter {
+			reduction = sizeBefore - sizeAfter
+		}
+
+		log.Printf("[maintenance] Compaction complete: %s -> %s (saved %s)",
+			formatBytes(sizeBefore), formatBytes(sizeAfter), formatBytes(reduction))
+
+		h.jsonResponse(w, map[string]interface{}{
+			"success":             true,
+			"size_before":         sizeBefore,
+			"size_before_human":   formatBytes(sizeBefore),
+			"size_after":          sizeAfter,
+			"size_after_human":    formatBytes(sizeAfter),
+			"reduction":           reduction,
+			"reduction_human":     formatBytes(reduction),
+			"data_size":           dataSize,
+			"data_size_human":     formatBytes(dataSize),
+		})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// formatBytes formats bytes into human-readable string
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
 func (h *Handler) jsonResponse(w http.ResponseWriter, data interface{}) {

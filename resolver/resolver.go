@@ -390,6 +390,7 @@ func (r *Resolver) LookupTXT(hostname string) []config.ParsedTXTRecord {
 // LookupNS resolves NS records for a zone.
 // Priority: 1) Explicit NS records for the zone, 2) Tenant default nameservers,
 // 3) Main tenant default nameservers.
+// NOTE: Only returns records for zones we're authoritative for (in ZoneTenants)
 func (r *Resolver) LookupNS(hostname string) []config.ParsedNSRecord {
 	hostname = strings.ToLower(hostname)
 	if !strings.HasSuffix(hostname, ".") {
@@ -401,9 +402,14 @@ func (r *Resolver) LookupNS(hostname string) []config.ParsedNSRecord {
 		return records
 	}
 
-	// If no explicit records, try tenant defaults
+	// If no explicit records, try tenant defaults - but ONLY for zones we own
 	if r.config.ZoneTenants != nil {
-		tenantID := r.config.ZoneTenants[hostname]
+		tenantID, isOurZone := r.config.ZoneTenants[hostname]
+		if !isOurZone {
+			// This is not a zone we're authoritative for - don't return our nameservers
+			return nil
+		}
+		
 		if tenantID == "" {
 			tenantID = r.config.MainTenantID
 		}

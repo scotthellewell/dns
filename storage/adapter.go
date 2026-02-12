@@ -134,10 +134,6 @@ func (s *Store) BuildParsedConfig() (*config.ParsedConfig, error) {
 		}
 
 		for _, rec := range records {
-			if !rec.Enabled {
-				continue
-			}
-
 			// Build FQDN with trailing dot
 			var fqdn string
 			if rec.Name == "@" {
