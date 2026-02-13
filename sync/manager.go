@@ -228,6 +228,9 @@ func (m *Manager) Start() error {
 
 	log.Printf("[sync] Starting sync manager (server_id=%s, name=%s)", m.serverID, m.serverName)
 
+	// Log initial oplog state
+	m.logOplogSummary("startup")
+
 	// Start the change broadcaster
 	m.wg.Add(1)
 	go m.runBroadcaster()
@@ -245,6 +248,10 @@ func (m *Manager) Start() error {
 	// Start periodic peer state saver (every 30 seconds)
 	m.wg.Add(1)
 	go m.runPeerStateSaver()
+
+	// Start periodic oplog diagnostics (every 5 minutes)
+	m.wg.Add(1)
+	go m.runOplogDiagnostics()
 
 	return nil
 }
@@ -339,10 +346,15 @@ func (m *Manager) RecordChange(entityType, entityID, tenantID, operation string,
 		return nil
 	}
 
+	log.Printf("[sync-record] Recording change: type=%s id=%s tenant=%s op=%s", entityType, entityID, tenantID, operation)
+
 	entry, err := m.oplog.Append(entityType, entityID, tenantID, operation, data)
 	if err != nil {
+		log.Printf("[sync-record] Failed to append: %v", err)
 		return err
 	}
+
+	log.Printf("[sync-record] Appended entry %s, broadcasting to peers", entry.ID)
 
 	// Broadcast to connected peers
 	select {
@@ -817,6 +829,59 @@ func (m *Manager) runPruner() {
 	}
 }
 
+// runOplogDiagnostics periodically logs oplog summary for debugging
+func (m *Manager) runOplogDiagnostics() {
+	defer m.wg.Done()
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			m.logOplogSummary("periodic")
+		}
+	}
+}
+
+// logOplogSummary logs a summary of the oplog contents
+func (m *Manager) logOplogSummary(trigger string) {
+	count, err := m.oplog.Count()
+	if err != nil {
+		log.Printf("[sync-diag] [%s] Failed to count oplog entries: %v", trigger, err)
+		return
+	}
+
+	// Get summary by type
+	summary, err := m.oplog.GetSummaryByType()
+	if err != nil {
+		log.Printf("[sync-diag] [%s] Oplog has %d entries (failed to get summary: %v)", trigger, count, err)
+		return
+	}
+
+	// Get summary by server
+	serverSummary, _ := m.oplog.GetSummaryByServerAndType()
+
+	log.Printf("[sync-diag] [%s] Oplog summary: %d total entries", trigger, count)
+	for entityType, cnt := range summary {
+		log.Printf("[sync-diag] [%s]   - %s: %d entries", trigger, entityType, cnt)
+	}
+
+	// Log by server
+	for serverID, types := range serverSummary {
+		total := int64(0)
+		for _, cnt := range types {
+			total += cnt
+		}
+		log.Printf("[sync-diag] [%s]   Server %s: %d entries", trigger, serverID, total)
+		for entityType, cnt := range types {
+			log.Printf("[sync-diag] [%s]     - %s: %d", trigger, entityType, cnt)
+		}
+	}
+}
+
 // runPeerStateSaver periodically saves peer state to reduce write frequency
 func (m *Manager) runPeerStateSaver() {
 	defer m.wg.Done()
@@ -1037,7 +1102,7 @@ func (p *peerConn) handleChange(payload *ChangePayload) {
 		p.state.LastHLC = entry.HLC
 	}
 	p.state.LastSyncTime = time.Now()
-	
+
 	// Save state after every change to ensure we don't re-sync on restart
 	log.Printf("[sync] Saving peer state for %s after change: LastHLC Physical=%d Logical=%d ServerID=%s",
 		p.serverID, p.state.LastHLC.Physical, p.state.LastHLC.Logical, p.state.LastHLC.ServerID)
@@ -1089,21 +1154,21 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 	appliedCount := 0
 	var highestHLC HybridLogicalClock
 	startTime := time.Now()
-	
+
 	// Track which entity types were modified for reload callbacks
 	modifiedBlocklistConfig := false
 	modifiedBlocklistSources := false
 	modifiedBlocklistWhitelist := false
 	modifiedOther := false
-	
+
 	for i, entry := range payload.Entries {
 		entryCopy := entry // avoid loop variable capture
-		
+
 		// Track the highest HLC we've seen from this peer, regardless of whether we apply it
 		if entryCopy.HLC.Compare(highestHLC) > 0 {
 			highestHLC = entryCopy.HLC
 		}
-		
+
 		applied, err := p.manager.oplog.ApplyRemote(&entryCopy)
 		if err != nil {
 			log.Printf("[sync] Failed to apply synced entry %s: %v", entry.ID, err)
@@ -1130,23 +1195,23 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 				}
 			}
 		}
-		
+
 		// Log progress every 100 entries
-		if (i+1) % 100 == 0 {
+		if (i+1)%100 == 0 {
 			log.Printf("[sync] Processed %d/%d entries from %s...", i+1, len(payload.Entries), p.serverID)
 		}
-		
+
 		// Yield periodically to allow other goroutines to run
 		// This prevents the sync from monopolizing the database lock
-		if (i+1) % 50 == 0 {
+		if (i+1)%50 == 0 {
 			time.Sleep(time.Millisecond)
 		}
 	}
-	
+
 	elapsed := time.Since(startTime)
-	log.Printf("[sync] Finished processing %d entries from %s in %v (applied: %d)", 
+	log.Printf("[sync] Finished processing %d entries from %s in %v (applied: %d)",
 		len(payload.Entries), p.serverID, elapsed, appliedCount)
-	
+
 	// Update last HLC to the highest we've seen, even if entries were duplicates
 	// This prevents re-requesting the same entries on every sync
 	if highestHLC.Compare(p.state.LastHLC) > 0 {
@@ -1155,7 +1220,7 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 
 	if appliedCount > 0 {
 		log.Printf("[sync] Applied %d new entries from %s", appliedCount, p.serverID)
-		
+
 		// Trigger appropriate reload callbacks based on what was modified
 		if modifiedBlocklistConfig && p.manager.blocklistConfigReloadCallback != nil {
 			if err := p.manager.blocklistConfigReloadCallback(); err != nil {
@@ -1178,7 +1243,7 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 	}
 
 	p.state.LastSyncTime = time.Now()
-	
+
 	// Save peer state immediately after processing sync response
 	// This ensures we don't re-sync the same data if the server restarts
 	if highestHLC.Compare(HybridLogicalClock{}) > 0 { // Only save if we actually received entries

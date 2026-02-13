@@ -36,8 +36,8 @@ type Resolver struct {
 	config    config.ParsedRecursion
 	client    *dns.Client
 	servers   []string
-	iterative bool               // true if doing iterative resolution from root
-	cache     *cache.Cache       // TTL-based response cache
+	iterative bool                 // true if doing iterative resolution from root
+	cache     *cache.Cache         // TTL-based response cache
 	validator *dnssecval.Validator // DNSSEC validator
 }
 
@@ -64,8 +64,8 @@ func New(cfg config.ParsedRecursion) *Resolver {
 		client:    &dns.Client{Timeout: time.Duration(cfg.Timeout) * time.Second},
 		servers:   servers,
 		iterative: iterative,
-		cache:     cache.New(10000),    // 10k entry cache
-		validator: dnssecval.New(),     // DNSSEC validator
+		cache:     cache.New(10000), // 10k entry cache
+		validator: dnssecval.New(),  // DNSSEC validator
 	}
 
 	// Set the query function for DNSSEC validation
@@ -202,15 +202,15 @@ func (r *Resolver) extractDelegationAddrs(resp *dns.Msg) []string {
 
 // Result holds the result of a recursive query
 type Result struct {
-	IPs          []net.IP // Resolved IP addresses
-	CNAMEs       []string // CNAME chain followed
-	TTL          uint32   // Minimum TTL from the chain
-	Found        bool     // Whether resolution succeeded
-	FromLocal    bool     // Whether result came from local resolution
-	Secure       bool     // DNSSEC validated
-	Insecure     bool     // Zone not signed
-	Bogus        bool     // DNSSEC validation failed
-	WhyBogus     string   // Reason for bogus result
+	IPs       []net.IP // Resolved IP addresses
+	CNAMEs    []string // CNAME chain followed
+	TTL       uint32   // Minimum TTL from the chain
+	Found     bool     // Whether resolution succeeded
+	FromLocal bool     // Whether result came from local resolution
+	Secure    bool     // DNSSEC validated
+	Insecure  bool     // Zone not signed
+	Bogus     bool     // DNSSEC validation failed
+	WhyBogus  string   // Reason for bogus result
 }
 
 // ResolveA resolves A records, following CNAMEs if necessary
@@ -281,7 +281,7 @@ func (r *Resolver) resolve(name string, qtype uint16, depth int, forceExternal b
 	if !r.config.Enabled {
 		return result
 	}
-	
+
 	// In partial mode, only recurse if:
 	// - We're following a CNAME chain (depth > 0), or
 	// - External resolution was explicitly requested (forceExternal, e.g., for ALIAS)
@@ -742,4 +742,19 @@ func (r *Resolver) queryAnyIterative(name string, qtype uint16, nameservers []st
 	}
 
 	return nil, errors.New("query failed: no successful response")
+}
+
+// ClearDNSSECCache clears the DNSSEC validation cache for a specific zone
+// Call this when zone records are added/changed/deleted
+func (r *Resolver) ClearDNSSECCache(zone string) {
+	if r.validator != nil {
+		r.validator.ClearCache(zone)
+	}
+}
+
+// ClearAllDNSSECCaches clears all DNSSEC validation caches
+func (r *Resolver) ClearAllDNSSECCaches() {
+	if r.validator != nil {
+		r.validator.ClearAllCaches()
+	}
 }

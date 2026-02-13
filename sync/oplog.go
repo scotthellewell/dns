@@ -460,6 +460,96 @@ func (o *OpLog) ReplayAllEntries(callback func(entry *OpLogEntry) error) error {
 	return err
 }
 
+// ListEntries returns a paginated list of oplog entries with optional filtering
+func (o *OpLog) ListEntries(limit, offset int, entityType string) ([]OpLogEntry, int64, error) {
+	var entries []OpLogEntry
+	var total int64
+
+	err := o.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(oplogBucket)
+		if b == nil {
+			return nil
+		}
+
+		// Count total and collect filtered entries
+		c := b.Cursor()
+		idx := 0
+
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var entry OpLogEntry
+			if err := json.Unmarshal(v, &entry); err != nil {
+				continue // Skip malformed entries
+			}
+
+			// Filter by entity type if specified
+			if entityType != "" && entry.EntityType != entityType {
+				continue
+			}
+
+			total++
+
+			// Apply pagination
+			if idx >= offset && (limit <= 0 || len(entries) < limit) {
+				entries = append(entries, entry)
+			}
+			idx++
+		}
+
+		return nil
+	})
+
+	return entries, total, err
+}
+
+// GetSummaryByType returns a count of oplog entries grouped by entity type
+func (o *OpLog) GetSummaryByType() (map[string]int64, error) {
+	summary := make(map[string]int64)
+
+	err := o.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(oplogBucket)
+		if b == nil {
+			return nil
+		}
+
+		return b.ForEach(func(k, v []byte) error {
+			var entry OpLogEntry
+			if err := json.Unmarshal(v, &entry); err != nil {
+				return nil // Skip malformed entries
+			}
+			summary[entry.EntityType]++
+			return nil
+		})
+	})
+
+	return summary, err
+}
+
+// GetSummaryByServerAndType returns counts grouped by server ID and entity type
+func (o *OpLog) GetSummaryByServerAndType() (map[string]map[string]int64, error) {
+	summary := make(map[string]map[string]int64)
+
+	err := o.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(oplogBucket)
+		if b == nil {
+			return nil
+		}
+
+		return b.ForEach(func(k, v []byte) error {
+			var entry OpLogEntry
+			if err := json.Unmarshal(v, &entry); err != nil {
+				return nil // Skip malformed entries
+			}
+			if summary[entry.ServerID] == nil {
+				summary[entry.ServerID] = make(map[string]int64)
+			}
+			summary[entry.ServerID][entry.EntityType]++
+			return nil
+		})
+	})
+
+	return summary, err
+}
+
 // makeKey creates a sortable key from an HLC and operation ID
 func (o *OpLog) makeKey(hlc HybridLogicalClock, opID string) []byte {
 	// Format: physical (16 hex) + logical (8 hex) + serverID + opID

@@ -54,6 +54,12 @@ func (h *Handler) UpdateConfigFromStorage() error {
 		h.onConfigUpdate(parsed)
 	}
 
+	// Clear DNSSEC validation caches when config changes
+	// This ensures updated records are not affected by negative caching
+	if h.onClearDNSSECCache != nil {
+		h.onClearDNSSECCache()
+	}
+
 	return nil
 }
 
@@ -228,7 +234,7 @@ func (h *Handler) handleZonesStorage(w http.ResponseWriter, r *http.Request, ses
 // handleEnableZoneRecords enables all records in a zone
 func (h *Handler) handleEnableZoneRecords(w http.ResponseWriter, r *http.Request) {
 	session := auth.GetSession(r.Context())
-	
+
 	// Extract zone name from path: /api/zones/enable-records/{zone}
 	zoneName := strings.TrimPrefix(r.URL.Path, "/api/zones/enable-records/")
 	zoneName, _ = url.QueryUnescape(zoneName)
@@ -1863,12 +1869,12 @@ type ZoneImportRequest struct {
 
 // ZoneImportResult represents the result of a zone import
 type ZoneImportResult struct {
-	Zone         *storage.Zone   `json:"zone"`
-	Records      []*RecordResult `json:"records"`
-	RecordCount  int             `json:"record_count"`
-	Errors       []string        `json:"errors"`
-	Warnings     []string        `json:"warnings"`
-	Imported     bool            `json:"imported"`
+	Zone        *storage.Zone   `json:"zone"`
+	Records     []*RecordResult `json:"records"`
+	RecordCount int             `json:"record_count"`
+	Errors      []string        `json:"errors"`
+	Warnings    []string        `json:"warnings"`
+	Imported    bool            `json:"imported"`
 }
 
 // RecordResult represents a parsed record for import preview
@@ -1952,7 +1958,7 @@ func (h *Handler) handleZoneImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	
+
 	// Only POST for import
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -2006,7 +2012,7 @@ func (h *Handler) handleZoneImportStorage(w http.ResponseWriter, r *http.Request
 // importZoneFile parses and optionally imports a BIND zone file
 func (h *Handler) importZoneFile(store *storage.Store, session *auth.Session, req ZoneImportRequest) (*ZoneImportResult, error) {
 	parser := &zoneFileParser{defaultTTL: 3600}
-	
+
 	parsed, err := parser.parse(strings.NewReader(req.ZoneFile), req.ZoneName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse zone file: %w", err)
@@ -2075,7 +2081,7 @@ func (h *Handler) importZoneFile(store *storage.Store, session *auth.Session, re
 		if rec.Type == "SOA" {
 			continue // Skip SOA, already handled
 		}
-		
+
 		rec.Zone = parsed.zone.Name
 		if err := store.CreateRecord(rec); err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("Failed to import %s %s: %v", rec.Name, rec.Type, err))
@@ -2086,7 +2092,7 @@ func (h *Handler) importZoneFile(store *storage.Store, session *auth.Session, re
 
 	result.Imported = true
 	result.RecordCount = importedCount
-	
+
 	// Update config
 	h.UpdateConfigFromStorage()
 
@@ -2097,12 +2103,16 @@ func (h *Handler) importZoneFile(store *storage.Store, session *auth.Session, re
 func formatRecordData(rtype string, data json.RawMessage) string {
 	switch rtype {
 	case "A", "AAAA":
-		var d struct{ Address string `json:"address"` }
+		var d struct {
+			Address string `json:"address"`
+		}
 		if json.Unmarshal(data, &d) == nil {
 			return d.Address
 		}
 	case "CNAME", "NS", "PTR":
-		var d struct{ Target string `json:"target"` }
+		var d struct {
+			Target string `json:"target"`
+		}
 		if json.Unmarshal(data, &d) == nil {
 			return d.Target
 		}
@@ -2125,7 +2135,9 @@ func formatRecordData(rtype string, data json.RawMessage) string {
 			return fmt.Sprintf("%d %s", priority, target)
 		}
 	case "TXT":
-		var d struct{ Text string `json:"text"` }
+		var d struct {
+			Text string `json:"text"`
+		}
 		if json.Unmarshal(data, &d) == nil {
 			return fmt.Sprintf("\"%s\"", d.Text)
 		}
@@ -2205,7 +2217,7 @@ func (p *zoneFileParser) parse(r interface{ Read([]byte) (int, error) }, zoneNam
 	for lineNum < len(lines) {
 		line := lines[lineNum]
 		lineNum++
-		
+
 		// Remove comments
 		if idx := strings.Index(line, ";"); idx >= 0 {
 			line = line[:idx]
@@ -2352,7 +2364,7 @@ func (p *zoneFileParser) buildRecord(name string, ttl uint32, rtype string, data
 	// Normalize the name: strip trailing dot and zone suffix to get relative name
 	name = strings.TrimSuffix(name, ".")
 	zoneName := strings.TrimSuffix(p.origin, ".")
-	
+
 	// If name equals zone, use @ (apex)
 	if name == zoneName {
 		name = "@"
@@ -2360,7 +2372,7 @@ func (p *zoneFileParser) buildRecord(name string, ttl uint32, rtype string, data
 		// Strip zone suffix to get relative name
 		name = strings.TrimSuffix(name, "."+zoneName)
 	}
-	
+
 	record := &storage.Record{
 		Name:    name,
 		Type:    rtype,

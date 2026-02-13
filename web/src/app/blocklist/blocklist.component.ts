@@ -277,6 +277,11 @@ export class BlocklistComponent implements OnInit {
     return count.toString();
   }
 
+  getSourcesEnabled(): number {
+    if (!this.stats?.sources) return 0;
+    return this.stats.sources.filter(s => s.enabled).length;
+  }
+
   getSourceStatusIcon(source: BlocklistSource): string {
     if (source.last_error) return 'error';
     if (source.entry_count > 0) return 'check_circle';

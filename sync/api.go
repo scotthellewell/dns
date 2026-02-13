@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -303,6 +304,58 @@ func (h *APIHandler) HandlePurge(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleOplogEntries returns oplog entries for debugging
+func (h *APIHandler) HandleOplogEntries(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse query params
+	query := r.URL.Query()
+	entityType := query.Get("type")
+
+	limit := 100
+	if l := query.Get("limit"); l != "" {
+		if _, err := fmt.Sscanf(l, "%d", &limit); err != nil || limit <= 0 {
+			limit = 100
+		}
+	}
+	if limit > 1000 {
+		limit = 1000 // Cap at 1000
+	}
+
+	offset := 0
+	if o := query.Get("offset"); o != "" {
+		if _, err := fmt.Sscanf(o, "%d", &offset); err != nil || offset < 0 {
+			offset = 0
+		}
+	}
+
+	// Get entries
+	entries, total, err := h.manager.oplog.ListEntries(limit, offset, entityType)
+	if err != nil {
+		http.Error(w, "Failed to list entries: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Get summary by type
+	summary, _ := h.manager.oplog.GetSummaryByType()
+
+	// Get summary by server
+	serverSummary, _ := h.manager.oplog.GetSummaryByServerAndType()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"entries":           entries,
+		"total":             total,
+		"limit":             limit,
+		"offset":            offset,
+		"summary_by_type":   summary,
+		"summary_by_server": serverSummary,
+	})
+}
+
 // HandleJoinSecret returns the shared secret for cluster joining (super admin only)
 // If sync isn't configured yet, it will auto-initialize with a new secret
 func (h *APIHandler) HandleJoinSecret(w http.ResponseWriter, r *http.Request) {
@@ -320,12 +373,12 @@ func (h *APIHandler) HandleJoinSecret(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		newSecret := hex.EncodeToString(secretBytes)
-		
+
 		// Generate a server ID for this (primary) server
 		idBytes := make([]byte, 4)
 		rand.Read(idBytes)
 		serverID := hex.EncodeToString(idBytes)
-		
+
 		// Initialize sync config for the primary server
 		h.manager.config.Enabled = true
 		h.manager.config.ServerID = serverID
@@ -333,7 +386,7 @@ func (h *APIHandler) HandleJoinSecret(w http.ResponseWriter, r *http.Request) {
 			h.manager.config.ServerName = "primary"
 		}
 		h.manager.config.SharedSecret = newSecret
-		
+
 		// Save the config to storage
 		if h.db != nil {
 			configDTO := SyncConfigDTO{
@@ -371,6 +424,7 @@ func (h *APIHandler) RegisterRoutesWithAuth(mux *http.ServeMux, authMiddleware f
 	mux.HandleFunc("/api/sync/full-sync", authMiddleware(h.HandleFullSync))
 	mux.HandleFunc("/api/sync/purge", authMiddleware(h.HandlePurge))
 	mux.HandleFunc("/api/sync/join-secret", authMiddleware(h.HandleJoinSecret))
+	mux.HandleFunc("/api/sync/oplog", authMiddleware(h.HandleOplogEntries))
 
 	// WebSocket endpoint for peer sync (no auth middleware, uses shared secret)
 	mux.HandleFunc("/sync", h.manager.HandleWebSocket)
@@ -388,6 +442,7 @@ func RegisterRoutes(mux *http.ServeMux, mgr *Manager, corsMiddleware func(http.H
 	mux.HandleFunc("/api/sync/full-sync", corsMiddleware(handler.HandleFullSync))
 	mux.HandleFunc("/api/sync/purge", corsMiddleware(handler.HandlePurge))
 	mux.HandleFunc("/api/sync/join-secret", corsMiddleware(handler.HandleJoinSecret))
+	mux.HandleFunc("/api/sync/oplog", corsMiddleware(handler.HandleOplogEntries))
 	// WebSocket endpoint for peer sync
 	mux.HandleFunc("/sync", mgr.HandleWebSocket)
 }

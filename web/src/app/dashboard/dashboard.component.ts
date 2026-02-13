@@ -115,6 +115,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return count.toString();
   }
 
+  getEnabledSourcesCount(): number {
+    if (!this.blocklistStats?.sources) return 0;
+    return this.blocklistStats.sources.filter(s => s.enabled).length;
+  }
+
   getTotalPeers(): number {
     return this.clusterStatus?.peers?.length || 0;
   }

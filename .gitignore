@@ -3,6 +3,7 @@ dns
 dnsserver
 dns-server
 dns-server-*
+dns-linux*
 e2e.test
 __debug_bin*
 

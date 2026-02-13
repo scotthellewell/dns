@@ -93,7 +93,7 @@
       <div class="blocklist-stat-card highlight">
         <div class="blocklist-icon">🚫</div>
         <div class="blocklist-content">
-          <div class="blocklist-value">{{ formatBlockedDomains(blocklistStats?.total_entries || 0) }}</div>
+          <div class="blocklist-value">{{ formatBlockedDomains(blocklistStats?.total_domains || 0) }}</div>
           <div class="blocklist-label">Domains Blocked</div>
         </div>
       </div>
@@ -101,7 +101,7 @@
       <div class="blocklist-stat-card">
         <div class="blocklist-icon">📋</div>
         <div class="blocklist-content">
-          <div class="blocklist-value">{{ blocklistStats?.sources_enabled || 0 }}/{{ blocklistStats?.sources_count || 0 }}</div>
+          <div class="blocklist-value">{{ getEnabledSourcesCount() }}/{{ blocklistStats?.sources?.length || 0 }}</div>
           <div class="blocklist-label">Active Sources</div>
         </div>
       </div>
@@ -109,7 +109,7 @@
       <div class="blocklist-stat-card">
         <div class="blocklist-icon">🔒</div>
         <div class="blocklist-content">
-          <div class="blocklist-value">{{ blocklistStats?.blocked_queries_total || 0 | number }}</div>
+          <div class="blocklist-value">{{ blocklistStats?.total_blocked || 0 | number }}</div>
           <div class="blocklist-label">Queries Blocked</div>
         </div>
       </div>

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -21,14 +22,15 @@ var (
 // BlocklistStore is a dedicated storage for blocklist data using a separate bbolt database.
 // This prevents blocklist operations from blocking the main DNS server database.
 type BlocklistStore struct {
-	db     *bolt.DB
-	dbPath string
+	db          *bolt.DB
+	dbPath      string
+	domainCount atomic.Int64 // Cached domain count for fast stats lookup
 }
 
 // NewBlocklistStore creates a new blocklist store with its own database file.
 func NewBlocklistStore(dataDir string) (*BlocklistStore, error) {
 	dbPath := filepath.Join(dataDir, "blocklist.db")
-	
+
 	// Ensure directory exists
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
@@ -59,8 +61,21 @@ func NewBlocklistStore(dataDir string) (*BlocklistStore, error) {
 		return nil, err
 	}
 
-	log.Printf("[blocklist-store] Opened database: %s", dbPath)
-	return &BlocklistStore{db: db, dbPath: dbPath}, nil
+	store := &BlocklistStore{db: db, dbPath: dbPath}
+
+	// Initialize cached domain count
+	var count int
+	db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketDomains)
+		if bucket != nil {
+			count = bucket.Stats().KeyN
+		}
+		return nil
+	})
+	store.domainCount.Store(int64(count))
+
+	log.Printf("[blocklist-store] Opened database: %s (cached domain count: %d)", dbPath, count)
+	return store, nil
 }
 
 // Close closes the blocklist database.
@@ -252,12 +267,15 @@ func (s *BlocklistStore) AddBlockedDomains(sourceID string, domains []string) er
 			return err
 		}
 	}
+
+	// Update cached domain count
+	s.refreshDomainCount()
 	return nil
 }
 
 // RemoveBlockedDomainsForSource removes all domains associated with a source.
 func (s *BlocklistStore) RemoveBlockedDomainsForSource(sourceID string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(bucketDomains)
 		if bucket == nil {
 			return nil
@@ -316,6 +334,12 @@ func (s *BlocklistStore) RemoveBlockedDomainsForSource(sourceID string) error {
 
 		return nil
 	})
+
+	// Update cached domain count
+	if err == nil {
+		s.refreshDomainCount()
+	}
+	return err
 }
 
 // IsBlocked checks if a domain is in the blocklist.
@@ -349,16 +373,21 @@ func (s *BlocklistStore) GetAllBlockedDomains() ([]string, error) {
 	return domains, err
 }
 
-// GetBlockedDomainCount returns the number of blocked domains.
+// GetBlockedDomainCount returns the cached number of blocked domains.
+// This avoids the overhead of opening a database transaction for each stats call.
 func (s *BlocklistStore) GetBlockedDomainCount() (int, error) {
+	return int(s.domainCount.Load()), nil
+}
+
+// refreshDomainCount updates the cached domain count from the database.
+func (s *BlocklistStore) refreshDomainCount() {
 	var count int
-	err := s.db.View(func(tx *bolt.Tx) error {
+	s.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(bucketDomains)
-		if bucket == nil {
-			return nil
+		if bucket != nil {
+			count = bucket.Stats().KeyN
 		}
-		count = bucket.Stats().KeyN
 		return nil
 	})
-	return count, err
+	s.domainCount.Store(int64(count))
 }

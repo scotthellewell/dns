@@ -132,9 +132,9 @@ func fetchCertificateFromPeer(peerURL string, domain string) (*storage.TLSCertif
 		}
 	}
 	certURL := fmt.Sprintf("%s/api/certs/%s", baseURL, domain)
-	
+
 	log.Printf("[cluster-join] Fetching certificate from peer: %s", certURL)
-	
+
 	// Create HTTP client that accepts self-signed certs (for initial cluster join)
 	client := &http.Client{
 		Timeout: 10 * time.Second,
@@ -144,22 +144,22 @@ func fetchCertificateFromPeer(peerURL string, domain string) (*storage.TLSCertif
 			},
 		},
 	}
-	
+
 	resp, err := client.Get(certURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch cert from peer: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("certificate not found on peer")
 	}
-	
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("peer returned status %d: %s", resp.StatusCode, string(body))
 	}
-	
+
 	// Parse the certificate response
 	var certResp struct {
 		Domain      string    `json:"domain"`
@@ -169,16 +169,16 @@ func fetchCertificateFromPeer(peerURL string, domain string) (*storage.TLSCertif
 		NotAfter    time.Time `json:"not_after"`
 		Issuer      string    `json:"issuer"`
 	}
-	
+
 	if err := json.NewDecoder(resp.Body).Decode(&certResp); err != nil {
 		return nil, fmt.Errorf("failed to decode cert response: %w", err)
 	}
-	
+
 	// Check if we got the full certificate with private key
 	if certResp.PrivateKey == "" {
 		return nil, fmt.Errorf("peer did not return private key (may not support cert sync)")
 	}
-	
+
 	return &storage.TLSCertificate{
 		Domain:    certResp.Domain,
 		CertPEM:   certResp.Certificate,
@@ -324,6 +324,11 @@ func main() {
 		srv.UpdateConfig(newCfg)
 	})
 
+	// Set callback to clear DNSSEC validation caches when records change
+	apiHandler.SetClearDNSSECCacheCallback(func() {
+		srv.ClearAllDNSSECCaches()
+	})
+
 	// Initialize blocklist manager with composite storage:
 	// - Main database (store) for config, sources, whitelist (synced across cluster)
 	// - Blocklist database for domain entries only (local, not synced - too large)
@@ -331,7 +336,7 @@ func main() {
 	if err != nil {
 		log.Printf("Warning: Failed to open blocklist database: %v", err)
 	}
-	
+
 	var blocklistMgr *blocklist.Manager
 	if blocklistDomainStore != nil {
 		// Create adapter for main storage to implement blocklist.MainStorage interface
@@ -339,7 +344,7 @@ func main() {
 		// Create composite store: main db for config/sources/whitelist, blocklist.db for domains only
 		compositeStore := blocklist.NewCompositeStore(mainStorageAdapter, blocklistDomainStore)
 		blocklistMgr = blocklist.New(compositeStore)
-		
+
 		// Load config from main storage (synced), or use defaults
 		blocklistConfig, err := compositeStore.GetBlocklistConfig()
 		if err != nil || blocklistConfig == nil {
@@ -350,7 +355,7 @@ func main() {
 				Response:   "nxdomain",
 			}
 			blocklistMgr.SetConfig(blocklistConfig)
-		
+
 			// Add default sources
 			for _, source := range blocklist.DefaultSources() {
 				if err := blocklistMgr.AddSource(source); err != nil {
@@ -360,17 +365,17 @@ func main() {
 		} else {
 			blocklistMgr.SetConfig(blocklistConfig)
 		}
-	
+
 		// Start the blocklist manager (returns immediately, initializes in background)
 		if err := blocklistMgr.Start(); err != nil {
 			log.Printf("Warning: Failed to start blocklist manager: %v", err)
 		} else if blocklistConfig.Enabled {
 			log.Printf("[blocklist] Manager started (initializing in background)")
 		}
-	
+
 		// Wire up blocklist to DNS server via adapter
 		srv.SetBlocklist(&blocklistServerAdapter{mgr: blocklistMgr})
-	
+
 		// Wire up blocklist to API handler
 		apiHandler.SetBlocklistManager(blocklistMgr)
 	}
@@ -420,7 +425,7 @@ func createWebMux(apiHandler *api.Handler, authMgr *auth.Manager, store *storage
 	if authMgr != nil && acmeMgr != nil && store != nil {
 		authMgr.SetACMECertCallback(func(req auth.ACMECertRequest) error {
 			log.Printf("[cluster-join] Configuring ACME for domain: %s (provider: %s)", req.Domain, req.Provider)
-			
+
 			// Check if we already have a valid certificate for this domain in storage
 			existingCert, err := store.GetCertificate(req.Domain)
 			if err == nil && existingCert != nil && existingCert.NotAfter.After(time.Now().Add(24*time.Hour)) {
@@ -428,7 +433,7 @@ func createWebMux(apiHandler *api.Handler, authMgr *auth.Manager, store *storage
 					req.Domain, existingCert.NotAfter.Format(time.RFC3339))
 				return nil
 			}
-			
+
 			// Try to fetch certificate from peer servers first
 			if len(req.PeerURLs) > 0 {
 				log.Printf("[cluster-join] Checking %d peer(s) for existing certificate for %s", len(req.PeerURLs), req.Domain)
@@ -447,13 +452,13 @@ func createWebMux(apiHandler *api.Handler, authMgr *auth.Manager, store *storage
 					}
 				}
 			}
-			
+
 			// Set default provider if not specified
 			provider := req.Provider
 			if provider == "" {
 				provider = certs.ACMEProviderLetsEncrypt
 			}
-			
+
 			// Update ACME config with provider settings
 			acmeConfig := certs.ACMEConfig{
 				Enabled:       true,
@@ -470,13 +475,13 @@ func createWebMux(apiHandler *api.Handler, authMgr *auth.Manager, store *storage
 			if err := acmeMgr.UpdateConfig(acmeConfig); err != nil {
 				return errors.New("failed to configure ACME: " + err.Error())
 			}
-			
+
 			// Request the certificate
 			log.Printf("[cluster-join] Requesting certificate from %s...", provider)
 			if err := acmeMgr.RequestCertificate(req.Email, []string{req.Domain}); err != nil {
 				return errors.New("failed to obtain certificate: " + err.Error())
 			}
-			
+
 			log.Printf("[cluster-join] Certificate obtained successfully for %s", req.Domain)
 			return nil
 		})
@@ -486,7 +491,7 @@ func createWebMux(apiHandler *api.Handler, authMgr *auth.Manager, store *storage
 	if authMgr != nil && syncMgr != nil {
 		authMgr.SetJoinClusterCallback(func(clusterConfig *auth.ClusterJoinConfig) error {
 			log.Printf("[cluster-join] Configuring sync with %d peers", len(clusterConfig.Peers))
-			
+
 			// Build peer configs
 			peers := make([]sync.PeerConfig, 0, len(clusterConfig.Peers))
 			for _, p := range clusterConfig.Peers {
@@ -495,7 +500,7 @@ func createWebMux(apiHandler *api.Handler, authMgr *auth.Manager, store *storage
 					ID:  p.ServerID,
 				})
 			}
-			
+
 			// Update sync config
 			newConfig := &sync.Config{
 				Enabled:            true,
@@ -508,7 +513,7 @@ func createWebMux(apiHandler *api.Handler, authMgr *auth.Manager, store *storage
 				PingInterval:       30 * time.Second,
 				TombstoneRetention: 7 * 24 * time.Hour,
 			}
-			
+
 			// Save sync config to storage
 			storeCfg := &config.SyncConfig{
 				Enabled:                true,
@@ -526,10 +531,10 @@ func createWebMux(apiHandler *api.Handler, authMgr *auth.Manager, store *storage
 			if err := store.SaveSyncConfig(storeCfg); err != nil {
 				return errors.New("failed to save sync config: " + err.Error())
 			}
-			
+
 			// Apply config to running sync manager
 			syncMgr.UpdateConfig(newConfig)
-			
+
 			log.Printf("[cluster-join] Sync configured successfully")
 			return nil
 		})

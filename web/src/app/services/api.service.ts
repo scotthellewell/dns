@@ -332,11 +332,12 @@ export interface BlocklistSource {
 
 export interface BlocklistStats {
   enabled: boolean;
-  total_entries: number;
-  sources_count: number;
-  sources_enabled: number;
-  blocked_queries_total: number;
-  last_update?: string;
+  total_domains: number;
+  bloom_count: number;
+  total_blocked: number;
+  total_allowed: number;
+  whitelist_count: number;
+  sources: BlocklistSource[];
 }
 
 export interface BlocklistTestResult {
@@ -689,7 +690,9 @@ export class ApiService {
   }
 
   removeBlocklistWhitelist(domain: string): Observable<any> {
-    return this.http.delete(`${this.baseUrl}/blocklist/whitelist/${encodeURIComponent(domain)}`);
+    return this.http.delete(`${this.baseUrl}/blocklist/whitelist`, {
+      body: { domains: [domain] }
+    });
   }
 }
 

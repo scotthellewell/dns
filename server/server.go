@@ -364,10 +364,31 @@ func (s *Server) GetQueryLog() *querylog.Logger {
 	return s.querylog
 }
 
+// ClearDNSSECCache clears DNSSEC validation cache for a zone
+// Call this when zone records are added/changed/deleted
+func (s *Server) ClearDNSSECCache(zone string) {
+	s.mu.RLock()
+	rec := s.recursion
+	s.mu.RUnlock()
+	if rec != nil {
+		rec.ClearDNSSECCache(zone)
+	}
+}
+
+// ClearAllDNSSECCaches clears all DNSSEC validation caches
+func (s *Server) ClearAllDNSSECCaches() {
+	s.mu.RLock()
+	rec := s.recursion
+	s.mu.RUnlock()
+	if rec != nil {
+		rec.ClearAllDNSSECCaches()
+	}
+}
+
 // isAuthoritative checks if the server is authoritative for the given name.
 func (s *Server) isAuthoritative(name string, cfg *config.ParsedConfig) bool {
 	name = strings.ToLower(strings.TrimSuffix(name, "."))
-	
+
 	// Check if name matches any of our zones
 	for _, pz := range cfg.Zones {
 		zone := strings.TrimSuffix(pz.Name, ".")
@@ -375,7 +396,7 @@ func (s *Server) isAuthoritative(name string, cfg *config.ParsedConfig) bool {
 			return true
 		}
 	}
-	
+
 	// Check secondary zones
 	for _, sz := range cfg.SecondaryZones {
 		zone := strings.TrimSuffix(sz.Zone, ".")
@@ -383,7 +404,7 @@ func (s *Server) isAuthoritative(name string, cfg *config.ParsedConfig) bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -483,13 +504,13 @@ func (s *Server) handleRedirect(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg, or
 // sendBlockedResponse sends a blocked response based on blocklist configuration.
 func (s *Server) sendBlockedResponse(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg, bl BlocklistChecker) {
 	response := bl.GetResponse()
-	
+
 	switch response {
 	case "nxdomain":
 		// Return NXDOMAIN
 		m.Rcode = dns.RcodeNameError
 		m.Answer = nil
-		
+
 	case "zero":
 		// Return 0.0.0.0 for A queries, :: for AAAA
 		if len(r.Question) > 0 {
@@ -523,7 +544,7 @@ func (s *Server) sendBlockedResponse(w dns.ResponseWriter, r *dns.Msg, m *dns.Ms
 				m.Rcode = dns.RcodeNameError
 			}
 		}
-		
+
 	case "redirect":
 		// Return configured redirect IP
 		redirectIP := bl.GetRedirectIP()
@@ -535,7 +556,7 @@ func (s *Server) sendBlockedResponse(w dns.ResponseWriter, r *dns.Msg, m *dns.Ms
 			m.Rcode = dns.RcodeNameError
 			break
 		}
-		
+
 		if len(r.Question) > 0 {
 			q := r.Question[0]
 			if ip.To4() != nil && q.Qtype == dns.TypeA {
@@ -566,13 +587,13 @@ func (s *Server) sendBlockedResponse(w dns.ResponseWriter, r *dns.Msg, m *dns.Ms
 				m.Rcode = dns.RcodeNameError
 			}
 		}
-		
+
 	default:
 		// Default to NXDOMAIN
 		m.Rcode = dns.RcodeNameError
 		m.Answer = nil
 	}
-	
+
 	if err := w.WriteMsg(m); err != nil {
 		log.Printf("WriteMsg error (blocked): %v", err)
 	}
@@ -591,7 +612,7 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			log.Printf("[PANIC] handleRequest panic: %v", r)
 		}
 	}()
-	
+
 	startTime := time.Now()
 
 	// Extract client IP for RRL and logging
@@ -641,7 +662,7 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
-	
+
 	// Set RecursionAvailable flag based on recursion config
 	cfg := s.getConfig()
 	if cfg.Recursion.Enabled {
@@ -665,7 +686,7 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	// and only if recursion is enabled
 	if cfg.Recursion.Enabled && len(r.Question) > 0 {
 		qname := strings.ToLower(r.Question[0].Name)
-		
+
 		// Check if this is NOT an authoritative query (i.e., we'd need to recurse)
 		if !s.isAuthoritative(qname, cfg) {
 			bl := s.getBlocklist()
@@ -691,7 +712,7 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	for _, q := range r.Question {
-		log.Printf("Query: %s %s (DNSSEC: %v)", dns.TypeToString[q.Qtype], q.Name, wantDNSSEC)
+		log.Printf("Query: %s %s from %s (DNSSEC: %v)", dns.TypeToString[q.Qtype], q.Name, clientIPStr, wantDNSSEC)
 
 		// Check for delegation before local processing
 		if del, found := cfg.FindDelegation(q.Name); found {
@@ -761,8 +782,25 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	if len(m.Answer) == 0 {
-		m.Rcode = dns.RcodeNameError
+	// Only set NXDOMAIN if the name doesn't exist at all
+	// If name exists but has no records of the requested type, use NOERROR
+	if len(m.Answer) == 0 && len(r.Question) > 0 {
+		qname := r.Question[0].Name
+		// Check if this is an authoritative zone and if the name exists
+		if s.isAuthoritative(qname, cfg) {
+			// For authoritative zones, check if name exists
+			resolver := s.getResolver()
+			if resolver.NameExists(qname) {
+				// Name exists, just no records of this type - NOERROR
+				m.Rcode = dns.RcodeSuccess
+			} else {
+				// Name truly doesn't exist - NXDOMAIN
+				m.Rcode = dns.RcodeNameError
+			}
+		} else {
+			// Not authoritative - default to success (let caching handle it)
+			m.Rcode = dns.RcodeSuccess
+		}
 	}
 
 	// Sign response if DNSSEC is requested and we have keys

@@ -44,19 +44,23 @@ type QueryFunc func(name string, qtype uint16) (*dns.Msg, error)
 
 // Validator handles DNSSEC validation
 type Validator struct {
-	trustAnchors map[string][]dns.DNSKEY // Zone -> trusted DNSKEYs
-	keyCache     map[string][]*dns.DNSKEY // Cached DNSKEY records
-	dsCache      map[string][]*dns.DS     // Cached DS records
-	cacheMu      sync.RWMutex
-	queryFn      QueryFunc
+	trustAnchors  map[string][]dns.DNSKEY  // Zone -> trusted DNSKEYs
+	keyCache      map[string][]*dns.DNSKEY // Cached DNSKEY records
+	dsCache       map[string][]*dns.DS     // Cached DS records
+	negativeCache map[string]time.Time     // Negative cache (zone -> expiry time)
+	negativeTTL   time.Duration            // How long to cache negative results
+	cacheMu       sync.RWMutex
+	queryFn       QueryFunc
 }
 
 // New creates a new DNSSEC validator with root trust anchors
 func New() *Validator {
 	v := &Validator{
-		trustAnchors: make(map[string][]dns.DNSKEY),
-		keyCache:     make(map[string][]*dns.DNSKEY),
-		dsCache:      make(map[string][]*dns.DS),
+		trustAnchors:  make(map[string][]dns.DNSKEY),
+		keyCache:      make(map[string][]*dns.DNSKEY),
+		dsCache:       make(map[string][]*dns.DS),
+		negativeCache: make(map[string]time.Time),
+		negativeTTL:   5 * time.Minute, // Cache negative results for 5 minutes
 	}
 	// Add root trust anchors
 	v.trustAnchors["."] = rootAnchors
@@ -66,6 +70,32 @@ func New() *Validator {
 // SetQueryFunc sets the function used to query DNS for DNSKEY/DS records
 func (v *Validator) SetQueryFunc(fn QueryFunc) {
 	v.queryFn = fn
+}
+
+// ClearCache clears all cached DNSSEC records for a specific zone
+// Call this when zone records are added/changed/deleted
+func (v *Validator) ClearCache(zone string) {
+	zone = dns.Fqdn(zone)
+	v.cacheMu.Lock()
+	defer v.cacheMu.Unlock()
+
+	// Clear positive caches
+	delete(v.keyCache, zone)
+	delete(v.dsCache, zone)
+
+	// Clear negative caches
+	delete(v.negativeCache, "dnskey:"+zone)
+	delete(v.negativeCache, "ds:"+zone)
+}
+
+// ClearAllCaches clears all DNSSEC caches
+func (v *Validator) ClearAllCaches() {
+	v.cacheMu.Lock()
+	defer v.cacheMu.Unlock()
+
+	v.keyCache = make(map[string][]*dns.DNSKEY)
+	v.dsCache = make(map[string][]*dns.DS)
+	v.negativeCache = make(map[string]time.Time)
 }
 
 // ValidationResult holds the result of DNSSEC validation
@@ -217,11 +247,18 @@ func (v *Validator) ValidateResponse(resp *dns.Msg, qname string, qtype uint16) 
 // getDNSKEYs fetches and caches DNSKEY records for a zone
 func (v *Validator) getDNSKEYs(zone string) ([]*dns.DNSKEY, error) {
 	zone = dns.Fqdn(zone)
+	negCacheKey := "dnskey:" + zone
 
 	v.cacheMu.RLock()
+	// Check positive cache first
 	if keys, ok := v.keyCache[zone]; ok {
 		v.cacheMu.RUnlock()
 		return keys, nil
+	}
+	// Check negative cache
+	if expiry, ok := v.negativeCache[negCacheKey]; ok && time.Now().Before(expiry) {
+		v.cacheMu.RUnlock()
+		return nil, errors.New("DNSKEY query failed (negative cached)")
 	}
 	v.cacheMu.RUnlock()
 
@@ -231,10 +268,18 @@ func (v *Validator) getDNSKEYs(zone string) ([]*dns.DNSKEY, error) {
 
 	resp, err := v.queryFn(zone, dns.TypeDNSKEY)
 	if err != nil {
+		// Cache the negative result
+		v.cacheMu.Lock()
+		v.negativeCache[negCacheKey] = time.Now().Add(v.negativeTTL)
+		v.cacheMu.Unlock()
 		return nil, err
 	}
 
 	if resp == nil || resp.Rcode != dns.RcodeSuccess {
+		// Cache the negative result
+		v.cacheMu.Lock()
+		v.negativeCache[negCacheKey] = time.Now().Add(v.negativeTTL)
+		v.cacheMu.Unlock()
 		return nil, errors.New("DNSKEY query failed")
 	}
 
@@ -247,6 +292,8 @@ func (v *Validator) getDNSKEYs(zone string) ([]*dns.DNSKEY, error) {
 
 	v.cacheMu.Lock()
 	v.keyCache[zone] = keys
+	// Clear negative cache entry if it exists
+	delete(v.negativeCache, negCacheKey)
 	v.cacheMu.Unlock()
 
 	return keys, nil
@@ -255,11 +302,18 @@ func (v *Validator) getDNSKEYs(zone string) ([]*dns.DNSKEY, error) {
 // getDS fetches and caches DS records for a zone
 func (v *Validator) getDS(zone string) ([]*dns.DS, error) {
 	zone = dns.Fqdn(zone)
+	negCacheKey := "ds:" + zone
 
 	v.cacheMu.RLock()
+	// Check positive cache first
 	if ds, ok := v.dsCache[zone]; ok {
 		v.cacheMu.RUnlock()
 		return ds, nil
+	}
+	// Check negative cache
+	if expiry, ok := v.negativeCache[negCacheKey]; ok && time.Now().Before(expiry) {
+		v.cacheMu.RUnlock()
+		return nil, errors.New("DS query failed (negative cached)")
 	}
 	v.cacheMu.RUnlock()
 
@@ -269,10 +323,18 @@ func (v *Validator) getDS(zone string) ([]*dns.DS, error) {
 
 	resp, err := v.queryFn(zone, dns.TypeDS)
 	if err != nil {
+		// Cache the negative result
+		v.cacheMu.Lock()
+		v.negativeCache[negCacheKey] = time.Now().Add(v.negativeTTL)
+		v.cacheMu.Unlock()
 		return nil, err
 	}
 
 	if resp == nil || resp.Rcode != dns.RcodeSuccess {
+		// Cache the negative result
+		v.cacheMu.Lock()
+		v.negativeCache[negCacheKey] = time.Now().Add(v.negativeTTL)
+		v.cacheMu.Unlock()
 		return nil, errors.New("DS query failed")
 	}
 
@@ -285,6 +347,8 @@ func (v *Validator) getDS(zone string) ([]*dns.DS, error) {
 
 	v.cacheMu.Lock()
 	v.dsCache[zone] = dsRecords
+	// Clear negative cache entry if it exists
+	delete(v.negativeCache, negCacheKey)
 	v.cacheMu.Unlock()
 
 	return dsRecords, nil

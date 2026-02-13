@@ -20,7 +20,7 @@
         <div class="stat-content">
           <mat-icon>format_list_numbered</mat-icon>
           <div class="stat-text">
-            <span class="stat-value">{{formatEntryCount(stats.total_entries)}}</span>
+            <span class="stat-value">{{formatEntryCount(stats.total_domains)}}</span>
             <span class="stat-label">Blocked Domains</span>
           </div>
         </div>
@@ -29,7 +29,7 @@
         <div class="stat-content">
           <mat-icon>source</mat-icon>
           <div class="stat-text">
-            <span class="stat-value">{{stats.sources_enabled}}/{{stats.sources_count}}</span>
+            <span class="stat-value">{{getSourcesEnabled()}}/{{stats.sources?.length || 0}}</span>
             <span class="stat-label">Active Sources</span>
           </div>
         </div>
@@ -38,7 +38,7 @@
         <div class="stat-content">
           <mat-icon>block</mat-icon>
           <div class="stat-text">
-            <span class="stat-value">{{stats.blocked_queries_total || 0}}</span>
+            <span class="stat-value">{{stats.total_blocked || 0}}</span>
             <span class="stat-label">Queries Blocked</span>
           </div>
         </div>

@@ -19,6 +19,51 @@ func New(cfg *config.ParsedConfig) *Resolver {
 	return &Resolver{config: cfg}
 }
 
+// NameExists checks if any records exist for a given hostname (any record type)
+// This is used to distinguish between NXDOMAIN (name doesn't exist)
+// and NOERROR (name exists but no records of requested type)
+func (r *Resolver) NameExists(hostname string) bool {
+	hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
+
+	// Check if hostname is in any of our zones
+	inZone := false
+	for _, zone := range r.config.Zones {
+		zoneBase := strings.TrimSuffix(zone.Name, ".")
+		if hostname == zoneBase || strings.HasSuffix(hostname, "."+zoneBase) {
+			inZone = true
+			break
+		}
+	}
+	if !inZone {
+		return false
+	}
+
+	// Check A, AAAA, CNAME, MX, TXT, NS, SRV records
+	if _, _, found := r.LookupA(hostname); found {
+		return true
+	}
+	if _, _, found := r.LookupAAAA(hostname); found {
+		return true
+	}
+	if _, _, found := r.LookupCNAME(hostname); found {
+		return true
+	}
+	if records := r.LookupMX(hostname); len(records) > 0 {
+		return true
+	}
+	if records := r.LookupTXT(hostname); len(records) > 0 {
+		return true
+	}
+	if records := r.LookupNS(hostname); len(records) > 0 {
+		return true
+	}
+	if records := r.LookupSRV(hostname); len(records) > 0 {
+		return true
+	}
+
+	return false
+}
+
 // IPv6ToReverseName converts an IPv6 address to its reverse DNS name
 func IPv6ToReverseName(ip net.IP) string {
 	ip = ip.To16()
@@ -409,7 +454,7 @@ func (r *Resolver) LookupNS(hostname string) []config.ParsedNSRecord {
 			// This is not a zone we're authoritative for - don't return our nameservers
 			return nil
 		}
-		
+
 		if tenantID == "" {
 			tenantID = r.config.MainTenantID
 		}
@@ -433,7 +478,7 @@ func (r *Resolver) LookupNS(hostname string) []config.ParsedNSRecord {
 // makeNSRecords converts nameserver strings to ParsedNSRecord slice
 func (r *Resolver) makeNSRecords(hostname string, nameservers []string, ttl uint32) []config.ParsedNSRecord {
 	records := make([]config.ParsedNSRecord, 0, len(nameservers))
-	
+
 	// Use zone TTL if tenant TTL not specified
 	if ttl == 0 {
 		if soa, ok := r.config.SOARecords[hostname]; ok {

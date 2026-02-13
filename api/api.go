@@ -38,17 +38,23 @@ type Stats struct {
 
 // Handler provides the HTTP API for the DNS server
 type Handler struct {
-	config           *config.ParsedConfig
-	rawConfig        *config.Config
-	configPath       string
-	stats            *Stats
-	metrics          *metrics.Collector
-	configMu         sync.RWMutex
-	onConfigUpdate   func(*config.ParsedConfig)
-	store            interface{} // Optional storage backend (*storage.Store)
-	secondaryMgr     SecondaryZoneProvider
-	secondaryMgrLock sync.RWMutex
-	blocklistMgr     BlocklistManager
+	config             *config.ParsedConfig
+	rawConfig          *config.Config
+	configPath         string
+	stats              *Stats
+	metrics            *metrics.Collector
+	configMu           sync.RWMutex
+	onConfigUpdate     func(*config.ParsedConfig)
+	onClearDNSSECCache func()      // Called to clear DNSSEC validation caches
+	store              interface{} // Optional storage backend (*storage.Store)
+	secondaryMgr       SecondaryZoneProvider
+	secondaryMgrLock   sync.RWMutex
+	blocklistMgr       BlocklistManager
+}
+
+// SetClearDNSSECCacheCallback sets the callback to clear DNSSEC caches
+func (h *Handler) SetClearDNSSECCacheCallback(fn func()) {
+	h.onClearDNSSECCache = fn
 }
 
 // SetSecondaryManager sets the secondary zone manager for convert operations
@@ -176,8 +182,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Zones (reverse DNS patterns)
 	mux.HandleFunc("/api/zones", h.corsMiddleware(h.handleZones))
-	mux.HandleFunc("/api/zones/import", h.corsMiddleware(h.handleZoneImport)) // Zone file import
-	mux.HandleFunc("/api/zones/export/", h.corsMiddleware(h.handleZoneExport)) // Zone file export
+	mux.HandleFunc("/api/zones/import", h.corsMiddleware(h.handleZoneImport))                 // Zone file import
+	mux.HandleFunc("/api/zones/export/", h.corsMiddleware(h.handleZoneExport))                // Zone file export
 	mux.HandleFunc("/api/zones/enable-records/", h.corsMiddleware(h.handleEnableZoneRecords)) // Enable all records in zone
 	mux.HandleFunc("/api/zones/", h.corsMiddleware(h.handleZone))
 
@@ -237,8 +243,8 @@ func (h *Handler) RegisterRoutesWithAuth(mux *http.ServeMux, authMgr AuthMiddlew
 	// All other routes require authentication
 	mux.HandleFunc("/api/config", wrap(h.handleConfig))
 	mux.HandleFunc("/api/zones", wrap(h.handleZones))
-	mux.HandleFunc("/api/zones/import", wrap(h.handleZoneImport)) // Zone file import
-	mux.HandleFunc("/api/zones/export/", wrap(h.handleZoneExport)) // Zone file export
+	mux.HandleFunc("/api/zones/import", wrap(h.handleZoneImport))                 // Zone file import
+	mux.HandleFunc("/api/zones/export/", wrap(h.handleZoneExport))                // Zone file export
 	mux.HandleFunc("/api/zones/enable-records/", wrap(h.handleEnableZoneRecords)) // Enable all records in zone
 	mux.HandleFunc("/api/zones/", wrap(h.handleZone))
 	mux.HandleFunc("/api/records", wrap(h.handleRecords))
@@ -319,7 +325,7 @@ type StatusResponse struct {
 
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[api-status] handleStatus called from %s", r.RemoteAddr)
-	
+
 	if r.Method != "GET" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1876,15 +1882,15 @@ func (h *Handler) handleMaintenance(w http.ResponseWriter, r *http.Request) {
 			formatBytes(sizeBefore), formatBytes(sizeAfter), formatBytes(reduction))
 
 		h.jsonResponse(w, map[string]interface{}{
-			"success":             true,
-			"size_before":         sizeBefore,
-			"size_before_human":   formatBytes(sizeBefore),
-			"size_after":          sizeAfter,
-			"size_after_human":    formatBytes(sizeAfter),
-			"reduction":           reduction,
-			"reduction_human":     formatBytes(reduction),
-			"data_size":           dataSize,
-			"data_size_human":     formatBytes(dataSize),
+			"success":           true,
+			"size_before":       sizeBefore,
+			"size_before_human": formatBytes(sizeBefore),
+			"size_after":        sizeAfter,
+			"size_after_human":  formatBytes(sizeAfter),
+			"reduction":         reduction,
+			"reduction_human":   formatBytes(reduction),
+			"data_size":         dataSize,
+			"data_size_human":   formatBytes(dataSize),
 		})
 
 	default:

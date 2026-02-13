@@ -107,11 +107,34 @@ func (s *Store) BuildParsedConfig() (*config.ParsedConfig, error) {
 			Minimum: zone.Minimum,
 			TTL:     zone.TTL,
 		}
+		// Ensure MName is fully qualified (has trailing dot)
+		if soa.MName != "" && !strings.HasSuffix(soa.MName, ".") {
+			soa.MName += "."
+		}
 		if soa.MName == "" {
-			soa.MName = "ns1." + zoneName
+			// Try to use tenant default nameservers for SOA MName
+			// Priority: 1) Zone's tenant defaults, 2) Main tenant defaults, 3) ns1.{zone}
+			if defaults, ok := parsed.TenantDefaults[tenantID]; ok && len(defaults.Nameservers) > 0 {
+				// Use the first nameserver from tenant defaults
+				soa.MName = defaults.Nameservers[0]
+				if !strings.HasSuffix(soa.MName, ".") {
+					soa.MName += "."
+				}
+			} else if defaults, ok := parsed.TenantDefaults[MainTenantID]; ok && len(defaults.Nameservers) > 0 {
+				// Fall back to main tenant defaults
+				soa.MName = defaults.Nameservers[0]
+				if !strings.HasSuffix(soa.MName, ".") {
+					soa.MName += "."
+				}
+			} else {
+				// Last resort fallback
+				soa.MName = "ns1." + zoneName
+			}
 		}
 		if soa.RName == "" {
 			soa.RName = "hostmaster." + zoneName
+		} else if !strings.HasSuffix(soa.RName, ".") {
+			soa.RName += "."
 		}
 		if soa.Refresh == 0 {
 			soa.Refresh = 3600
