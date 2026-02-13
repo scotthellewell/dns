@@ -985,7 +985,13 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 					}
 				}
 			}
-			return store.CreateRecord(&record)
+			err = store.CreateRecord(&record)
+			// Handle duplicate error gracefully - it means the record content already exists
+			if err != nil && err.Error() == "duplicate record exists" {
+				log.Printf("[sync] Record %s duplicate content, skipping create", record.ID)
+				return nil
+			}
+			return err
 		}
 		// For updates, check if record has actually changed
 		existing, err := store.GetRecords(record.Zone, record.Name, record.Type)

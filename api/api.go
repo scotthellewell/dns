@@ -1851,47 +1851,67 @@ func (h *Handler) handleMaintenance(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case "POST":
-		// Trigger compaction
+		// Trigger compaction or deduplication
 		action := r.URL.Query().Get("action")
-		if action != "compact" {
-			h.errorResponse(w, "Invalid action. Use ?action=compact", http.StatusBadRequest)
+		
+		switch action {
+		case "compact":
+			log.Printf("[maintenance] Starting database compaction...")
+
+			// Get sizes before compaction
+			sizeBefore, _ := store.DatabaseSize()
+
+			if err := store.Compact(); err != nil {
+				log.Printf("[maintenance] Compaction failed: %v", err)
+				h.errorResponse(w, fmt.Sprintf("Compaction failed: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			// Get sizes after compaction
+			sizeAfter, _ := store.DatabaseSize()
+			dataSize, _ := store.DataSize()
+
+			reduction := int64(0)
+			if sizeBefore > sizeAfter {
+				reduction = sizeBefore - sizeAfter
+			}
+
+			log.Printf("[maintenance] Compaction complete: %s -> %s (saved %s)",
+				formatBytes(sizeBefore), formatBytes(sizeAfter), formatBytes(reduction))
+
+			h.jsonResponse(w, map[string]interface{}{
+				"success":           true,
+				"size_before":       sizeBefore,
+				"size_before_human": formatBytes(sizeBefore),
+				"size_after":        sizeAfter,
+				"size_after_human":  formatBytes(sizeAfter),
+				"reduction":         reduction,
+				"reduction_human":   formatBytes(reduction),
+				"data_size":         dataSize,
+				"data_size_human":   formatBytes(dataSize),
+			})
+
+		case "deduplicate":
+			log.Printf("[maintenance] Starting record deduplication...")
+
+			removed, err := store.DeduplicateRecords()
+			if err != nil {
+				log.Printf("[maintenance] Deduplication failed: %v", err)
+				h.errorResponse(w, fmt.Sprintf("Deduplication failed: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			log.Printf("[maintenance] Deduplication complete: removed %d duplicate records", removed)
+
+			h.jsonResponse(w, map[string]interface{}{
+				"success":          true,
+				"duplicates_removed": removed,
+			})
+
+		default:
+			h.errorResponse(w, "Invalid action. Use ?action=compact or ?action=deduplicate", http.StatusBadRequest)
 			return
 		}
-
-		log.Printf("[maintenance] Starting database compaction...")
-
-		// Get sizes before compaction
-		sizeBefore, _ := store.DatabaseSize()
-
-		if err := store.Compact(); err != nil {
-			log.Printf("[maintenance] Compaction failed: %v", err)
-			h.errorResponse(w, fmt.Sprintf("Compaction failed: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		// Get sizes after compaction
-		sizeAfter, _ := store.DatabaseSize()
-		dataSize, _ := store.DataSize()
-
-		reduction := int64(0)
-		if sizeBefore > sizeAfter {
-			reduction = sizeBefore - sizeAfter
-		}
-
-		log.Printf("[maintenance] Compaction complete: %s -> %s (saved %s)",
-			formatBytes(sizeBefore), formatBytes(sizeAfter), formatBytes(reduction))
-
-		h.jsonResponse(w, map[string]interface{}{
-			"success":           true,
-			"size_before":       sizeBefore,
-			"size_before_human": formatBytes(sizeBefore),
-			"size_after":        sizeAfter,
-			"size_after_human":  formatBytes(sizeAfter),
-			"reduction":         reduction,
-			"reduction_human":   formatBytes(reduction),
-			"data_size":         dataSize,
-			"data_size_human":   formatBytes(dataSize),
-		})
 
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

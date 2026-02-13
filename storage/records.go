@@ -84,6 +84,15 @@ func (s *Store) CreateRecord(record *Record) error {
 			}
 		}
 
+		// Check for duplicate - same data content
+		dataStr := string(record.Data)
+		for _, r := range records {
+			if string(r.Data) == dataStr && r.TTL == record.TTL {
+				// Duplicate found - skip adding
+				return fmt.Errorf("duplicate record exists")
+			}
+		}
+
 		// Append the new record
 		records = append(records, *record)
 
@@ -1055,4 +1064,61 @@ func (s *Store) BulkCreateRecords(records []Record) error {
 
 		return nil
 	})
+}
+
+// DeduplicateRecords removes duplicate records from the database.
+// Two records are considered duplicates if they have the same Zone, Name, Type, and Data.
+// Returns the number of duplicates removed.
+func (s *Store) DeduplicateRecords() (int, error) {
+	var removedCount int
+
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		recordsBucket := tx.Bucket([]byte("records"))
+		if recordsBucket == nil {
+			return nil
+		}
+
+		// Iterate over all record keys
+		c := recordsBucket.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var records []Record
+			if err := json.Unmarshal(v, &records); err != nil {
+				continue
+			}
+
+			if len(records) <= 1 {
+				continue
+			}
+
+			// Build a map of unique records by data content
+			seen := make(map[string]bool)
+			var uniqueRecords []Record
+
+			for _, r := range records {
+				// Create a key from the record's data (ignoring ID and timestamps)
+				dataKey := fmt.Sprintf("%s:%s:%s:%s:%d", r.Zone, r.Name, r.Type, string(r.Data), r.TTL)
+				if !seen[dataKey] {
+					seen[dataKey] = true
+					uniqueRecords = append(uniqueRecords, r)
+				} else {
+					removedCount++
+				}
+			}
+
+			// Update if we removed any duplicates
+			if len(uniqueRecords) < len(records) {
+				data, err := json.Marshal(uniqueRecords)
+				if err != nil {
+					return err
+				}
+				if err := recordsBucket.Put(k, data); err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	})
+
+	return removedCount, err
 }
