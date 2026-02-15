@@ -95,6 +95,84 @@ func (s *Store) CreateZone(zone *Zone) error {
 	return nil
 }
 
+// CreateZonePreserveSerial creates a zone while preserving the provided serial.
+// This is used for sync operations to preserve the original serial from the source.
+func (s *Store) CreateZonePreserveSerial(zone *Zone) error {
+	// Set defaults
+	if zone.Type == "" {
+		if zone.Subnet != "" {
+			zone.Type = ZoneTypeReverse
+		} else {
+			zone.Type = ZoneTypeForward
+		}
+	}
+	if zone.Status == "" {
+		zone.Status = ZoneStatusActive
+	}
+	if zone.TTL == 0 {
+		zone.TTL = 3600
+	}
+
+	// Normalize zone name
+	zone.Name = dns.Fqdn(strings.ToLower(zone.Name))
+	zone.Name = strings.TrimSuffix(zone.Name, ".") // Store without trailing dot
+
+	// Preserve serial from sync source - do NOT generate new serial
+	now := time.Now().UTC()
+	if zone.Serial == 0 {
+		// Only set serial if not provided
+		zone.Serial = uint32(now.Year()*1000000 + int(now.Month())*10000 + now.Day()*100 + 1)
+	}
+	if zone.CreatedAt.IsZero() {
+		zone.CreatedAt = now
+	}
+	zone.UpdatedAt = now
+
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(BucketZones)
+
+		// Check if already exists
+		if b.Get([]byte(zone.Name)) != nil {
+			return ErrAlreadyExists
+		}
+
+		// Check tenant exists
+		if tx.Bucket(BucketTenants).Get([]byte(zone.TenantID)) == nil {
+			return fmt.Errorf("tenant not found")
+		}
+
+		// For subzones, check delegation requirements
+		if err := s.checkSubzonePermission(tx, zone); err != nil {
+			return err
+		}
+
+		if err := putJSON(tx, BucketZones, zone.Name, zone); err != nil {
+			return err
+		}
+
+		// Update reverse zone index if this is a reverse zone
+		if zone.Type == ZoneTypeReverse && zone.Subnet != "" {
+			if err := s.updateReverseZoneIndex(tx, zone.Name, zone.Subnet); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	// Refresh zone cache
+	s.refreshZoneCache()
+
+	// Do NOT record change for sync - this was already synced from another server
+	// Do NOT populate PTRs - the records will come from sync
+
+	return nil
+}
+
 // checkSubzonePermission verifies that the user can create a subzone.
 func (s *Store) checkSubzonePermission(tx *bolt.Tx, zone *Zone) error {
 	// Find parent zone
@@ -294,6 +372,35 @@ func (s *Store) UpdateZone(zone *Zone) error {
 		s.refreshZoneCache()
 		// Record change for sync
 		recordChange(EntityTypeZone, zone.Name, zone.TenantID, OpUpdate, zone)
+	}
+
+	return err
+}
+
+// UpdateZonePreserveSerial updates a zone without incrementing the serial number.
+// This is used for sync operations to preserve the original serial from the source.
+func (s *Store) UpdateZonePreserveSerial(zone *Zone) error {
+	if zone.Name == "" {
+		return fmt.Errorf("zone name required")
+	}
+
+	zone.Name = strings.TrimSuffix(strings.ToLower(zone.Name), ".")
+	zone.UpdatedAt = time.Now().UTC()
+
+	// Do NOT increment serial - preserve the synced serial
+
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(BucketZones)
+		if b.Get([]byte(zone.Name)) == nil {
+			return ErrNotFound
+		}
+
+		return putJSON(tx, BucketZones, zone.Name, zone)
+	})
+
+	if err == nil {
+		s.refreshZoneCache()
+		// Do NOT record change for sync - this was already synced from another server
 	}
 
 	return err

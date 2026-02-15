@@ -262,9 +262,11 @@ func (s *Store) addRecordToParsed(parsed *config.ParsedConfig, rec *Record, fqdn
 		if err := json.Unmarshal(rec.Data, &data); err != nil {
 			return err
 		}
+		ipStr := strings.TrimSpace(data.GetIP())
+		ip := net.ParseIP(ipStr)
 		parsed.ARecords[fqdn] = append(parsed.ARecords[fqdn], config.ParsedARecord{
 			Name: fqdn,
-			IP:   net.ParseIP(data.GetIP()),
+			IP:   ip,
 			TTL:  ttl,
 		})
 
@@ -273,9 +275,11 @@ func (s *Store) addRecordToParsed(parsed *config.ParsedConfig, rec *Record, fqdn
 		if err := json.Unmarshal(rec.Data, &data); err != nil {
 			return err
 		}
+		ipStr := strings.TrimSpace(data.GetIP())
+		ip := net.ParseIP(ipStr)
 		parsed.AAAARecords[fqdn] = append(parsed.AAAARecords[fqdn], config.ParsedAAAARecord{
 			Name: fqdn,
-			IP:   net.ParseIP(data.GetIP()),
+			IP:   ip,
 			TTL:  ttl,
 		})
 

@@ -302,6 +302,37 @@
   }
 }
 
+.soa-section {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #334155;
+
+  h3 {
+    color: #e2e8f0;
+    font-size: 1rem;
+    font-weight: 500;
+    margin: 0 0 12px 0;
+  }
+
+  .section-description {
+    color: #64748b;
+    font-size: 0.8rem;
+    margin: 0 0 16px 0;
+    line-height: 1.4;
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+
+    small {
+      display: block;
+      margin-top: 4px;
+      color: #64748b;
+      font-size: 0.75rem;
+    }
+  }
+}
+
 .dnssec-section {
   margin-top: 20px;
   padding-top: 20px;

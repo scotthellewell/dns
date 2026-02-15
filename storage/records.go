@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"time"
@@ -15,6 +18,17 @@ import (
 
 func recordKey(zone, name, recordType string) string {
 	return fmt.Sprintf("%s:%s:%s", zone, name, recordType)
+}
+
+// RecordContentID generates a deterministic ID based on record content.
+// This is used for sync identification to ensure records are matched by their
+// content (zone, name, type, data) rather than by their local UUID.
+// Format: {zone}:{name}:{type}:{data_hash}
+func RecordContentID(zone, name, recordType string, data json.RawMessage) string {
+	h := sha256.New()
+	h.Write(data)
+	dataHash := hex.EncodeToString(h.Sum(nil))[:16] // Use first 16 chars of hash
+	return fmt.Sprintf("%s:%s:%s:%s", zone, name, recordType, dataHash)
 }
 
 func parseRecordKey(key string) (zone, name, recordType string, ok bool) {
@@ -133,7 +147,9 @@ func (s *Store) CreateRecord(record *Record) error {
 	}
 
 	// Record change for sync (after transaction commits)
-	recordChange(EntityTypeRecord, record.ID, tenantID, OpCreate, record)
+	// Use content-based ID for sync to ensure records are matched by content across servers
+	contentID := RecordContentID(record.Zone, record.Name, record.Type, record.Data)
+	recordChange(EntityTypeRecord, contentID, tenantID, OpCreate, record)
 
 	return nil
 }
@@ -427,9 +443,101 @@ func (s *Store) DeleteRecordByID(recordID string) error {
 	})
 }
 
+// DeleteRecordByContentID deletes a record by content-based ID.
+// Content ID format: {zone}:{name}:{type}:{data_hash}
+// This is used by sync to match records by content rather than UUID.
+// Falls back to UUID-based deletion for backwards compatibility with old sync entries.
+func (s *Store) DeleteRecordByContentID(contentID string) error {
+	// Parse the content ID
+	parts := strings.SplitN(contentID, ":", 4)
+	if len(parts) != 4 {
+		// Not a content ID - might be an old UUID-based entry
+		// Fall back to UUID-based deletion for backwards compatibility
+		log.Printf("[sync] ID doesn't look like content ID, trying UUID fallback: %s", contentID)
+		return s.DeleteRecordByID(contentID)
+	}
+	zoneName, name, recordType, dataHash := parts[0], parts[1], parts[2], parts[3]
+
+	// Validate hash format (should be 16 hex chars)
+	if len(dataHash) != 16 {
+		log.Printf("[sync] Invalid data hash length, trying UUID fallback: %s", contentID)
+		return s.DeleteRecordByID(contentID)
+	}
+
+	return s.db.Update(func(tx *bolt.Tx) error {
+		recordsBucket := tx.Bucket([]byte("records"))
+		zonesBucket := tx.Bucket([]byte("zones"))
+
+		key := recordKey(zoneName, name, recordType)
+
+		// Get existing records
+		existing := recordsBucket.Get([]byte(key))
+		if existing == nil {
+			return nil // Already gone
+		}
+
+		var records []Record
+		if err := json.Unmarshal(existing, &records); err != nil {
+			return err
+		}
+
+		// Find and remove the record with matching data hash
+		found := false
+		newRecords := make([]Record, 0, len(records))
+		for _, r := range records {
+			h := sha256.New()
+			h.Write(r.Data)
+			rDataHash := hex.EncodeToString(h.Sum(nil))[:16]
+			if rDataHash == dataHash {
+				found = true
+				log.Printf("[sync] Deleting record by content: %s %s %s (local ID: %s)", zoneName, name, recordType, r.ID)
+				// Skip this record (delete it)
+			} else {
+				newRecords = append(newRecords, r)
+			}
+		}
+
+		if !found {
+			log.Printf("[sync] Record not found by content ID: %s", contentID)
+			return nil // Not found - might already be deleted
+		}
+
+		// Save or delete key
+		if len(newRecords) == 0 {
+			if err := recordsBucket.Delete([]byte(key)); err != nil {
+				return err
+			}
+		} else {
+			data, err := json.Marshal(newRecords)
+			if err != nil {
+				return err
+			}
+			if err := recordsBucket.Put([]byte(key), data); err != nil {
+				return err
+			}
+		}
+
+		// Update zone serial
+		zoneData := zonesBucket.Get([]byte(zoneName))
+		if zoneData != nil {
+			var zone Zone
+			if err := json.Unmarshal(zoneData, &zone); err == nil {
+				zone.Serial++
+				zone.UpdatedAt = time.Now()
+				zoneData, _ = json.Marshal(&zone)
+				zonesBucket.Put([]byte(zone.Name), zoneData)
+			}
+		}
+
+		return nil
+	})
+}
+
 // DeleteRecord deletes a specific record by ID from a record set.
 // For A/AAAA records, it deletes the associated PTR record.
 func (s *Store) DeleteRecord(zoneName, name, recordType, recordID string) error {
+	var deletedRecordData json.RawMessage // Capture for sync after transaction
+
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		recordsBucket := tx.Bucket([]byte("records"))
 		zonesBucket := tx.Bucket([]byte("zones"))
@@ -454,6 +562,7 @@ func (s *Store) DeleteRecord(zoneName, name, recordType, recordID string) error 
 		for _, r := range records {
 			if r.ID == recordID {
 				deletedRecord = r
+				deletedRecordData = r.Data // Capture for sync
 				found = true
 			} else {
 				newRecords = append(newRecords, r)
@@ -506,7 +615,9 @@ func (s *Store) DeleteRecord(zoneName, name, recordType, recordID string) error 
 	}
 
 	// Record change for sync (after transaction commits)
-	recordChange(EntityTypeRecord, recordID, "", OpDelete, nil)
+	// Use content-based ID for deletes to match records by content across servers
+	contentID := RecordContentID(zoneName, name, recordType, deletedRecordData)
+	recordChange(EntityTypeRecord, contentID, "", OpDelete, nil)
 
 	return nil
 }

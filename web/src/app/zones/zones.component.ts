@@ -57,7 +57,9 @@ export class ZonesComponent implements OnInit {
     subnet: '',
     domain: '',
     strip_prefix: false,
-    ttl: 3600
+    ttl: 3600,
+    primary_ns: '',
+    admin_email: ''
   };
 
   constructor(private api: ApiService, private cdr: ChangeDetectorRef) {
@@ -134,7 +136,9 @@ export class ZonesComponent implements OnInit {
       subnet: '',
       domain: '',
       strip_prefix: false,
-      ttl: 3600
+      ttl: 3600,
+      primary_ns: '',
+      admin_email: ''
     };
     this.editingZone = null;
     this.showForm = true;

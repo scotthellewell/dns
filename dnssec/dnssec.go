@@ -332,6 +332,15 @@ func (s *Signer) Sign(msg *dns.Msg) error {
 	expiration := now.Add(7 * 24 * time.Hour) // 7 days
 
 	for _, rrset := range rrsets {
+		// Use KSK for DNSKEY records, ZSK for everything else
+		// This is required for DNSSEC chain of trust (DS -> KSK -> DNSKEY)
+		signingKey := s.zsk
+		signingPrivKey := s.zskPriv
+		if rrset[0].Header().Rrtype == dns.TypeDNSKEY {
+			signingKey = s.ksk
+			signingPrivKey = s.kskPriv
+		}
+
 		rrsig := &dns.RRSIG{
 			Hdr: dns.RR_Header{
 				Name:   rrset[0].Header().Name,
@@ -344,12 +353,12 @@ func (s *Signer) Sign(msg *dns.Msg) error {
 			OrigTtl:     rrset[0].Header().Ttl,
 			Expiration:  uint32(expiration.Unix()),
 			Inception:   uint32(inception.Unix()),
-			KeyTag:      s.zsk.KeyTag(),
+			KeyTag:      signingKey.KeyTag(),
 			SignerName:  s.zone,
 			TypeCovered: rrset[0].Header().Rrtype,
 		}
 
-		if err := rrsig.Sign(s.zskPriv.(crypto.Signer), rrset); err != nil {
+		if err := rrsig.Sign(signingPrivKey.(crypto.Signer), rrset); err != nil {
 			return fmt.Errorf("failed to sign RRset: %w", err)
 		}
 
@@ -510,6 +519,104 @@ func DefaultNSEC3Config() NSEC3Config {
 		SaltLength:    0, // RFC 9276 recommends empty salt
 		Salt:          "",
 	}
+}
+
+// CreateNSEC creates an NSEC record for a given owner name.
+// Used for authenticated denial of existence (NODATA case).
+func (s *Signer) CreateNSEC(ownerName string, nextOwnerName string, types []uint16, ttl uint32) *dns.NSEC {
+	// Ensure names have trailing dots
+	if !strings.HasSuffix(ownerName, ".") {
+		ownerName += "."
+	}
+	if !strings.HasSuffix(nextOwnerName, ".") {
+		nextOwnerName += "."
+	}
+
+	return &dns.NSEC{
+		Hdr: dns.RR_Header{
+			Name:   ownerName,
+			Rrtype: dns.TypeNSEC,
+			Class:  dns.ClassINET,
+			Ttl:    ttl,
+		},
+		NextDomain: nextOwnerName,
+		TypeBitMap: types,
+	}
+}
+
+// SignNSEC signs an NSEC record with the ZSK.
+func (s *Signer) SignNSEC(nsec *dns.NSEC, inception, expiration uint32) (*dns.RRSIG, error) {
+	if s.zsk == nil || s.zskPriv == nil {
+		return nil, fmt.Errorf("no ZSK available for signing")
+	}
+
+	signer, ok := s.zskPriv.(crypto.Signer)
+	if !ok {
+		return nil, fmt.Errorf("ZSK private key does not implement crypto.Signer")
+	}
+
+	rrsig := &dns.RRSIG{
+		Hdr: dns.RR_Header{
+			Name:   nsec.Hdr.Name,
+			Rrtype: dns.TypeRRSIG,
+			Class:  dns.ClassINET,
+			Ttl:    nsec.Hdr.Ttl,
+		},
+		TypeCovered: dns.TypeNSEC,
+		Algorithm:   s.algorithm,
+		Labels:      uint8(dns.CountLabel(nsec.Hdr.Name)),
+		OrigTtl:     nsec.Hdr.Ttl,
+		Expiration:  expiration,
+		Inception:   inception,
+		KeyTag:      s.zsk.KeyTag(),
+		SignerName:  s.zone,
+	}
+
+	if err := rrsig.Sign(signer, []dns.RR{nsec}); err != nil {
+		return nil, fmt.Errorf("signing NSEC: %w", err)
+	}
+
+	return rrsig, nil
+}
+
+// SignRRSet signs an arbitrary RRset with the ZSK.
+// This is used for signing SOA records in Authority section.
+func (s *Signer) SignRRSet(rrset []dns.RR, inception, expiration uint32) (*dns.RRSIG, error) {
+	if len(rrset) == 0 {
+		return nil, fmt.Errorf("empty RRset")
+	}
+	if s.zsk == nil || s.zskPriv == nil {
+		return nil, fmt.Errorf("no ZSK available for signing")
+	}
+
+	signer, ok := s.zskPriv.(crypto.Signer)
+	if !ok {
+		return nil, fmt.Errorf("ZSK private key does not implement crypto.Signer")
+	}
+
+	hdr := rrset[0].Header()
+	rrsig := &dns.RRSIG{
+		Hdr: dns.RR_Header{
+			Name:   hdr.Name,
+			Rrtype: dns.TypeRRSIG,
+			Class:  dns.ClassINET,
+			Ttl:    hdr.Ttl,
+		},
+		TypeCovered: hdr.Rrtype,
+		Algorithm:   s.algorithm,
+		Labels:      uint8(dns.CountLabel(hdr.Name)),
+		OrigTtl:     hdr.Ttl,
+		Expiration:  expiration,
+		Inception:   inception,
+		KeyTag:      s.zsk.KeyTag(),
+		SignerName:  s.zone,
+	}
+
+	if err := rrsig.Sign(signer, rrset); err != nil {
+		return nil, fmt.Errorf("signing RRset: %w", err)
+	}
+
+	return rrsig, nil
 }
 
 // GenerateNSEC3Salt generates a random salt for NSEC3.

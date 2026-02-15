@@ -64,6 +64,54 @@ func (r *Resolver) NameExists(hostname string) bool {
 	return false
 }
 
+// GetRecordTypes returns all DNS record types that exist for a given hostname.
+// This is used for generating NSEC records for authenticated denial of existence.
+func (r *Resolver) GetRecordTypes(hostname string) []uint16 {
+	hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
+	var types []uint16
+
+	// Always include RRSIG and NSEC for DNSSEC-signed names
+	// (these will be generated dynamically, but need to be in the type bitmap)
+
+	if _, _, found := r.LookupA(hostname); found {
+		types = append(types, 1) // A
+	}
+	if records := r.LookupNS(hostname); len(records) > 0 {
+		types = append(types, 2) // NS
+	}
+	if _, _, found := r.LookupCNAME(hostname); found {
+		types = append(types, 5) // CNAME
+	}
+	// Check if this is a zone apex - SOA only exists at apex
+	for _, zone := range r.config.Zones {
+		zoneBase := strings.TrimSuffix(zone.Name, ".")
+		if hostname == zoneBase {
+			types = append(types, 6) // SOA
+			break
+		}
+	}
+	if records := r.LookupMX(hostname); len(records) > 0 {
+		types = append(types, 15) // MX
+	}
+	if records := r.LookupTXT(hostname); len(records) > 0 {
+		types = append(types, 16) // TXT
+	}
+	if _, _, found := r.LookupAAAA(hostname); found {
+		types = append(types, 28) // AAAA
+	}
+	if records := r.LookupSRV(hostname); len(records) > 0 {
+		types = append(types, 33) // SRV
+	}
+
+	// If any types exist, add RRSIG (46) and NSEC (47)
+	if len(types) > 0 {
+		types = append(types, 46) // RRSIG
+		types = append(types, 47) // NSEC
+	}
+
+	return types
+}
+
 // IPv6ToReverseName converts an IPv6 address to its reverse DNS name
 func IPv6ToReverseName(ip net.IP) string {
 	ip = ip.To16()

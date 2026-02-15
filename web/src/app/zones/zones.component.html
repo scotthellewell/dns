@@ -175,6 +175,26 @@
         <input type="number" id="ttl" [(ngModel)]="formData.ttl" min="60">
       </div>
 
+      <!-- SOA Fields Section -->
+      <div class="soa-section">
+        <h3>SOA Configuration</h3>
+        <p class="section-description">Override the default SOA (Start of Authority) record values. Leave empty to use tenant defaults.</p>
+        
+        <div class="form-group">
+          <label for="primary_ns">Primary Nameserver (MName)</label>
+          <input type="text" id="primary_ns" [(ngModel)]="formData.primary_ns" 
+                 placeholder="e.g., dns-1.example.com">
+          <small>The primary authoritative nameserver for this zone. Leave empty to use tenant default.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="admin_email">Admin Email (RName)</label>
+          <input type="text" id="admin_email" [(ngModel)]="formData.admin_email" 
+                 placeholder="e.g., hostmaster.example.com">
+          <small>Administrative contact email (in DNS format without &#64;). Leave empty for hostmaster.zone.</small>
+        </div>
+      </div>
+
       <!-- DNSSEC Section -->
       <div class="dnssec-section">
         <h3>DNSSEC</h3>

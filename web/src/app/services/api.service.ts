@@ -27,6 +27,9 @@ export interface Zone {
   domain?: string;          // For reverse zones - domain for PTR records
   strip_prefix: boolean;
   ttl: number;
+  // SOA fields
+  primary_ns?: string;      // Primary nameserver (MName) - leave empty for tenant default
+  admin_email?: string;     // Admin email (RName) - leave empty for hostmaster@zone
   // DNSSEC fields (populated when fetching zone details)
   dnssec_enabled?: boolean;
   dnssec_algorithm?: string;

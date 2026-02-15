@@ -490,6 +490,8 @@ type ZoneResponse struct {
 	Domain      string          `json:"domain,omitempty"` // For reverse zones - domain suffix for PTR records
 	StripPrefix bool            `json:"strip_prefix"`
 	TTL         uint32          `json:"ttl"`
+	PrimaryNS   string          `json:"primary_ns,omitempty"`  // SOA MName - primary authoritative nameserver
+	AdminEmail  string          `json:"admin_email,omitempty"` // SOA RName - admin email (DNS format)
 }
 
 // RecordResponse represents a DNS record in API responses
@@ -1853,7 +1855,7 @@ func (h *Handler) handleMaintenance(w http.ResponseWriter, r *http.Request) {
 	case "POST":
 		// Trigger compaction or deduplication
 		action := r.URL.Query().Get("action")
-		
+
 		switch action {
 		case "compact":
 			log.Printf("[maintenance] Starting database compaction...")
@@ -1904,7 +1906,7 @@ func (h *Handler) handleMaintenance(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[maintenance] Deduplication complete: removed %d duplicate records", removed)
 
 			h.jsonResponse(w, map[string]interface{}{
-				"success":          true,
+				"success":            true,
 				"duplicates_removed": removed,
 			})
 

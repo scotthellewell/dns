@@ -152,6 +152,8 @@ func (h *Handler) handleZonesStorage(w http.ResponseWriter, r *http.Request, ses
 				Domain:      z.Domain,
 				StripPrefix: z.StripPrefix,
 				TTL:         z.TTL,
+				PrimaryNS:   z.PrimaryNS,
+				AdminEmail:  z.AdminEmail,
 			})
 		}
 		if resp == nil {
@@ -168,6 +170,8 @@ func (h *Handler) handleZonesStorage(w http.ResponseWriter, r *http.Request, ses
 			Domain      string `json:"domain"`
 			StripPrefix bool   `json:"strip_prefix"`
 			TTL         int    `json:"ttl"`
+			PrimaryNS   string `json:"primary_ns"`
+			AdminEmail  string `json:"admin_email"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			h.errorResponse(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -211,6 +215,8 @@ func (h *Handler) handleZonesStorage(w http.ResponseWriter, r *http.Request, ses
 			Domain:      req.Domain,
 			StripPrefix: req.StripPrefix,
 			TTL:         uint32(req.TTL),
+			PrimaryNS:   req.PrimaryNS,
+			AdminEmail:  req.AdminEmail,
 		}
 
 		if err := store.CreateZone(zone); err != nil {
@@ -337,6 +343,8 @@ func (h *Handler) handleZoneStorage(w http.ResponseWriter, r *http.Request, sess
 			Domain:      zone.Domain,
 			StripPrefix: zone.StripPrefix,
 			TTL:         zone.TTL,
+			PrimaryNS:   zone.PrimaryNS,
+			AdminEmail:  zone.AdminEmail,
 		})
 
 	case "PUT":
@@ -347,6 +355,8 @@ func (h *Handler) handleZoneStorage(w http.ResponseWriter, r *http.Request, sess
 			Domain      string `json:"domain"`
 			StripPrefix bool   `json:"strip_prefix"`
 			TTL         int    `json:"ttl"`
+			PrimaryNS   string `json:"primary_ns"`
+			AdminEmail  string `json:"admin_email"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			h.errorResponse(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -375,6 +385,8 @@ func (h *Handler) handleZoneStorage(w http.ResponseWriter, r *http.Request, sess
 				StripPrefix: req.StripPrefix,
 				TenantID:    zone.TenantID,
 				TTL:         uint32(req.TTL),
+				PrimaryNS:   req.PrimaryNS,
+				AdminEmail:  req.AdminEmail,
 			}
 			if err := store.CreateZone(newZone); err != nil {
 				// Try to restore the old zone on failure
@@ -389,6 +401,8 @@ func (h *Handler) handleZoneStorage(w http.ResponseWriter, r *http.Request, sess
 			zone.Domain = req.Domain
 			zone.StripPrefix = req.StripPrefix
 			zone.TTL = uint32(req.TTL)
+			zone.PrimaryNS = req.PrimaryNS
+			zone.AdminEmail = req.AdminEmail
 
 			if err := store.UpdateZone(zone); err != nil {
 				h.errorResponse(w, "Failed to update zone: "+err.Error(), http.StatusInternalServerError)

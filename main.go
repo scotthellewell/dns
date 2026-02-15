@@ -875,8 +875,8 @@ func applyDelete(store *storage.Store, entityType, entityID string) error {
 	case sync.EntityZone:
 		return store.DeleteZone(entityID)
 	case sync.EntityRecord:
-		// Delete record by ID - the ID is all we have from sync
-		return store.DeleteRecordByID(entityID)
+		// Delete record by content ID - uses content-based matching for consistency across servers
+		return store.DeleteRecordByContentID(entityID)
 	case sync.EntityUser:
 		return store.DeleteUser(entityID)
 	case sync.EntityTenant:
@@ -959,9 +959,12 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 				log.Printf("[sync] Zone %s unchanged, skipping update", zone.Name)
 				return nil
 			}
-			return store.UpdateZone(&zone)
+			// Use UpdateZonePreserveSerial to preserve the synced serial
+			// and prevent triggering further sync events
+			return store.UpdateZonePreserveSerial(&zone)
 		}
-		return store.CreateZone(&zone)
+		// Use CreateZonePreserveSerial to preserve the synced serial
+		return store.CreateZonePreserveSerial(&zone)
 
 	case sync.EntityRecord:
 		var record storage.Record

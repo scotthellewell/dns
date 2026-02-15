@@ -147,11 +147,13 @@ func (s *Server) loadDNSSEC(cfg *config.ParsedConfig) {
 
 // LoadDNSSECFromStorage loads all DNSSEC keys from the database
 func (s *Server) LoadDNSSECFromStorage() error {
+	log.Printf("[DNSSEC] LoadDNSSECFromStorage called")
 	s.mu.RLock()
 	store := s.dnssecKeyStore
 	s.mu.RUnlock()
 
 	if store == nil {
+		log.Printf("[DNSSEC] No key store configured, skipping storage loading")
 		return nil // No storage configured, use file-based loading
 	}
 
@@ -160,17 +162,21 @@ func (s *Server) LoadDNSSECFromStorage() error {
 		return fmt.Errorf("failed to list DNSSEC zones: %w", err)
 	}
 
+	log.Printf("[DNSSEC] Found %d zones with DNSSEC enabled", len(zones))
 	for _, zoneName := range zones {
+		log.Printf("[DNSSEC] Processing zone: %s", zoneName)
 		keys, err := store.GetDNSSECKeys(zoneName)
 		if err != nil {
-			log.Printf("Failed to get DNSSEC keys for %s: %v", zoneName, err)
+			log.Printf("[DNSSEC] Failed to get DNSSEC keys for %s: %v", zoneName, err)
 			continue
 		}
 
 		if !keys.IsEnabled() {
+			log.Printf("[DNSSEC] Zone %s has DNSSEC disabled, skipping", zoneName)
 			continue
 		}
 
+		log.Printf("[DNSSEC] Loading keys for zone %s (algorithm: %s)", zoneName, keys.GetAlgorithm())
 		err = s.dnssec.LoadKeyFromData(dnssec.StoredKeyData{
 			Zone:       keys.GetZoneName(),
 			Algorithm:  keys.GetAlgorithm(),
@@ -178,9 +184,9 @@ func (s *Server) LoadDNSSECFromStorage() error {
 			ZSKPrivate: keys.GetZSKPrivate(),
 		})
 		if err != nil {
-			log.Printf("Failed to load DNSSEC keys for %s from storage: %v", zoneName, err)
+			log.Printf("[DNSSEC] Failed to load DNSSEC keys for %s from storage: %v", zoneName, err)
 		} else {
-			log.Printf("Loaded DNSSEC keys for zone %s from storage", zoneName)
+			log.Printf("[DNSSEC] Successfully loaded DNSSEC keys for zone %s from storage", zoneName)
 		}
 	}
 
@@ -406,6 +412,34 @@ func (s *Server) isAuthoritative(name string, cfg *config.ParsedConfig) bool {
 	}
 
 	return false
+}
+
+// createSOAForZone creates a SOA record for the given zone to include in Authority section
+func (s *Server) createSOAForZone(zoneName string, cfg *config.ParsedConfig) *dns.SOA {
+	// Use resolver's LookupSOA which has the actual SOA data
+	record, found := s.getResolver().LookupSOA(zoneName)
+	if !found {
+		// Try without trailing dot
+		record, found = s.getResolver().LookupSOA(strings.TrimSuffix(zoneName, "."))
+	}
+	if found {
+		return &dns.SOA{
+			Hdr: dns.RR_Header{
+				Name:   zoneName,
+				Rrtype: dns.TypeSOA,
+				Class:  dns.ClassINET,
+				Ttl:    record.TTL,
+			},
+			Ns:      record.MName,
+			Mbox:    record.RName,
+			Serial:  record.Serial,
+			Refresh: record.Refresh,
+			Retry:   record.Retry,
+			Expire:  record.Expire,
+			Minttl:  record.Minimum,
+		}
+	}
+	return nil
 }
 
 // handleRedirect handles DNS redirects by looking up the target host and returning its IPs
@@ -786,16 +820,129 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	// If name exists but has no records of the requested type, use NOERROR
 	if len(m.Answer) == 0 && len(r.Question) > 0 {
 		qname := r.Question[0].Name
+		qtype := r.Question[0].Qtype
+		isAuth := s.isAuthoritative(qname, cfg)
+		log.Printf("[NSEC DEBUG] Empty answer for %s type %d, isAuthoritative=%v, numZones=%d", qname, qtype, isAuth, len(cfg.Zones))
 		// Check if this is an authoritative zone and if the name exists
-		if s.isAuthoritative(qname, cfg) {
+		if isAuth {
+			log.Printf("[NSEC DEBUG] isAuthoritative=true for %s", qname)
 			// For authoritative zones, check if name exists
 			resolver := s.getResolver()
+			dnssecMgr := s.getDNSSEC()
+
+			// Find the zone for this query by looking for SOA record
+			var zoneName string
+			// First try the exact name
+			qnameLower := strings.ToLower(qname)
+			if _, found := resolver.LookupSOA(qnameLower); found {
+				zoneName = qnameLower
+				if !strings.HasSuffix(zoneName, ".") {
+					zoneName += "."
+				}
+			} else {
+				// Walk up the domain hierarchy to find the zone apex
+				parts := strings.Split(strings.TrimSuffix(qnameLower, "."), ".")
+				for i := 1; i < len(parts); i++ {
+					testZone := strings.Join(parts[i:], ".") + "."
+					if _, found := resolver.LookupSOA(testZone); found {
+						zoneName = testZone
+						break
+					}
+				}
+			}
+			log.Printf("[NSEC DEBUG] zoneName=%q (from SOA lookup), wantDNSSEC=%v, HasDNSSEC=%v", zoneName, wantDNSSEC, dnssecMgr.HasDNSSEC())
+
 			if resolver.NameExists(qname) {
-				// Name exists, just no records of this type - NOERROR
+				// Name exists, just no records of this type - NOERROR (NODATA)
 				m.Rcode = dns.RcodeSuccess
+				log.Printf("[NSEC DEBUG] NODATA for %s, wantDNSSEC=%v, hasDNSSEC=%v, zoneName=%q", qname, wantDNSSEC, dnssecMgr.HasDNSSEC(), zoneName)
+
+				// For DNSSEC, add SOA and NSEC to Authority section
+				if wantDNSSEC && dnssecMgr.HasDNSSEC() && zoneName != "" {
+					// Add SOA to Authority section
+					if soa := s.createSOAForZone(zoneName, cfg); soa != nil {
+						m.Ns = append(m.Ns, soa)
+						log.Printf("[NSEC DEBUG] Added SOA for %s", zoneName)
+					} else {
+						log.Printf("[NSEC DEBUG] Failed to create SOA for %s", zoneName)
+					}
+
+					// Get record types that exist at this name
+					types := resolver.GetRecordTypes(qname)
+					log.Printf("[NSEC DEBUG] Got %d record types for %s: %v", len(types), qname, types)
+					if len(types) > 0 {
+						signer := dnssecMgr.GetSigner(qname)
+						if signer != nil {
+							log.Printf("[NSEC DEBUG] Got signer for %s", qname)
+							// Create NSEC record - for NODATA, next domain points to itself (simplified)
+							nsec := signer.CreateNSEC(qname, qname, types, 3600)
+							m.Ns = append(m.Ns, nsec)
+
+							// Sign NSEC
+							inception := uint32(time.Now().Add(-1 * time.Hour).Unix())
+							expiration := uint32(time.Now().Add(7 * 24 * time.Hour).Unix())
+							if rrsig, err := signer.SignNSEC(nsec, inception, expiration); err == nil {
+								m.Ns = append(m.Ns, rrsig)
+							} else {
+								log.Printf("[NSEC DEBUG] SignNSEC error: %v", err)
+							}
+
+							// Sign SOA
+							if len(m.Ns) > 0 {
+								soaRRset := []dns.RR{m.Ns[0]}
+								if soaRRsig, err := signer.SignRRSet(soaRRset, inception, expiration); err == nil {
+									m.Ns = append(m.Ns, soaRRsig)
+								} else {
+									log.Printf("[NSEC DEBUG] SignRRSet error: %v", err)
+								}
+							}
+						} else {
+							log.Printf("[NSEC DEBUG] No signer found for %s", qname)
+						}
+					}
+				}
 			} else {
 				// Name truly doesn't exist - NXDOMAIN
 				m.Rcode = dns.RcodeNameError
+
+				// For DNSSEC, add SOA and NSEC to prove non-existence
+				if wantDNSSEC && dnssecMgr.HasDNSSEC() && zoneName != "" {
+					// Add SOA to Authority section
+					if soa := s.createSOAForZone(zoneName, cfg); soa != nil {
+						m.Ns = append(m.Ns, soa)
+
+						signer := dnssecMgr.GetSigner(qname)
+						if signer != nil {
+							inception := uint32(time.Now().Add(-1 * time.Hour).Unix())
+							expiration := uint32(time.Now().Add(7 * 24 * time.Hour).Unix())
+
+							// Sign SOA
+							soaRRset := []dns.RR{soa}
+							if soaRRsig, err := signer.SignRRSet(soaRRset, inception, expiration); err == nil {
+								m.Ns = append(m.Ns, soaRRsig)
+							}
+
+							// For NXDOMAIN, create NSEC proving this name doesn't exist
+							// Use zone apex with types that exist at apex: SOA, NS, etc.
+							types := resolver.GetRecordTypes(strings.TrimSuffix(zoneName, "."))
+							if len(types) == 0 {
+								// At minimum, apex has SOA and NS
+								types = []uint16{6, 2, 46, 47, 48} // SOA, NS, RRSIG, NSEC, DNSKEY
+							}
+							nsec := signer.CreateNSEC(zoneName, zoneName, types, 3600)
+							m.Ns = append(m.Ns, nsec)
+
+							if rrsig, err := signer.SignNSEC(nsec, inception, expiration); err == nil {
+								m.Ns = append(m.Ns, rrsig)
+							}
+						}
+					}
+				}
+			}
+
+			// If requested type is A but we're returning NODATA, don't proceed further
+			if qtype == dns.TypeA || qtype == dns.TypeAAAA {
+				// Already handled above
 			}
 		} else {
 			// Not authoritative - default to success (let caching handle it)
