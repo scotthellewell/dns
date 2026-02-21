@@ -1,18 +1,9 @@
 package dnssecval
 
 import (
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rsa"
-	"crypto/sha1"
-	"crypto/sha256"
-	"crypto/sha512"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
-	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -433,7 +424,7 @@ func getParentZone(zone string) string {
 	return zone[idx+1:]
 }
 
-// VerifyRRSIG verifies an RRSIG against a DNSKEY
+// VerifyRRSIG verifies an RRSIG against a DNSKEY using the dns library's built-in method
 func VerifyRRSIG(rrsig *dns.RRSIG, key *dns.DNSKEY, rrset []dns.RR) error {
 	if rrsig == nil || key == nil {
 		return errors.New("nil rrsig or key")
@@ -449,242 +440,9 @@ func VerifyRRSIG(rrsig *dns.RRSIG, key *dns.DNSKEY, rrset []dns.RR) error {
 		return fmt.Errorf("algorithm mismatch: sig=%d key=%d", rrsig.Algorithm, key.Algorithm)
 	}
 
-	// Build the signed data
-	signedData, err := buildSignedData(rrsig, rrset)
-	if err != nil {
-		return fmt.Errorf("failed to build signed data: %w", err)
-	}
-
-	// Decode signature
-	signature, err := base64.StdEncoding.DecodeString(rrsig.Signature)
-	if err != nil {
-		return fmt.Errorf("failed to decode signature: %w", err)
-	}
-
-	// Verify based on algorithm
-	switch rrsig.Algorithm {
-	case dns.RSASHA1, dns.RSASHA1NSEC3SHA1:
-		return verifyRSASHA1(signedData, signature, key)
-	case dns.RSASHA256:
-		return verifyRSASHA256(signedData, signature, key)
-	case dns.RSASHA512:
-		return verifyRSASHA512(signedData, signature, key)
-	case dns.ECDSAP256SHA256:
-		return verifyECDSAP256(signedData, signature, key)
-	case dns.ECDSAP384SHA384:
-		return verifyECDSAP384(signedData, signature, key)
-	default:
-		return fmt.Errorf("unsupported algorithm: %d", rrsig.Algorithm)
-	}
-}
-
-// buildSignedData constructs the data that was signed
-func buildSignedData(rrsig *dns.RRSIG, rrset []dns.RR) ([]byte, error) {
-	// RRSIG RDATA without signature
-	sigBuf := make([]byte, 1024)
-	off := 0
-
-	// Type Covered (2 bytes)
-	sigBuf[off] = byte(rrsig.TypeCovered >> 8)
-	sigBuf[off+1] = byte(rrsig.TypeCovered)
-	off += 2
-
-	// Algorithm (1 byte)
-	sigBuf[off] = rrsig.Algorithm
-	off++
-
-	// Labels (1 byte)
-	sigBuf[off] = rrsig.Labels
-	off++
-
-	// Original TTL (4 bytes)
-	sigBuf[off] = byte(rrsig.OrigTtl >> 24)
-	sigBuf[off+1] = byte(rrsig.OrigTtl >> 16)
-	sigBuf[off+2] = byte(rrsig.OrigTtl >> 8)
-	sigBuf[off+3] = byte(rrsig.OrigTtl)
-	off += 4
-
-	// Signature Expiration (4 bytes)
-	sigBuf[off] = byte(rrsig.Expiration >> 24)
-	sigBuf[off+1] = byte(rrsig.Expiration >> 16)
-	sigBuf[off+2] = byte(rrsig.Expiration >> 8)
-	sigBuf[off+3] = byte(rrsig.Expiration)
-	off += 4
-
-	// Signature Inception (4 bytes)
-	sigBuf[off] = byte(rrsig.Inception >> 24)
-	sigBuf[off+1] = byte(rrsig.Inception >> 16)
-	sigBuf[off+2] = byte(rrsig.Inception >> 8)
-	sigBuf[off+3] = byte(rrsig.Inception)
-	off += 4
-
-	// Key Tag (2 bytes)
-	sigBuf[off] = byte(rrsig.KeyTag >> 8)
-	sigBuf[off+1] = byte(rrsig.KeyTag)
-	off += 2
-
-	// Signer's Name (wire format)
-	signerName := dns.Fqdn(strings.ToLower(rrsig.SignerName))
-	nameBytes := make([]byte, 256)
-	n, err := dns.PackDomainName(signerName, nameBytes, 0, nil, false)
-	if err != nil {
-		return nil, err
-	}
-	copy(sigBuf[off:], nameBytes[:n])
-	off += n
-
-	// Sort and canonicalize RRset
-	var rrData []byte
-	for _, rr := range rrset {
-		// Set TTL to original TTL
-		rr.Header().Ttl = rrsig.OrigTtl
-		// Lowercase owner name
-		rr.Header().Name = strings.ToLower(rr.Header().Name)
-
-		buf := make([]byte, 4096)
-		n, err := dns.PackRR(rr, buf, 0, nil, false)
-		if err != nil {
-			return nil, err
-		}
-		rrData = append(rrData, buf[:n]...)
-	}
-
-	result := make([]byte, off+len(rrData))
-	copy(result, sigBuf[:off])
-	copy(result[off:], rrData)
-
-	return result, nil
-}
-
-func verifyRSASHA1(data, signature []byte, key *dns.DNSKEY) error {
-	pubKey, err := parseRSAPublicKey(key.PublicKey)
-	if err != nil {
-		return err
-	}
-
-	hash := sha1.Sum(data)
-	return rsa.VerifyPKCS1v15(pubKey, crypto.SHA1, hash[:], signature)
-}
-
-func verifyRSASHA256(data, signature []byte, key *dns.DNSKEY) error {
-	pubKey, err := parseRSAPublicKey(key.PublicKey)
-	if err != nil {
-		return err
-	}
-
-	hash := sha256.Sum256(data)
-	return rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, hash[:], signature)
-}
-
-func verifyRSASHA512(data, signature []byte, key *dns.DNSKEY) error {
-	pubKey, err := parseRSAPublicKey(key.PublicKey)
-	if err != nil {
-		return err
-	}
-
-	hash := sha512.Sum512(data)
-	return rsa.VerifyPKCS1v15(pubKey, crypto.SHA512, hash[:], signature)
-}
-
-func verifyECDSAP256(data, signature []byte, key *dns.DNSKEY) error {
-	pubKey, err := parseECDSAPublicKey(key.PublicKey, 256)
-	if err != nil {
-		return err
-	}
-
-	if len(signature) != 64 {
-		return errors.New("invalid P256 signature length")
-	}
-
-	r := new(big.Int).SetBytes(signature[:32])
-	s := new(big.Int).SetBytes(signature[32:])
-
-	hash := sha256.Sum256(data)
-	if !ecdsa.Verify(pubKey, hash[:], r, s) {
-		return errors.New("ECDSA P256 signature verification failed")
-	}
-	return nil
-}
-
-func verifyECDSAP384(data, signature []byte, key *dns.DNSKEY) error {
-	pubKey, err := parseECDSAPublicKey(key.PublicKey, 384)
-	if err != nil {
-		return err
-	}
-
-	if len(signature) != 96 {
-		return errors.New("invalid P384 signature length")
-	}
-
-	r := new(big.Int).SetBytes(signature[:48])
-	s := new(big.Int).SetBytes(signature[48:])
-
-	hash := sha512.Sum384(data)
-	if !ecdsa.Verify(pubKey, hash[:], r, s) {
-		return errors.New("ECDSA P384 signature verification failed")
-	}
-	return nil
-}
-
-func parseRSAPublicKey(keyData string) (*rsa.PublicKey, error) {
-	decoded, err := base64.StdEncoding.DecodeString(keyData)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(decoded) < 3 {
-		return nil, errors.New("key data too short")
-	}
-
-	// Parse exponent length
-	expLen := int(decoded[0])
-	off := 1
-	if expLen == 0 {
-		expLen = int(decoded[1])<<8 | int(decoded[2])
-		off = 3
-	}
-
-	if off+expLen > len(decoded) {
-		return nil, errors.New("invalid exponent length")
-	}
-
-	exp := new(big.Int).SetBytes(decoded[off : off+expLen])
-	mod := new(big.Int).SetBytes(decoded[off+expLen:])
-
-	return &rsa.PublicKey{
-		N: mod,
-		E: int(exp.Int64()),
-	}, nil
-}
-
-func parseECDSAPublicKey(keyData string, bits int) (*ecdsa.PublicKey, error) {
-	decoded, err := base64.StdEncoding.DecodeString(keyData)
-	if err != nil {
-		return nil, err
-	}
-
-	keyLen := bits / 8
-	if len(decoded) != keyLen*2 {
-		return nil, fmt.Errorf("invalid key length: got %d, expected %d", len(decoded), keyLen*2)
-	}
-
-	x := new(big.Int).SetBytes(decoded[:keyLen])
-	y := new(big.Int).SetBytes(decoded[keyLen:])
-
-	var curve elliptic.Curve
-	if bits == 256 {
-		curve = elliptic.P256()
-	} else if bits == 384 {
-		curve = elliptic.P384()
-	} else {
-		return nil, fmt.Errorf("unsupported curve size: %d", bits)
-	}
-
-	return &ecdsa.PublicKey{
-		Curve: curve,
-		X:     x,
-		Y:     y,
-	}, nil
+	// Use the dns library's built-in verification which properly handles
+	// canonicalization, sorting, and all cryptographic algorithms
+	return rrsig.Verify(key, rrset)
 }
 
 // CheckDS verifies that a DNSKEY matches a DS record

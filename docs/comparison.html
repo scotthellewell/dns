@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DNS Server Feature Comparison</title>
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --border: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --accent-green: #22c55e;
+            --accent-red: #ef4444;
+            --accent-yellow: #eab308;
+            --accent-blue: #3b82f6;
+            --highlight: #1e3a8a;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.6;
+            padding: 40px 20px;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            margin-bottom: 40px;
+        }
+        
+        .legend {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+        
+        .legend-icon {
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+        
+        .table-wrapper {
+            overflow-x: auto;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+        
+        th, td {
+            padding: 12px 16px;
+            text-align: center;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        
+        th {
+            background: var(--bg-dark);
+            font-weight: 600;
+            color: var(--text-secondary);
+            position: sticky;
+            top: 0;
+        }
+        
+        th:first-child, td:first-child {
+            text-align: left;
+            position: sticky;
+            left: 0;
+            background: var(--bg-card);
+            z-index: 1;
+            min-width: 180px;
+        }
+        
+        th:first-child {
+            background: var(--bg-dark);
+            z-index: 2;
+        }
+        
+        tr:hover td {
+            background: rgba(59, 130, 246, 0.1);
+        }
+        
+        tr:hover td:first-child {
+            background: rgba(59, 130, 246, 0.15);
+        }
+        
+        .ours {
+            background: var(--highlight) !important;
+        }
+        
+        .ours th, .ours td {
+            background: var(--highlight) !important;
+        }
+        
+        .server-name {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .server-type {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            display: block;
+            margin-top: 2px;
+        }
+        
+        .yes { color: var(--accent-green); }
+        .no { color: var(--accent-red); }
+        .partial { color: var(--accent-yellow); }
+        .plugin { color: var(--accent-blue); }
+        
+        .feature-category {
+            background: var(--bg-dark);
+            font-weight: 600;
+            color: var(--accent-blue);
+        }
+        
+        .feature-category td {
+            background: var(--bg-dark) !important;
+            text-align: left;
+            padding-left: 24px;
+        }
+        
+        .notes {
+            margin-top: 40px;
+            padding: 24px;
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+        
+        .notes h2 {
+            font-size: 1.25rem;
+            margin-bottom: 16px;
+            color: var(--text-primary);
+        }
+        
+        .notes ul {
+            list-style: none;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+        }
+        
+        .notes li {
+            color: var(--text-secondary);
+            padding-left: 24px;
+            position: relative;
+        }
+        
+        .notes li::before {
+            content: "•";
+            position: absolute;
+            left: 8px;
+            color: var(--accent-blue);
+        }
+        
+        .notes strong {
+            color: var(--text-primary);
+        }
+        
+        @media (max-width: 768px) {
+            h1 { font-size: 1.75rem; }
+            .subtitle { font-size: 1rem; }
+            th, td { padding: 8px 12px; font-size: 0.8rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DNS Server Feature Comparison</h1>
+        <p class="subtitle">Comparing this DNS server with popular alternatives</p>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <span class="legend-icon yes">✓</span>
+                <span>Full Support</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-icon partial">◐</span>
+                <span>Partial/Limited</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-icon plugin">⊕</span>
+                <span>Via Plugin/Extension</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-icon no">✗</span>
+                <span>Not Supported</span>
+            </div>
+        </div>
+        
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th class="ours">This Server</th>
+                        <th>BIND 9</th>
+                        <th>PowerDNS</th>
+                        <th>Knot DNS</th>
+                        <th>CoreDNS</th>
+                        <th>Unbound</th>
+                        <th>dnsmasq</th>
+                        <th>Pi-hole</th>
+                        <th>NSD</th>
+                        <th>AdGuard Home</th>
+                        <th>Technitium</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Server Type Row -->
+                    <tr>
+                        <td>
+                            <span class="server-name">Primary Use</span>
+                        </td>
+                        <td class="ours">
+                            <span class="server-type">Auth + Recursive</span>
+                        </td>
+                        <td><span class="server-type">Auth + Recursive</span></td>
+                        <td><span class="server-type">Auth + Recursive</span></td>
+                        <td><span class="server-type">Authoritative</span></td>
+                        <td><span class="server-type">Flexible/Cloud</span></td>
+                        <td><span class="server-type">Recursive Only</span></td>
+                        <td><span class="server-type">DNS Forwarder</span></td>
+                        <td><span class="server-type">Ad Blocker</span></td>
+                        <td><span class="server-type">Authoritative</span></td>
+                        <td><span class="server-type">Ad Blocker</span></td>
+                        <td><span class="server-type">Auth + Recursive</span></td>
+                    </tr>
+                    
+                    <!-- Core DNS Features -->
+                    <tr class="feature-category">
+                        <td colspan="12">Core DNS Features</td>
+                    </tr>
+                    <tr>
+                        <td>Authoritative DNS</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Recursive Resolver</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Iterative Resolution</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Zone Transfers (AXFR/IXFR)</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Secondary Zone Support</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Dynamic Updates (RFC 2136)</td>
+                        <td class="ours"><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    
+                    <!-- Security Features -->
+                    <tr class="feature-category">
+                        <td colspan="12">Security Features</td>
+                    </tr>
+                    <tr>
+                        <td>DNSSEC Signing</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>DNSSEC Validation</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>DNS over TLS (DoT)</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>DNS over HTTPS (DoH)</td>
+                        <td class="ours"><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>TSIG Authentication</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Rate Limiting (RRL)</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Auto TLS (ACME/Let's Encrypt)</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="partial">◐</span></td>
+                    </tr>
+                    
+                    <!-- Caching & Performance -->
+                    <tr class="feature-category">
+                        <td colspan="12">Caching &amp; Performance</td>
+                    </tr>
+                    <tr>
+                        <td>Response Caching</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Serve-Stale (RFC 8767)</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                    </tr>
+                    <tr>
+                        <td>Prefetch/Cache Warmup</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                    </tr>
+                    <tr>
+                        <td>NS Delegation Caching</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Negative Caching</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    
+                    <!-- Filtering & Blocking -->
+                    <tr class="feature-category">
+                        <td colspan="12">Filtering &amp; Blocking</td>
+                    </tr>
+                    <tr>
+                        <td>Domain Blocklist</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Blocklist Auto-Update</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Whitelist Support</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Regex Filtering</td>
+                        <td class="ours"><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    
+                    <!-- Management & Operations -->
+                    <tr class="feature-category">
+                        <td colspan="12">Management &amp; Operations</td>
+                    </tr>
+                    <tr>
+                        <td>Web UI</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>REST API</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Query Logging</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Statistics/Metrics</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Multi-Server Clustering</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                    </tr>
+                    <tr>
+                        <td>Config Sync Across Nodes</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                    </tr>
+                    <tr>
+                        <td>Zone File Import (RFC 1035)</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    
+                    <!-- Deployment -->
+                    <tr class="feature-category">
+                        <td colspan="12">Deployment &amp; Platform</td>
+                    </tr>
+                    <tr>
+                        <td>Single Binary</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                    </tr>
+                    <tr>
+                        <td>Docker Support</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Embedded Database</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Open Source</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Written In</td>
+                        <td class="ours"><span class="server-type">Go</span></td>
+                        <td><span class="server-type">C</span></td>
+                        <td><span class="server-type">C++</span></td>
+                        <td><span class="server-type">C</span></td>
+                        <td><span class="server-type">Go</span></td>
+                        <td><span class="server-type">C</span></td>
+                        <td><span class="server-type">C</span></td>
+                        <td><span class="server-type">PHP/Shell</span></td>
+                        <td><span class="server-type">C</span></td>
+                        <td><span class="server-type">Go</span></td>
+                        <td><span class="server-type">.NET</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="notes">
+            <h2>Notes</h2>
+            <ul>
+                <li><strong>BIND 9:</strong> The industry standard, extremely feature-rich but complex configuration</li>
+                <li><strong>PowerDNS:</strong> Split architecture (Authoritative + Recursor), SQL backend support</li>
+                <li><strong>Knot DNS:</strong> High-performance authoritative-only, requires Knot Resolver for recursion</li>
+                <li><strong>CoreDNS:</strong> Plugin-based architecture, popular in Kubernetes environments</li>
+                <li><strong>Unbound:</strong> Recursive-only resolver focused on security and performance</li>
+                <li><strong>dnsmasq:</strong> Lightweight DHCP/DNS forwarder for small networks</li>
+                <li><strong>Pi-hole:</strong> Network-wide ad blocker, uses dnsmasq or unbound underneath</li>
+                <li><strong>NSD:</strong> Authoritative-only server from NLnet Labs, pairs with Unbound</li>
+                <li><strong>AdGuard Home:</strong> Privacy-focused DNS with ad blocking, similar to Pi-hole</li>
+                <li><strong>Technitium:</strong> Full-featured DNS server with web UI, similar goals to this project</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
