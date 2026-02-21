@@ -360,6 +360,48 @@
                         <td><span class="no">✗</span></td>
                         <td><span class="yes">✓</span></td>
                     </tr>
+                    <tr>
+                        <td>NOTIFY (RFC 1996)</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Zone Delegations/Glue</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="plugin">⊕</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Auto Reverse DNS (PTR)</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                    </tr>
                     
                     <!-- Security Features -->
                     <tr class="feature-category">
@@ -409,7 +451,7 @@
                     </tr>
                     <tr>
                         <td>DNS over HTTPS (DoH)</td>
-                        <td class="ours"><span class="no">✗</span></td>
+                        <td class="ours"><span class="yes">✓</span></td>
                         <td><span class="partial">◐</span></td>
                         <td><span class="partial">◐</span></td>
                         <td><span class="yes">✓</span></td>
@@ -599,6 +641,34 @@
                         <td><span class="yes">✓</span></td>
                         <td><span class="yes">✓</span></td>
                     </tr>
+                    <tr>
+                        <td>Safe Search Redirect</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Bloom Filter Blocklist</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                    </tr>
                     
                     <!-- Management & Operations -->
                     <tr class="feature-category">
@@ -700,6 +770,62 @@
                         <td><span class="no">✗</span></td>
                         <td><span class="yes">✓</span></td>
                         <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td>Multi-Tenancy</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                    </tr>
+                    <tr>
+                        <td>WebAuthn/Passkeys</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                    </tr>
+                    <tr>
+                        <td>OIDC/SSO Auth</td>
+                        <td class="ours"><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                    </tr>
+                    <tr>
+                        <td>API Key Auth</td>
+                        <td class="ours"><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="partial">◐</span></td>
+                        <td><span class="no">✗</span></td>
+                        <td><span class="yes">✓</span></td>
                         <td><span class="yes">✓</span></td>
                     </tr>
                     
