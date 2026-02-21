@@ -283,13 +283,54 @@ func (s *Server) UpdateConfig(cfg *config.ParsedConfig) {
 	}
 }
 
+// customMsgAcceptFunc is like dns.DefaultMsgAcceptFunc but also allows OpcodeUpdate (RFC 2136)
+func customMsgAcceptFunc(dh dns.Header) dns.MsgAcceptAction {
+	if isResponse := dh.Bits&(1<<15) != 0; isResponse {
+		return dns.MsgIgnore
+	}
+
+	// Allow Query, Notify, and Update opcodes
+	opcode := int(dh.Bits>>11) & 0xF
+	if opcode != dns.OpcodeQuery && opcode != dns.OpcodeNotify && opcode != dns.OpcodeUpdate {
+		return dns.MsgRejectNotImplemented
+	}
+
+	// For UPDATE, we allow more RRs in the sections
+	if opcode == dns.OpcodeUpdate {
+		// UPDATE messages can have multiple RRs - just do basic validation
+		if dh.Qdcount != 1 {
+			return dns.MsgReject
+		}
+		return dns.MsgAccept
+	}
+
+	// Standard validation for Query/Notify
+	if dh.Qdcount != 1 {
+		return dns.MsgReject
+	}
+	if dh.Ancount > 1 {
+		return dns.MsgReject
+	}
+	if dh.Nscount > 1 {
+		return dns.MsgReject
+	}
+	if dh.Arcount > 2 {
+		return dns.MsgReject
+	}
+	return dns.MsgAccept
+}
+
 // Start starts the DNS server on UDP and TCP
 func (s *Server) Start() error {
 	dns.HandleFunc(".", s.handleRequest)
 
 	// Start UDP server
 	go func() {
-		udpServer := &dns.Server{Addr: s.config.Listen, Net: "udp"}
+		udpServer := &dns.Server{
+			Addr:          s.config.Listen,
+			Net:           "udp",
+			MsgAcceptFunc: customMsgAcceptFunc,
+		}
 		log.Printf("Starting UDP DNS server on %s", s.config.Listen)
 		if err := udpServer.ListenAndServe(); err != nil {
 			log.Fatalf("Failed to start UDP server: %v", err)
@@ -297,7 +338,11 @@ func (s *Server) Start() error {
 	}()
 
 	// Start TCP server
-	tcpServer := &dns.Server{Addr: s.config.Listen, Net: "tcp"}
+	tcpServer := &dns.Server{
+		Addr:          s.config.Listen,
+		Net:           "tcp",
+		MsgAcceptFunc: customMsgAcceptFunc,
+	}
 	log.Printf("Starting TCP DNS server on %s", s.config.Listen)
 	return tcpServer.ListenAndServe()
 }
@@ -682,9 +727,6 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			log.Printf("[PANIC] handleRequest panic: %v", r)
 		}
 	}()
-
-	// Debug: log opcode for all requests
-	log.Printf("[DEBUG] handleRequest: opcode=%d (OpcodeUpdate=%d), questions=%d", r.Opcode, dns.OpcodeUpdate, len(r.Question))
 
 	startTime := time.Now()
 
