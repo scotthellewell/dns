@@ -128,8 +128,14 @@ func (a *serverStorageAdapter) AddRecord(zone string, record interface{}) error 
 		return fmt.Errorf("record must be map[string]interface{}")
 	}
 
+	// Normalize zone name - remove trailing dot if present
+	zone = strings.TrimSuffix(zone, ".")
+
 	// Extract record data
 	name, _ := rec["name"].(string)
+	// Normalize name - remove trailing dot if present
+	name = strings.TrimSuffix(name, ".")
+	
 	recordType, _ := rec["type"].(string)
 	ttl, _ := rec["ttl"].(int)
 	if ttl == 0 {
