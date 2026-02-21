@@ -38,23 +38,29 @@ type Stats struct {
 
 // Handler provides the HTTP API for the DNS server
 type Handler struct {
-	config             *config.ParsedConfig
-	rawConfig          *config.Config
-	configPath         string
-	stats              *Stats
-	metrics            *metrics.Collector
-	configMu           sync.RWMutex
-	onConfigUpdate     func(*config.ParsedConfig)
-	onClearDNSSECCache func()      // Called to clear DNSSEC validation caches
-	store              interface{} // Optional storage backend (*storage.Store)
-	secondaryMgr       SecondaryZoneProvider
-	secondaryMgrLock   sync.RWMutex
-	blocklistMgr       BlocklistManager
+	config              *config.ParsedConfig
+	rawConfig           *config.Config
+	configPath          string
+	stats               *Stats
+	metrics             *metrics.Collector
+	configMu            sync.RWMutex
+	onConfigUpdate      func(*config.ParsedConfig)
+	onClearDNSSECCache  func()                                  // Called to clear DNSSEC validation caches
+	onUpdateConfigChange func(enabled bool, allowedNets, allowedKeys []string, autoPTR bool) // Called when dynamic update config changes
+	store               interface{} // Optional storage backend (*storage.Store)
+	secondaryMgr        SecondaryZoneProvider
+	secondaryMgrLock    sync.RWMutex
+	blocklistMgr        BlocklistManager
 }
 
 // SetClearDNSSECCacheCallback sets the callback to clear DNSSEC caches
 func (h *Handler) SetClearDNSSECCacheCallback(fn func()) {
 	h.onClearDNSSECCache = fn
+}
+
+// SetUpdateConfigChangeCallback sets the callback for dynamic update config changes
+func (h *Handler) SetUpdateConfigChangeCallback(fn func(enabled bool, allowedNets, allowedKeys []string, autoPTR bool)) {
+	h.onUpdateConfigChange = fn
 }
 
 // SetSecondaryManager sets the secondary zone manager for convert operations

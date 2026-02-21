@@ -2586,12 +2586,12 @@ func (h *Handler) handleDynamicUpdatesStorage(w http.ResponseWriter, r *http.Req
 		}
 
 		// Notify server to reload update handler config
-		if h.onConfigUpdate != nil {
-			// Rebuild and update full config
-			if err := h.UpdateConfigFromStorage(); err != nil {
-				h.errorResponse(w, "Config saved but failed to reload: "+err.Error(), http.StatusInternalServerError)
-				return
+		if h.onUpdateConfigChange != nil {
+			keyNames := make([]string, len(cfg.TSIGKeys))
+			for i, key := range cfg.TSIGKeys {
+				keyNames[i] = key.Name
 			}
+			h.onUpdateConfigChange(cfg.Enabled, cfg.AllowedNets, keyNames, cfg.AutoPTR)
 		}
 
 		h.jsonResponse(w, map[string]interface{}{"status": "ok"})

@@ -417,6 +417,17 @@ func main() {
 		}
 	}
 
+	// Set callback for dynamic update config changes (from API)
+	apiHandler.SetUpdateConfigChangeCallback(func(enabled bool, allowedNets, allowedKeys []string, autoPTR bool) {
+		srv.SetUpdateConfig(server.UpdateConfig{
+			Enabled:     enabled,
+			AllowedNets: allowedNets,
+			AllowedKeys: allowedKeys,
+			AutoPTR:     autoPTR,
+		})
+		log.Printf("RFC 2136 Dynamic Updates config updated (enabled: %v, allowed nets: %v)", enabled, allowedNets)
+	})
+
 	// Initialize blocklist manager with composite storage:
 	// - Main database (store) for config, sources, whitelist (synced across cluster)
 	// - Blocklist database for domain entries only (local, not synced - too large)
