@@ -152,6 +152,12 @@ func (s *Server) LoadDNSSECFromStorage() error {
 	store := s.dnssecKeyStore
 	s.mu.RUnlock()
 
+	return s.loadDNSSECFromStorageWithStore(store)
+}
+
+// loadDNSSECFromStorageWithStore loads DNSSEC keys using the provided store
+// Called from both LoadDNSSECFromStorage (public) and UpdateConfig (internal)
+func (s *Server) loadDNSSECFromStorageWithStore(store DNSSECKeyStore) error {
 	if store == nil {
 		log.Printf("[DNSSEC] No key store configured, skipping storage loading")
 		return nil // No storage configured, use file-based loading
@@ -208,6 +214,13 @@ func (s *Server) UpdateConfig(cfg *config.ParsedConfig) {
 	s.recursion = recurse.New(cfg.Recursion)
 	s.dnssec = dnssec.NewManager()
 	s.loadDNSSEC(cfg)
+	// Also load DNSSEC keys from storage (database) - important for cluster sync
+	store := s.dnssecKeyStore
+	if store != nil {
+		if err := s.loadDNSSECFromStorageWithStore(store); err != nil {
+			log.Printf("[DNSSEC] Warning: Failed to load DNSSEC keys from storage during config update: %v", err)
+		}
+	}
 	if s.transfer != nil {
 		s.transfer.UpdateConfig(cfg)
 	}
