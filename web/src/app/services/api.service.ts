@@ -158,6 +158,12 @@ export interface RecursionConfig {
   upstream?: string[];
   timeout: number;
   max_depth: number;
+  // Prefetch settings
+  prefetch?: string[];          // Domains to pre-cache at startup (empty = defaults)
+  prefetch_threshold?: number;  // Min hits before proactive refresh (default: 2)
+  prefetch_window?: number;     // TTL percentage to trigger refresh (default: 0.2)
+  stale_enabled?: boolean;      // Serve stale records while refreshing
+  stale_max_age?: number;       // How long to serve stale in seconds (default: 30)
 }
 
 export interface DnssecZone {

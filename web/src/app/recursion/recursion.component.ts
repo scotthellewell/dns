@@ -35,7 +35,12 @@ export class RecursionComponent implements OnInit {
     mode: 'partial',
     upstream: [],
     timeout: 5,
-    max_depth: 10
+    max_depth: 10,
+    prefetch: [],
+    prefetch_threshold: 2,
+    prefetch_window: 0.2,
+    stale_enabled: true,
+    stale_max_age: 30
   };
   
   modes = [
@@ -44,7 +49,15 @@ export class RecursionComponent implements OnInit {
     { value: 'full', label: 'Full - Open resolver (use with caution)' }
   ];
   
+  defaultPrefetchDomains = [
+    'google.com', 'www.google.com', 'googleapis.com', 'youtube.com',
+    'microsoft.com', 'login.microsoftonline.com', 'azure.com',
+    'amazon.com', 'amazonaws.com', 'apple.com', 'icloud.com',
+    'facebook.com', 'instagram.com', 'cloudflare.com', 'github.com'
+  ];
+  
   newUpstream = '';
+  newPrefetchDomain = '';
   
   loading = false;
   saving = false;
@@ -68,11 +81,32 @@ export class RecursionComponent implements OnInit {
           mode: 'partial',
           upstream: [],
           timeout: 5,
-          max_depth: 10
+          max_depth: 10,
+          prefetch: [],
+          prefetch_threshold: 2,
+          prefetch_window: 0.2,
+          stale_enabled: true,
+          stale_max_age: 30
         };
-        // Ensure upstream is always an array
+        // Ensure arrays are always defined
         if (!this.config.upstream) {
           this.config.upstream = [];
+        }
+        if (!this.config.prefetch) {
+          this.config.prefetch = [];
+        }
+        // Set defaults for new fields if not present
+        if (this.config.prefetch_threshold === undefined) {
+          this.config.prefetch_threshold = 2;
+        }
+        if (this.config.prefetch_window === undefined) {
+          this.config.prefetch_window = 0.2;
+        }
+        if (this.config.stale_enabled === undefined) {
+          this.config.stale_enabled = true;
+        }
+        if (this.config.stale_max_age === undefined) {
+          this.config.stale_max_age = 30;
         }
         this.loading = false;
         this.cdr.detectChanges();
@@ -112,5 +146,24 @@ export class RecursionComponent implements OnInit {
 
   removeUpstream(server: string) {
     this.config.upstream = this.config.upstream!.filter(s => s !== server);
+  }
+
+  addPrefetchDomain() {
+    if (this.newPrefetchDomain && !this.config.prefetch!.includes(this.newPrefetchDomain)) {
+      this.config.prefetch!.push(this.newPrefetchDomain);
+      this.newPrefetchDomain = '';
+    }
+  }
+
+  removePrefetchDomain(domain: string) {
+    this.config.prefetch = this.config.prefetch!.filter(d => d !== domain);
+  }
+
+  useDefaultPrefetch() {
+    this.config.prefetch = [...this.defaultPrefetchDomains];
+  }
+
+  clearPrefetch() {
+    this.config.prefetch = [];
   }
 }

@@ -227,6 +227,9 @@ func main() {
 	// Create DNS server
 	srv := server.New(parsed)
 
+	// Start recursive DNS cache warmup in background
+	srv.WarmupRecursionCache()
+
 	// Set up secondary zone cache persistence
 	srv.SetSecondaryCacheStore(&secondaryCacheAdapter{store: store})
 

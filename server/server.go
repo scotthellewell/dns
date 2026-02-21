@@ -329,6 +329,18 @@ func (s *Server) SetSecondaryCacheStore(store secondary.CacheStore) {
 	}
 }
 
+// WarmupRecursionCache pre-caches popular domains for faster recursive lookups
+// This runs in a background goroutine and returns immediately
+func (s *Server) WarmupRecursionCache() {
+	s.mu.RLock()
+	recursion := s.recursion
+	s.mu.RUnlock()
+
+	if recursion != nil {
+		go recursion.Warmup()
+	}
+}
+
 // SetBlocklist sets the blocklist checker for the server.
 func (s *Server) SetBlocklist(bl BlocklistChecker) {
 	s.mu.Lock()

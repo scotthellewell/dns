@@ -8,28 +8,38 @@ import (
 
 // Entry represents a cached DNS response
 type Entry struct {
-	IPs       []net.IP
-	CNAMEs    []string
-	TTL       uint32
-	ExpiresAt time.Time
-	Negative  bool // True if this is a negative cache entry (NXDOMAIN/NODATA)
+	IPs        []net.IP
+	CNAMEs     []string
+	TTL        uint32
+	ExpiresAt  time.Time
+	Negative   bool      // True if this is a negative cache entry (NXDOMAIN/NODATA)
+	HitCount   int       // Number of times this entry has been accessed
+	LastAccess time.Time // When this entry was last accessed
+	Fetching   bool      // True if this entry is being refreshed in background
 }
 
 // Cache provides TTL-based caching for DNS responses
 type Cache struct {
-	mu      sync.RWMutex
-	entries map[string]*Entry
-	maxSize int
+	mu       sync.RWMutex
+	entries  map[string]*Entry
+	maxSize  int
+	staleAge time.Duration // How long to serve stale entries (0 = disabled)
 }
 
 // New creates a new cache with the specified maximum size
 func New(maxSize int) *Cache {
+	return NewWithStale(maxSize, 0)
+}
+
+// NewWithStale creates a new cache with stale serving enabled
+func NewWithStale(maxSize int, staleAge time.Duration) *Cache {
 	if maxSize <= 0 {
 		maxSize = 10000
 	}
 	c := &Cache{
-		entries: make(map[string]*Entry),
-		maxSize: maxSize,
+		entries:  make(map[string]*Entry),
+		maxSize:  maxSize,
+		staleAge: staleAge,
 	}
 	// Start background cleanup goroutine
 	go c.cleanup()
@@ -41,19 +51,43 @@ func Key(name string, qtype uint16) string {
 	return name + ":" + string(rune(qtype))
 }
 
-// Get retrieves an entry from the cache if it exists and hasn't expired
-func (c *Cache) Get(key string) (*Entry, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+// Get retrieves an entry from the cache if it exists and hasn't expired.
+// Returns (entry, isStale, found)
+// If isStale is true, the entry is expired but within the stale window.
+func (c *Cache) Get(key string) (*Entry, bool, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	entry, ok := c.entries[key]
 	if !ok {
-		return nil, false
+		return nil, false, false
 	}
 
+	now := time.Now()
+	
+	// Update access tracking
+	entry.HitCount++
+	entry.LastAccess = now
+
 	// Check if expired
-	if time.Now().After(entry.ExpiresAt) {
-		return nil, false
+	expired := now.After(entry.ExpiresAt)
+	
+	if expired {
+		// Check if within stale window
+		if c.staleAge > 0 && now.Before(entry.ExpiresAt.Add(c.staleAge)) {
+			// Return stale entry with TTL of 1 (indicates stale)
+			return &Entry{
+				IPs:        entry.IPs,
+				CNAMEs:     entry.CNAMEs,
+				TTL:        1, // Stale
+				ExpiresAt:  entry.ExpiresAt,
+				Negative:   entry.Negative,
+				HitCount:   entry.HitCount,
+				LastAccess: entry.LastAccess,
+				Fetching:   entry.Fetching,
+			}, true, true
+		}
+		return nil, false, false
 	}
 
 	// Calculate remaining TTL
@@ -64,11 +98,15 @@ func (c *Cache) Get(key string) (*Entry, bool) {
 
 	// Return a copy with adjusted TTL
 	return &Entry{
-		IPs:       entry.IPs,
-		CNAMEs:    entry.CNAMEs,
-		TTL:       remaining,
-		ExpiresAt: entry.ExpiresAt,
-	}, true
+		IPs:        entry.IPs,
+		CNAMEs:     entry.CNAMEs,
+		TTL:        remaining,
+		ExpiresAt:  entry.ExpiresAt,
+		Negative:   entry.Negative,
+		HitCount:   entry.HitCount,
+		LastAccess: entry.LastAccess,
+		Fetching:   entry.Fetching,
+	}, false, true
 }
 
 // Set stores an entry in the cache
@@ -97,6 +135,8 @@ func (c *Cache) SetWithNegative(key string, ips []net.IP, cnames []string, ttl u
 		ttl = maxTTL
 	}
 
+	now := time.Now()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -106,11 +146,14 @@ func (c *Cache) SetWithNegative(key string, ips []net.IP, cnames []string, ttl u
 	}
 
 	c.entries[key] = &Entry{
-		IPs:       ips,
-		CNAMEs:    cnames,
-		TTL:       ttl,
-		ExpiresAt: time.Now().Add(time.Duration(ttl) * time.Second),
-		Negative:  negative,
+		IPs:        ips,
+		CNAMEs:     cnames,
+		TTL:        ttl,
+		ExpiresAt:  now.Add(time.Duration(ttl) * time.Second),
+		Negative:   negative,
+		HitCount:   0,
+		LastAccess: now,
+		Fetching:   false,
 	}
 }
 
@@ -174,4 +217,100 @@ func (c *Cache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = make(map[string]*Entry)
+}
+
+// PrefetchCandidate represents an entry that should be prefetched
+type PrefetchCandidate struct {
+	Key       string
+	HitCount  int
+	TTLPct    float64 // Percentage of TTL remaining (0.0 - 1.0)
+	ExpiresAt time.Time
+}
+
+// GetPrefetchCandidates returns entries that are close to expiring and have been accessed enough
+// minHits: minimum hit count required
+// ttlThreshold: refresh when TTL remaining is below this percentage (e.g., 0.2 = 20%)
+func (c *Cache) GetPrefetchCandidates(minHits int, ttlThreshold float64) []PrefetchCandidate {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var candidates []PrefetchCandidate
+
+	for key, entry := range c.entries {
+		// Skip negative cache entries and entries already being fetched
+		if entry.Negative || entry.Fetching {
+			continue
+		}
+
+		// Skip entries that haven't been accessed enough
+		if entry.HitCount < minHits {
+			continue
+		}
+
+		// Calculate TTL percentage remaining
+		totalTTL := float64(entry.TTL)
+		if totalTTL == 0 {
+			continue
+		}
+		remaining := time.Until(entry.ExpiresAt).Seconds()
+		if remaining < 0 {
+			remaining = 0
+		}
+		pctRemaining := remaining / float64(entry.TTL)
+
+		// Skip if not close enough to expiring
+		if pctRemaining > ttlThreshold {
+			continue
+		}
+
+		candidates = append(candidates, PrefetchCandidate{
+			Key:       key,
+			HitCount:  entry.HitCount,
+			TTLPct:    pctRemaining,
+			ExpiresAt: entry.ExpiresAt,
+		})
+	}
+
+	return candidates
+}
+
+// MarkFetching marks an entry as currently being fetched
+// Returns true if the entry exists and was marked, false otherwise
+func (c *Cache) MarkFetching(key string, fetching bool) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.entries[key]
+	if !ok {
+		return false
+	}
+	entry.Fetching = fetching
+	return true
+}
+
+// Stats returns cache statistics
+type CacheStats struct {
+	Size       int
+	MaxSize    int
+	StaleAge   time.Duration
+	HotEntries int // Entries with >0 hits
+}
+
+func (c *Cache) Stats() CacheStats {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	hotCount := 0
+	for _, entry := range c.entries {
+		if entry.HitCount > 0 {
+			hotCount++
+		}
+	}
+
+	return CacheStats{
+		Size:       len(c.entries),
+		MaxSize:    c.maxSize,
+		StaleAge:   c.staleAge,
+		HotEntries: hotCount,
+	}
 }

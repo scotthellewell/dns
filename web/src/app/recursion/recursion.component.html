@@ -61,6 +61,86 @@
 
     <div class="card-section">
       <div class="section-header">
+        <h2>Cache Prefetching</h2>
+        <p class="section-desc">Proactively refresh popular cache entries before they expire</p>
+      </div>
+
+      <div class="toggle-row">
+        <mat-slide-toggle [(ngModel)]="config.stale_enabled">
+          Serve stale records while refreshing
+        </mat-slide-toggle>
+        <span class="toggle-hint">Returns expired records for up to {{ config.stale_max_age }}s while fetching fresh data</span>
+      </div>
+
+      <div class="form-row">
+        <mat-form-field appearance="outline">
+          <mat-label>Prefetch Threshold (hits)</mat-label>
+          <input matInput type="number" [(ngModel)]="config.prefetch_threshold" min="1" max="100">
+          <mat-hint>Min accesses before proactive refresh</mat-hint>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Prefetch Window (%)</mat-label>
+          <input matInput type="number" [(ngModel)]="config.prefetch_window" min="0.05" max="0.9" step="0.05">
+          <mat-hint>Refresh when TTL is below this %</mat-hint>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Stale Max Age (seconds)</mat-label>
+          <input matInput type="number" [(ngModel)]="config.stale_max_age" min="5" max="300">
+          <mat-hint>How long to serve stale records</mat-hint>
+        </mat-form-field>
+      </div>
+    </div>
+
+    <div class="card-section">
+      <div class="section-header">
+        <h2>Startup Warmup Domains</h2>
+        <p class="section-desc">Domains to pre-cache when the server starts (leave empty for defaults)</p>
+      </div>
+
+      <div class="server-list">
+        @for (domain of config.prefetch; track domain) {
+          <div class="server-item">
+            <div class="server-info">
+              <mat-icon>language</mat-icon>
+              <span>{{ domain }}</span>
+            </div>
+            <button mat-icon-button color="warn" (click)="removePrefetchDomain(domain)">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </div>
+        }
+        @if (!config.prefetch || config.prefetch.length === 0) {
+          <div class="empty-text">Using default domain list (google.com, microsoft.com, etc.)</div>
+        }
+      </div>
+
+      <div class="add-row">
+        <mat-form-field appearance="outline" class="flex-grow">
+          <mat-label>Domain</mat-label>
+          <input matInput [(ngModel)]="newPrefetchDomain" placeholder="example.com" (keyup.enter)="addPrefetchDomain()">
+        </mat-form-field>
+        <button mat-raised-button color="primary" (click)="addPrefetchDomain()" [disabled]="!newPrefetchDomain">
+          <mat-icon>add</mat-icon>
+          Add
+        </button>
+      </div>
+
+      <div class="button-row">
+        <button mat-stroked-button (click)="useDefaultPrefetch()">
+          <mat-icon>playlist_add</mat-icon>
+          Use Defaults
+        </button>
+        <button mat-stroked-button color="warn" (click)="clearPrefetch()" [disabled]="!config.prefetch?.length">
+          <mat-icon>clear_all</mat-icon>
+          Clear All
+        </button>
+      </div>
+    </div>
+
+    <div class="card-section">
+      <div class="section-header">
         <h2>Advanced Settings</h2>
         <p class="section-desc">Configure timeouts and limits</p>
       </div>

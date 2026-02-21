@@ -57,6 +57,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 12px 0;
+  margin-bottom: 16px;
   
   .toggle-info {
     h3 {
@@ -72,6 +73,18 @@
       margin: 4px 0 0 0;
     }
   }
+
+  .toggle-hint {
+    color: #94a3b8;
+    font-size: 13px;
+    margin-left: 16px;
+  }
+}
+
+.button-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
 }
 
 .chip-list {

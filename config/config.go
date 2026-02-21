@@ -302,6 +302,18 @@ type RecursionConfig struct {
 	Timeout int `json:"timeout"`
 	// MaxDepth is the maximum CNAME chain depth (default: 10)
 	MaxDepth int `json:"max_depth"`
+	// Prefetch lists domains to pre-cache at startup for faster initial lookups
+	// If empty, uses a default list of common domains (google.com, etc.)
+	// Set to ["none"] to disable prefetching entirely
+	Prefetch []string `json:"prefetch"`
+	// PrefetchThreshold is the minimum hit count before proactively refreshing (default: 2)
+	PrefetchThreshold int `json:"prefetch_threshold"`
+	// PrefetchWindow is the TTL percentage remaining when to trigger refresh (default: 0.2 = 20%)
+	PrefetchWindow float64 `json:"prefetch_window"`
+	// StaleEnabled allows serving expired records while refreshing (default: true when prefetch enabled)
+	StaleEnabled *bool `json:"stale_enabled,omitempty"`
+	// StaleMaxAge is how long to serve stale records in seconds (default: 30)
+	StaleMaxAge int `json:"stale_max_age"`
 }
 
 // TSIGKey defines a TSIG key for authenticating zone transfers and updates
@@ -599,11 +611,16 @@ const (
 )
 
 type ParsedRecursion struct {
-	Enabled  bool
-	Mode     string // "disabled", "partial", or "full"
-	Upstream []string
-	Timeout  int
-	MaxDepth int
+	Enabled           bool
+	Mode              string   // "disabled", "partial", or "full"
+	Upstream          []string
+	Timeout           int
+	MaxDepth          int
+	Prefetch          []string // Domains to pre-cache at startup
+	PrefetchThreshold int      // Min hits before proactive refresh
+	PrefetchWindow    float64  // TTL percentage remaining to trigger refresh
+	StaleEnabled      bool     // Serve stale records while refreshing
+	StaleMaxAge       int      // How long to serve stale (seconds)
 }
 
 // ParsedTSIGKey holds a parsed TSIG key
@@ -785,6 +802,42 @@ func SaveConfig(path string, cfg *Config) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+// parsePrefetchThreshold returns the prefetch threshold with default
+func parsePrefetchThreshold(val int) int {
+	if val <= 0 {
+		return 2 // Default: require at least 2 hits before proactive refresh
+	}
+	return val
+}
+
+// parsePrefetchWindow returns the prefetch window with default and bounds
+func parsePrefetchWindow(val float64) float64 {
+	if val <= 0 {
+		return 0.2 // Default: 20% of TTL remaining
+	}
+	if val > 1.0 {
+		return 1.0
+	}
+	return val
+}
+
+// parseStaleEnabled returns whether stale serving is enabled
+func parseStaleEnabled(val *bool, recursionEnabled bool) bool {
+	if val != nil {
+		return *val
+	}
+	// Default: enabled when recursion is enabled
+	return recursionEnabled
+}
+
+// parseStaleMaxAge returns the stale max age with default
+func parseStaleMaxAge(val int) int {
+	if val <= 0 {
+		return 30 // Default: 30 seconds
+	}
+	return val
+}
+
 // Parse validates and parses the configuration
 func (c *Config) Parse() (*ParsedConfig, error) {
 	// Set recursion defaults
@@ -813,11 +866,16 @@ func (c *Config) Parse() (*ParsedConfig, error) {
 		DNSSEC:      c.DNSSEC,
 		Delegations: make([]ParsedDelegation, 0),
 		Recursion: ParsedRecursion{
-			Enabled:  c.Recursion.Enabled,
-			Mode:     recursionMode,
-			Upstream: c.Recursion.Upstream,
-			Timeout:  timeout,
-			MaxDepth: maxDepth,
+			Enabled:           c.Recursion.Enabled,
+			Mode:              recursionMode,
+			Upstream:          c.Recursion.Upstream,
+			Timeout:           timeout,
+			MaxDepth:          maxDepth,
+			Prefetch:          c.Recursion.Prefetch,
+			PrefetchThreshold: parsePrefetchThreshold(c.Recursion.PrefetchThreshold),
+			PrefetchWindow:    parsePrefetchWindow(c.Recursion.PrefetchWindow),
+			StaleEnabled:      parseStaleEnabled(c.Recursion.StaleEnabled, c.Recursion.Enabled),
+			StaleMaxAge:       parseStaleMaxAge(c.Recursion.StaleMaxAge),
 		},
 		ARecords:     make(map[string][]ParsedARecord),
 		AAAARecords:  make(map[string][]ParsedAAAARecord),

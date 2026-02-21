@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -31,14 +32,21 @@ var rootServers = []string{
 	"202.12.27.33:53",   // m.root-servers.net
 }
 
+// delegation represents a cached NS delegation
+type delegation struct {
+	servers   []string  // NS server addresses (IP:port)
+	expiresAt time.Time // When this delegation expires
+}
+
 // Resolver handles recursive DNS queries
 type Resolver struct {
-	config    config.ParsedRecursion
-	client    *dns.Client
-	servers   []string
-	iterative bool                 // true if doing iterative resolution from root
-	cache     *cache.Cache         // TTL-based response cache
-	validator *dnssecval.Validator // DNSSEC validator
+	config      config.ParsedRecursion
+	client      *dns.Client
+	servers     []string
+	iterative   bool                 // true if doing iterative resolution from root
+	cache       *cache.Cache         // TTL-based response cache
+	validator   *dnssecval.Validator // DNSSEC validator
+	delegations sync.Map             // zone name -> *delegation (cached NS records)
 }
 
 // New creates a new recursive resolver
@@ -59,19 +67,79 @@ func New(cfg config.ParsedRecursion) *Resolver {
 		}
 	}
 
+	// Create cache with stale support if enabled
+	var c *cache.Cache
+	if cfg.StaleEnabled && cfg.StaleMaxAge > 0 {
+		c = cache.NewWithStale(10000, time.Duration(cfg.StaleMaxAge)*time.Second)
+	} else {
+		c = cache.New(10000)
+	}
+
 	r := &Resolver{
 		config:    cfg,
 		client:    &dns.Client{Timeout: time.Duration(cfg.Timeout) * time.Second},
 		servers:   servers,
 		iterative: iterative,
-		cache:     cache.New(10000), // 10k entry cache
-		validator: dnssecval.New(),  // DNSSEC validator
+		cache:     c,
+		validator: dnssecval.New(), // DNSSEC validator
 	}
 
 	// Set the query function for DNSSEC validation
 	r.validator.SetQueryFunc(r.queryForValidation)
 
+	// Start background prefetch loop if threshold is set
+	if cfg.PrefetchThreshold > 0 {
+		go r.prefetchLoop()
+	}
+
 	return r
+}
+
+// getDelegation returns cached NS servers for a zone if not expired
+func (r *Resolver) getDelegation(zone string) ([]string, bool) {
+	if val, ok := r.delegations.Load(zone); ok {
+		d := val.(*delegation)
+		if time.Now().Before(d.expiresAt) {
+			return d.servers, true
+		}
+		// Expired - delete it
+		r.delegations.Delete(zone)
+	}
+	return nil, false
+}
+
+// setDelegation caches NS servers for a zone with TTL
+func (r *Resolver) setDelegation(zone string, servers []string, ttl uint32) {
+	if len(servers) == 0 {
+		return
+	}
+	// Cap TTL at 1 hour
+	if ttl > 3600 {
+		ttl = 3600
+	}
+	r.delegations.Store(zone, &delegation{
+		servers:   servers,
+		expiresAt: time.Now().Add(time.Duration(ttl) * time.Second),
+	})
+}
+
+// findCachedDelegation finds the closest cached delegation for a name
+// Returns the servers and the zone they're for
+func (r *Resolver) findCachedDelegation(name string) ([]string, string) {
+	// Try progressively shorter names to find closest delegation
+	// e.g., for "www.google.com.", try "www.google.com.", "google.com.", "com.", "."
+	parts := strings.Split(strings.TrimSuffix(name, "."), ".")
+	for i := 0; i < len(parts); i++ {
+		zone := strings.Join(parts[i:], ".") + "."
+		if servers, ok := r.getDelegation(zone); ok {
+			return servers, zone
+		}
+	}
+	// Also check root
+	if servers, ok := r.getDelegation("."); ok {
+		return servers, "."
+	}
+	return nil, ""
 }
 
 // queryForValidation performs iterative resolution for DNSSEC validation (DNSKEY/DS)
@@ -293,12 +361,22 @@ func (r *Resolver) resolve(name string, qtype uint16, depth int, forceExternal b
 
 	// Check cache first
 	cacheKey := cache.Key(name, qtype)
-	if entry, ok := r.cache.Get(cacheKey); ok {
+	if entry, stale, ok := r.cache.Get(cacheKey); ok {
 		// Handle negative cache entries
 		if entry.Negative {
 			// Return empty result for negative cache hit
 			return result
 		}
+		
+		// If entry is stale, trigger background refresh
+		if stale && !entry.Fetching {
+			r.cache.MarkFetching(cacheKey, true)
+			go func() {
+				defer r.cache.MarkFetching(cacheKey, false)
+				r.queryExternal(name, qtype, depth)
+			}()
+		}
+		
 		result.IPs = entry.IPs
 		result.CNAMEs = entry.CNAMEs
 		result.TTL = entry.TTL
@@ -406,6 +484,15 @@ func (r *Resolver) queryIterative(name string, qtype uint16, nameservers []strin
 		return nil, nil, 0, false
 	}
 
+	// If starting from root servers (depth 0), check for cached delegations
+	if depth == 0 && len(nameservers) == len(rootServers) {
+		if cachedServers, zone := r.findCachedDelegation(name); cachedServers != nil {
+			// Found a cached delegation closer to the target
+			log.Printf("[recurse] Using cached delegation for %s (from %s)", name, zone)
+			return r.queryIterative(name, qtype, cachedServers, depth+1)
+		}
+	}
+
 	m := new(dns.Msg)
 	m.SetQuestion(name, qtype)
 	m.RecursionDesired = false // Iterative - don't ask for recursion
@@ -489,8 +576,10 @@ func (r *Resolver) queryIterative(name string, qtype uint16, nameservers []strin
 
 			// Check for delegation (NS records in authority section)
 			if len(result.resp.Ns) > 0 {
-				nextServers := r.extractDelegation(result.resp)
+				nextServers, zone, ttl := r.extractDelegationWithZone(result.resp)
 				if len(nextServers) > 0 {
+					// Cache this delegation for future lookups
+					r.setDelegation(zone, nextServers, ttl)
 					cancel() // Cancel other pending queries
 					return r.queryIterative(name, qtype, nextServers, depth+1)
 				}
@@ -513,13 +602,77 @@ func (r *Resolver) queryIterative(name string, qtype uint16, nameservers []strin
 
 	// If we got a response but couldn't use it, try delegation from last response
 	if lastResp != nil && len(lastResp.Ns) > 0 {
-		nextServers := r.extractDelegation(lastResp)
+		nextServers, zone, ttl := r.extractDelegationWithZone(lastResp)
 		if len(nextServers) > 0 {
+			// Cache this delegation for future lookups
+			r.setDelegation(zone, nextServers, ttl)
 			return r.queryIterative(name, qtype, nextServers, depth+1)
 		}
 	}
 
 	return nil, nil, 0, false
+}
+
+// extractDelegationWithZone extracts nameserver IPs from a delegation response
+// Also returns the zone name and TTL for caching
+func (r *Resolver) extractDelegationWithZone(resp *dns.Msg) ([]string, string, uint32) {
+	var nsNames []string
+	var ipv4Servers []string
+	var ipv6Servers []string
+	var zone string
+	var ttl uint32 = 3600 // Default 1 hour
+
+	// Get NS record names from authority section
+	for _, rr := range resp.Ns {
+		if ns, ok := rr.(*dns.NS); ok {
+			nsNames = append(nsNames, ns.Ns)
+			if zone == "" {
+				zone = ns.Hdr.Name
+			}
+			if ns.Hdr.Ttl < ttl {
+				ttl = ns.Hdr.Ttl
+			}
+		}
+	}
+
+	// Try to find glue records in additional section
+	for _, rr := range resp.Extra {
+		switch v := rr.(type) {
+		case *dns.A:
+			for _, nsName := range nsNames {
+				if strings.EqualFold(v.Hdr.Name, nsName) {
+					ipv4Servers = append(ipv4Servers, v.A.String()+":53")
+					break
+				}
+			}
+		case *dns.AAAA:
+			for _, nsName := range nsNames {
+				if strings.EqualFold(v.Hdr.Name, nsName) {
+					ipv6Servers = append(ipv6Servers, "["+v.AAAA.String()+"]:53")
+					break
+				}
+			}
+		}
+	}
+
+	// Return IPv4 first, then IPv6 as fallback
+	servers := append(ipv4Servers, ipv6Servers...)
+
+	// If no glue records, resolve the NS names
+	if len(servers) == 0 && len(nsNames) > 0 {
+		// Try to resolve the first NS name (avoid infinite recursion)
+		for _, nsName := range nsNames {
+			ips, _, _, found := r.queryIterative(nsName, dns.TypeA, rootServers, 0)
+			if found && len(ips) > 0 {
+				for _, ip := range ips {
+					servers = append(servers, ip.String()+":53")
+				}
+				break
+			}
+		}
+	}
+
+	return servers, zone, ttl
 }
 
 // extractDelegation extracts nameserver IPs from a delegation response
@@ -723,8 +876,10 @@ func (r *Resolver) queryAnyIterative(name string, qtype uint16, nameservers []st
 
 			// Check for delegation (NS records in authority section)
 			if len(result.resp.Ns) > 0 {
-				nextServers := r.extractDelegation(result.resp)
+				nextServers, zone, ttl := r.extractDelegationWithZone(result.resp)
 				if len(nextServers) > 0 {
+					// Cache this delegation for future lookups
+					r.setDelegation(zone, nextServers, ttl)
 					cancel()
 					return r.queryAnyIterative(name, qtype, nextServers, depth+1)
 				}
@@ -757,4 +912,175 @@ func (r *Resolver) ClearAllDNSSECCaches() {
 	if r.validator != nil {
 		r.validator.ClearAllCaches()
 	}
+}
+
+// DefaultPrefetchDomains is the default list of popular domains to pre-cache
+var DefaultPrefetchDomains = []string{
+	// Major search/services
+	"google.com",
+	"www.google.com",
+	"googleapis.com",
+	"youtube.com",
+	"www.youtube.com",
+	// Microsoft services
+	"microsoft.com",
+	"www.microsoft.com",
+	"login.microsoftonline.com",
+	"azure.com",
+	// Amazon services
+	"amazon.com",
+	"www.amazon.com",
+	"amazonaws.com",
+	// Apple services
+	"apple.com",
+	"www.apple.com",
+	"icloud.com",
+	// Meta/Facebook
+	"facebook.com",
+	"www.facebook.com",
+	"instagram.com",
+	// Cloud providers
+	"cloudflare.com",
+	"github.com",
+	"aws.amazon.com",
+	// CDNs
+	"cdn.cloudflare.net",
+	"cloudfront.net",
+	"akamaiedge.net",
+	// DNS providers (for CNAME targets)
+	"cloudflare-dns.com",
+}
+
+// Prefetch resolves a list of domains and caches them for faster future lookups
+// This runs in parallel for efficiency
+func (r *Resolver) Prefetch(domains []string) (cached int, errors int) {
+	if !r.config.Enabled {
+		return 0, 0
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	cachedCount := 0
+	errorCount := 0
+
+	// Limit concurrency to avoid overwhelming upstream servers
+	semaphore := make(chan struct{}, 10)
+
+	for _, domain := range domains {
+		wg.Add(1)
+		go func(d string) {
+			defer wg.Done()
+			semaphore <- struct{}{}        // Acquire
+			defer func() { <-semaphore }() // Release
+
+			// Resolve A record
+			ips, _, ttl, found := r.queryExternal(dns.Fqdn(d), dns.TypeA, 0)
+			mu.Lock()
+			if found && len(ips) > 0 {
+				cachedCount++
+				log.Printf("[prefetch] Cached %s (%d IPs, TTL: %ds)", d, len(ips), ttl)
+			} else {
+				errorCount++
+			}
+			mu.Unlock()
+		}(domain)
+	}
+
+	wg.Wait()
+	return cachedCount, errorCount
+}
+
+// Warmup pre-caches the configured domains or defaults at startup
+func (r *Resolver) Warmup() {
+	if !r.config.Enabled {
+		log.Printf("[prefetch] Recursion disabled, skipping warmup")
+		return
+	}
+
+	// Get prefetch list from config or use defaults
+	domains := r.config.Prefetch
+	if len(domains) == 0 {
+		domains = DefaultPrefetchDomains
+		log.Printf("[prefetch] Using default domain list (%d domains)", len(domains))
+	} else if len(domains) == 1 && domains[0] == "none" {
+		log.Printf("[prefetch] Prefetching disabled by config")
+		return
+	} else {
+		log.Printf("[prefetch] Using custom domain list (%d domains)", len(domains))
+	}
+
+	log.Printf("[prefetch] Starting cache warmup...")
+	start := time.Now()
+	cached, errors := r.Prefetch(domains)
+	elapsed := time.Since(start)
+	log.Printf("[prefetch] Warmup complete: %d cached, %d errors in %v", cached, errors, elapsed)
+}
+
+// prefetchLoop runs in the background and proactively refreshes popular cache entries
+// before they expire
+func (r *Resolver) prefetchLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	log.Printf("[prefetch] Background refresh enabled (threshold: %d hits, window: %.0f%%)",
+		r.config.PrefetchThreshold, r.config.PrefetchWindow*100)
+
+	for range ticker.C {
+		if !r.config.Enabled {
+			continue
+		}
+
+		candidates := r.cache.GetPrefetchCandidates(
+			r.config.PrefetchThreshold,
+			r.config.PrefetchWindow,
+		)
+
+		if len(candidates) == 0 {
+			continue
+		}
+
+		log.Printf("[prefetch] Found %d entries to refresh", len(candidates))
+
+		// Refresh each candidate
+		refreshed := 0
+		for _, candidate := range candidates {
+			// Parse cache key back to name and type
+			name, qtype := parseCacheKey(candidate.Key)
+			if name == "" {
+				continue
+			}
+
+			// Mark as fetching to prevent duplicate refreshes
+			r.cache.MarkFetching(candidate.Key, true)
+
+			// Do the refresh
+			ips, _, ttl, found := r.queryExternal(name, qtype, 0)
+
+			r.cache.MarkFetching(candidate.Key, false)
+
+			if found && len(ips) > 0 {
+				refreshed++
+				log.Printf("[prefetch] Refreshed %s (hits: %d, new TTL: %ds)", name, candidate.HitCount, ttl)
+			}
+		}
+
+		if refreshed > 0 {
+			log.Printf("[prefetch] Refreshed %d/%d entries", refreshed, len(candidates))
+		}
+	}
+}
+
+// parseCacheKey parses a cache key back to name and type
+func parseCacheKey(key string) (string, uint16) {
+	// Key format is "name:qtype" where qtype is stored as a rune
+	if len(key) < 2 {
+		return "", 0
+	}
+	lastColon := len(key) - 2 // character before last char
+	if key[lastColon] != ':' {
+		return "", 0
+	}
+	name := key[:lastColon]
+	qtype := uint16(key[lastColon+1])
+	return name, qtype
 }

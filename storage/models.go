@@ -482,11 +482,16 @@ type WebConfig struct {
 
 // RecursionConfig holds recursion settings.
 type RecursionConfig struct {
-	Enabled  bool     `json:"enabled"`
-	Mode     string   `json:"mode"`
-	Upstream []string `json:"upstream"`
-	Timeout  int      `json:"timeout"`
-	MaxDepth int      `json:"max_depth"`
+	Enabled           bool     `json:"enabled"`
+	Mode              string   `json:"mode"`
+	Upstream          []string `json:"upstream"`
+	Timeout           int      `json:"timeout"`
+	MaxDepth          int      `json:"max_depth"`
+	Prefetch          []string `json:"prefetch,omitempty"`
+	PrefetchThreshold int      `json:"prefetch_threshold,omitempty"`
+	PrefetchWindow    float64  `json:"prefetch_window,omitempty"`
+	StaleEnabled      *bool    `json:"stale_enabled,omitempty"`
+	StaleMaxAge       int      `json:"stale_max_age,omitempty"`
 }
 
 // RateLimitConfig holds rate limiting settings.
