@@ -136,6 +136,16 @@ func (a *serverStorageAdapter) AddRecord(zone string, record interface{}) error 
 	// Normalize name - remove trailing dot if present
 	name = strings.TrimSuffix(name, ".")
 	
+	// Strip zone suffix from name if present (RFC 2136 sends full FQDN)
+	// e.g., "ddns-test.quicktechresults.com" -> "ddns-test" when zone is "quicktechresults.com"
+	zoneSuffix := "." + zone
+	if strings.HasSuffix(strings.ToLower(name), strings.ToLower(zoneSuffix)) {
+		name = name[:len(name)-len(zoneSuffix)]
+	} else if strings.EqualFold(name, zone) {
+		// Record at zone apex
+		name = "@"
+	}
+	
 	recordType, _ := rec["type"].(string)
 	ttl, _ := rec["ttl"].(int)
 	if ttl == 0 {
