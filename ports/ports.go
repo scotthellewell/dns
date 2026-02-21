@@ -18,6 +18,44 @@ import (
 	"github.com/miekg/dns"
 )
 
+// customMsgAcceptFunc is like dns.DefaultMsgAcceptFunc but also allows OpcodeUpdate (RFC 2136)
+// This enables DNS dynamic updates to be processed by our handler instead of being rejected.
+func customMsgAcceptFunc(dh dns.Header) dns.MsgAcceptAction {
+	if isResponse := dh.Bits&(1<<15) != 0; isResponse {
+		return dns.MsgIgnore
+	}
+
+	// Allow Query (0), Notify (4), and Update (5) opcodes
+	opcode := int(dh.Bits>>11) & 0xF
+	if opcode != dns.OpcodeQuery && opcode != dns.OpcodeNotify && opcode != dns.OpcodeUpdate {
+		return dns.MsgRejectNotImplemented
+	}
+
+	// For UPDATE, we allow more RRs in the sections per RFC 2136
+	if opcode == dns.OpcodeUpdate {
+		// UPDATE messages can have multiple RRs - just do basic zone section validation
+		if dh.Qdcount != 1 {
+			return dns.MsgReject
+		}
+		return dns.MsgAccept
+	}
+
+	// Standard validation for Query/Notify
+	if dh.Qdcount != 1 {
+		return dns.MsgReject
+	}
+	if dh.Ancount > 1 {
+		return dns.MsgReject
+	}
+	if dh.Nscount > 1 {
+		return dns.MsgReject
+	}
+	if dh.Arcount > 2 {
+		return dns.MsgReject
+	}
+	return dns.MsgAccept
+}
+
 // Config holds all port configurations
 type Config struct {
 	DNS DNSPortConfig `json:"dns"`
@@ -344,9 +382,10 @@ func (m *Manager) startDNSLocked() error {
 
 	// Start UDP server
 	m.dnsUDP = &dns.Server{
-		Addr:    addr,
-		Net:     "udp",
-		Handler: m.dnsHandler,
+		Addr:          addr,
+		Net:           "udp",
+		Handler:       m.dnsHandler,
+		MsgAcceptFunc: customMsgAcceptFunc,
 	}
 	go func() {
 		log.Printf("Starting DNS UDP server on %s", addr)
@@ -357,9 +396,10 @@ func (m *Manager) startDNSLocked() error {
 
 	// Start TCP server
 	m.dnsTCP = &dns.Server{
-		Addr:    addr,
-		Net:     "tcp",
-		Handler: m.dnsHandler,
+		Addr:          addr,
+		Net:           "tcp",
+		Handler:       m.dnsHandler,
+		MsgAcceptFunc: customMsgAcceptFunc,
 	}
 	go func() {
 		log.Printf("Starting DNS TCP server on %s", addr)
