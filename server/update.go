@@ -44,12 +44,15 @@ func (h *UpdateHandler) SetConfig(cfg UpdateConfig) {
 
 // HandleUpdate processes a DNS UPDATE message (RFC 2136)
 func (h *UpdateHandler) HandleUpdate(w dns.ResponseWriter, r *dns.Msg) {
+	log.Printf("[DEBUG] HandleUpdate called from %s", w.RemoteAddr())
+	
 	// Create response
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Opcode = dns.OpcodeUpdate
 
 	// Check if updates are enabled
+	log.Printf("[DEBUG] HandleUpdate: enabled=%v, allowedNets=%v", h.config.Enabled, h.config.AllowedNets)
 	if !h.config.Enabled {
 		log.Printf("[update] Dynamic updates disabled, refusing request")
 		m.Rcode = dns.RcodeRefused

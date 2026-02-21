@@ -683,6 +683,9 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}()
 
+	// Debug: log opcode for all requests
+	log.Printf("[DEBUG] handleRequest: opcode=%d (OpcodeUpdate=%d), questions=%d", r.Opcode, dns.OpcodeUpdate, len(r.Question))
+
 	startTime := time.Now()
 
 	// Extract client IP for RRL and logging
