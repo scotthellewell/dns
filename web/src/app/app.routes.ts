@@ -4,6 +4,7 @@ import { ZonesComponent } from './zones/zones.component';
 import { RecordsComponent } from './records/records.component';
 import { SecondaryZonesComponent } from './secondary-zones/secondary-zones.component';
 import { TransferComponent } from './transfer/transfer.component';
+import { DynamicUpdatesComponent } from './dynamic-updates/dynamic-updates.component';
 import { RecursionComponent } from './recursion/recursion.component';
 import { BlocklistComponent } from './blocklist/blocklist.component';
 import { NetworkComponent } from './network/network.component';
@@ -27,6 +28,7 @@ export const routes: Routes = [
   { path: 'records', component: RecordsComponent, canActivate: [authGuard] },
   { path: 'secondary-zones', component: SecondaryZonesComponent, canActivate: [authGuard] },
   { path: 'transfer', component: TransferComponent, canActivate: [authGuard] },
+  { path: 'dynamic-updates', component: DynamicUpdatesComponent, canActivate: [superAdminGuard] },
   { path: 'recursion', component: RecursionComponent, canActivate: [superAdminGuard] },
   { path: 'blocklist', component: BlocklistComponent, canActivate: [superAdminGuard] },
   { path: 'network', component: NetworkComponent, canActivate: [superAdminGuard] },

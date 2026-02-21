@@ -199,6 +199,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Transfer settings
 	mux.HandleFunc("/api/transfer", h.corsMiddleware(h.handleTransfer))
 
+	// RFC 2136 Dynamic Updates
+	mux.HandleFunc("/api/dynamic-updates", h.corsMiddleware(h.handleDynamicUpdates))
+
 	// Recursion settings
 	mux.HandleFunc("/api/recursion", h.corsMiddleware(h.handleRecursion))
 
@@ -257,6 +260,7 @@ func (h *Handler) RegisterRoutesWithAuth(mux *http.ServeMux, authMgr AuthMiddlew
 	mux.HandleFunc("/api/dnssec/keys/", wrap(h.handleDNSSECKeys))   // Export/import keys
 	mux.HandleFunc("/api/dnssec/token/", wrap(h.handleDNSSECToken)) // Key token management
 	mux.HandleFunc("/api/transfer", wrap(h.handleTransfer))
+	mux.HandleFunc("/api/dynamic-updates", wrap(h.handleDynamicUpdates))
 	mux.HandleFunc("/api/recursion", wrap(h.handleRecursion))
 	mux.HandleFunc("/api/dnssec", wrap(h.handleDNSSEC))
 	mux.HandleFunc("/api/settings", wrap(h.handleSettings))

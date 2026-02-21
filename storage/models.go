@@ -582,3 +582,14 @@ type ACMEState struct {
 	NextRenewal     time.Time `json:"next_renewal"`
 	RegistrationURI string    `json:"registration_uri"`
 }
+
+// DynamicUpdateConfig holds RFC 2136 dynamic DNS update settings.
+type DynamicUpdateConfig struct {
+	Enabled      bool              `json:"enabled"`
+	AllowedNets  []string          `json:"allowed_nets"`  // CIDR networks allowed to send updates
+	AllowedZones []string          `json:"allowed_zones"` // Zones that accept updates (empty = all)
+	TSIGKeys     []TSIGKey         `json:"tsig_keys"`     // TSIG keys for authentication
+	AutoPTR      bool              `json:"auto_ptr"`      // Auto-create reverse PTR records
+	AllowedTypes []string          `json:"allowed_types"` // Allowed record types (A, AAAA, PTR, TXT)
+	Logging      bool              `json:"logging"`       // Log all update requests
+}

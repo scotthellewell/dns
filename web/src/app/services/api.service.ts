@@ -166,6 +166,17 @@ export interface RecursionConfig {
   stale_max_age?: number;       // How long to serve stale in seconds (default: 30)
 }
 
+// RFC 2136 Dynamic DNS Update configuration
+export interface DynamicUpdateConfig {
+  enabled: boolean;
+  allowed_nets: string[];       // CIDR networks allowed to send updates
+  allowed_zones?: string[];     // Zones that accept updates (empty = all)
+  tsig_keys: TsigKey[];        // TSIG keys for authentication
+  auto_ptr: boolean;           // Auto-create reverse PTR records
+  allowed_types?: string[];    // Allowed record types (A, AAAA, PTR, TXT)
+  logging: boolean;            // Log all update requests
+}
+
 export interface DnssecZone {
   zone: string;
   algorithm: string;
@@ -470,6 +481,15 @@ export class ApiService {
 
   updateRecursionConfig(config: RecursionConfig): Observable<any> {
     return this.http.put(`${this.baseUrl}/recursion`, config);
+  }
+
+  // Dynamic DNS Updates (RFC 2136)
+  getDynamicUpdateConfig(): Observable<DynamicUpdateConfig> {
+    return this.http.get<DynamicUpdateConfig>(`${this.baseUrl}/dynamic-updates`);
+  }
+
+  updateDynamicUpdateConfig(config: DynamicUpdateConfig): Observable<any> {
+    return this.http.put(`${this.baseUrl}/dynamic-updates`, config);
   }
 
   // DNSSEC Settings

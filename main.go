@@ -116,6 +116,71 @@ func (a *blocklistServerAdapter) GetConfig() *server.BlocklistConfig {
 	}
 }
 
+// serverStorageAdapter adapts storage.Store to server.StorageInterface for RFC 2136 updates
+type serverStorageAdapter struct {
+	store       *storage.Store
+	apiHandler  *api.Handler
+}
+
+func (a *serverStorageAdapter) AddRecord(zone string, record interface{}) error {
+	rec, ok := record.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("record must be map[string]interface{}")
+	}
+
+	// Extract record data
+	name, _ := rec["name"].(string)
+	recordType, _ := rec["type"].(string)
+	ttl, _ := rec["ttl"].(int)
+	if ttl == 0 {
+		ttl = 3600 // Default TTL
+	}
+
+	// Create storage record
+	storageRec := &storage.Record{
+		Zone:      zone,
+		Name:      name,
+		Type:      recordType,
+		TTL:       uint32(ttl),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	// Marshal data field
+	data, err := json.Marshal(rec["data"])
+	if err != nil {
+		return fmt.Errorf("failed to marshal record data: %w", err)
+	}
+	storageRec.Data = data
+
+	return a.store.CreateRecord(storageRec)
+}
+
+func (a *serverStorageAdapter) DeleteRecord(zone, name string, recordType string) error {
+	if recordType == "" {
+		// Delete all types for this name - not directly supported, skip
+		log.Printf("[storage-adapter] Delete all types not supported for %s.%s", name, zone)
+		return nil
+	}
+	return a.store.DeleteRecordsByType(zone, name, recordType)
+}
+
+func (a *serverStorageAdapter) ReloadConfig() error {
+	if a.apiHandler == nil {
+		return nil // No handler set, skip reload
+	}
+	return a.apiHandler.UpdateConfigFromStorage()
+}
+
+// getKeyNames extracts key names from TSIG key slice
+func getKeyNames(keys []storage.TSIGKey) []string {
+	names := make([]string, len(keys))
+	for i, key := range keys {
+		names[i] = key.Name
+	}
+	return names
+}
+
 // fetchCertificateFromPeer attempts to fetch a certificate from a peer server's API
 func fetchCertificateFromPeer(peerURL string, domain string) (*storage.TLSCertificate, error) {
 	// Build the certificate fetch URL
@@ -331,6 +396,26 @@ func main() {
 	apiHandler.SetClearDNSSECCacheCallback(func() {
 		srv.ClearAllDNSSECCaches()
 	})
+
+	// Set up storage adapter for RFC 2136 dynamic updates
+	storageAdapter := &serverStorageAdapter{
+		store:      store,
+		apiHandler: apiHandler,
+	}
+	srv.SetStorage(storageAdapter)
+
+	// Load and apply dynamic update configuration from storage
+	if updateCfg, err := store.GetDynamicUpdateConfig(); err == nil {
+		srv.SetUpdateConfig(server.UpdateConfig{
+			Enabled:     updateCfg.Enabled,
+			AllowedNets: updateCfg.AllowedNets,
+			AllowedKeys: getKeyNames(updateCfg.TSIGKeys),
+			AutoPTR:     updateCfg.AutoPTR,
+		})
+		if updateCfg.Enabled {
+			log.Printf("RFC 2136 Dynamic Updates enabled (allowed nets: %v)", updateCfg.AllowedNets)
+		}
+	}
 
 	// Initialize blocklist manager with composite storage:
 	// - Main database (store) for config, sources, whitelist (synced across cluster)

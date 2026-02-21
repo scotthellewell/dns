@@ -45,6 +45,10 @@
         <span matListItemTitle>Zone Transfer</span>
       </a>
       @if (isSuperAdmin() && tenantContext.isMainTenantSelected()) {
+        <a mat-list-item routerLink="/dynamic-updates" routerLinkActive="active">
+          <mat-icon matListItemIcon>dynamic_feed</mat-icon>
+          <span matListItemTitle>Dynamic Updates</span>
+        </a>
         <a mat-list-item routerLink="/recursion" routerLinkActive="active">
           <mat-icon matListItemIcon>account_tree</mat-icon>
           <span matListItemTitle>Recursion</span>

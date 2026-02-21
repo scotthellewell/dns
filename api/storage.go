@@ -2555,3 +2555,58 @@ func (p *zoneFileParser) isType(s string) bool {
 	}
 	return types[strings.ToUpper(s)]
 }
+
+// handleDynamicUpdatesStorage handles RFC 2136 Dynamic DNS Update configuration
+func (h *Handler) handleDynamicUpdatesStorage(w http.ResponseWriter, r *http.Request) {
+	store := h.getStore()
+	if store == nil {
+		h.errorResponse(w, "Storage not available", http.StatusInternalServerError)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		cfg, err := store.GetDynamicUpdateConfig()
+		if err != nil {
+			h.errorResponse(w, "Failed to get config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		h.jsonResponse(w, cfg)
+
+	case "PUT":
+		var cfg storage.DynamicUpdateConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			h.errorResponse(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if err := store.UpdateDynamicUpdateConfig(&cfg); err != nil {
+			h.errorResponse(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Notify server to reload update handler config
+		if h.onConfigUpdate != nil {
+			// Rebuild and update full config
+			if err := h.UpdateConfigFromStorage(); err != nil {
+				h.errorResponse(w, "Config saved but failed to reload: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		h.jsonResponse(w, map[string]interface{}{"status": "ok"})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleDynamicUpdates routes to storage-backed handler
+func (h *Handler) handleDynamicUpdates(w http.ResponseWriter, r *http.Request) {
+	if h.hasStorage() {
+		h.handleDynamicUpdatesStorage(w, r)
+		return
+	}
+	// No file-based implementation - dynamic updates require storage
+	h.errorResponse(w, "Dynamic Updates require storage backend", http.StatusNotImplemented)
+}

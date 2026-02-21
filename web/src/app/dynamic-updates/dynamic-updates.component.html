@@ -1,0 +1,251 @@
+<div class="page-container">
+  <div class="page-header">
+    <h1>Dynamic DNS Updates</h1>
+    <p class="subtitle">Configure RFC 2136 Dynamic DNS updates for DHCP integration (MikroTik, ISC DHCP, etc.)</p>
+  </div>
+
+  <mat-card class="content-card">
+    <!-- Enable Toggle -->
+    <div class="card-section">
+      <div class="toggle-row main-toggle">
+        <mat-slide-toggle [(ngModel)]="config.enabled" color="primary">
+          Enable Dynamic Updates
+        </mat-slide-toggle>
+        <span class="toggle-hint">Allow external systems to create/update DNS records via RFC 2136 UPDATE</span>
+      </div>
+    </div>
+
+    <!-- Allowed Networks -->
+    <div class="card-section">
+      <div class="section-header">
+        <h2>Allowed Networks</h2>
+        <p class="section-desc">IP networks (CIDR) allowed to send DNS updates. Leave empty to require TSIG authentication.</p>
+      </div>
+
+      <div class="server-list">
+        @for (network of config.allowed_nets; track network) {
+          <div class="server-item">
+            <div class="server-info">
+              <mat-icon>lan</mat-icon>
+              <span>{{ network }}</span>
+            </div>
+            <button mat-icon-button color="warn" (click)="removeNetwork(network)">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </div>
+        }
+        @if (config.allowed_nets.length === 0) {
+          <div class="empty-text">No networks configured - TSIG authentication required for all updates</div>
+        }
+      </div>
+
+      <div class="add-row">
+        <mat-form-field appearance="outline" class="flex-grow">
+          <mat-label>Network (CIDR)</mat-label>
+          <input matInput [(ngModel)]="newNetwork" placeholder="10.0.0.0/8" (keyup.enter)="addNetwork()">
+          <mat-hint>e.g., 10.0.0.0/8, 192.168.1.0/24</mat-hint>
+        </mat-form-field>
+        <button mat-raised-button color="primary" (click)="addNetwork()" [disabled]="!newNetwork">
+          <mat-icon>add</mat-icon>
+          Add
+        </button>
+      </div>
+
+      <div class="button-row">
+        <button mat-stroked-button (click)="addPrivateNetworks()">
+          <mat-icon>home</mat-icon>
+          Add Private Networks (RFC 1918)
+        </button>
+        <button mat-stroked-button (click)="addLocalhost()">
+          <mat-icon>computer</mat-icon>
+          Add Localhost
+        </button>
+      </div>
+    </div>
+
+    <!-- TSIG Keys -->
+    <div class="card-section">
+      <div class="section-header">
+        <h2>TSIG Keys</h2>
+        <p class="section-desc">Shared secret keys for authenticated updates. Required if no IP-based authentication configured.</p>
+      </div>
+
+      <div class="server-list">
+        @for (key of config.tsig_keys; track key.name) {
+          <div class="server-item">
+            <div class="server-info">
+              <mat-icon>key</mat-icon>
+              <span class="key-name">{{ key.name }}</span>
+              <span class="badge">{{ key.algorithm.replace('.sig-alg.reg.int.', '').replace('.', '') }}</span>
+            </div>
+            <button mat-icon-button color="warn" (click)="removeKey(key.name)">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </div>
+        }
+        @if (config.tsig_keys.length === 0) {
+          <div class="empty-text">No TSIG keys configured</div>
+        }
+      </div>
+
+      <div class="key-form">
+        <mat-form-field appearance="outline">
+          <mat-label>Key Name</mat-label>
+          <input matInput [(ngModel)]="newKey.name" placeholder="dhcp-update-key">
+          <mat-hint>Unique identifier for this key</mat-hint>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Algorithm</mat-label>
+          <mat-select [(ngModel)]="newKey.algorithm">
+            @for (alg of tsigAlgorithms; track alg.value) {
+              <mat-option [value]="alg.value">{{ alg.label }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="secret-field">
+          <mat-label>Secret (Base64)</mat-label>
+          <input matInput [(ngModel)]="newKey.secret" [type]="showKeySecret ? 'text' : 'password'" placeholder="Base64 encoded secret">
+          <button mat-icon-button matSuffix (click)="showKeySecret = !showKeySecret">
+            <mat-icon>{{ showKeySecret ? 'visibility_off' : 'visibility' }}</mat-icon>
+          </button>
+        </mat-form-field>
+
+        <div class="key-actions">
+          <button mat-stroked-button (click)="generateSecret()">
+            <mat-icon>casino</mat-icon>
+            Generate
+          </button>
+          <button mat-raised-button color="primary" (click)="addKey()" [disabled]="!newKey.name || !newKey.secret">
+            <mat-icon>add</mat-icon>
+            Add Key
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Allowed Zones -->
+    <div class="card-section">
+      <div class="section-header">
+        <h2>Allowed Zones</h2>
+        <p class="section-desc">Restrict updates to specific zones. Leave empty to allow updates to all zones.</p>
+      </div>
+
+      <div class="server-list">
+        @for (zone of config.allowed_zones; track zone) {
+          <div class="server-item">
+            <div class="server-info">
+              <mat-icon>dns</mat-icon>
+              <span>{{ zone }}</span>
+            </div>
+            <button mat-icon-button color="warn" (click)="removeZone(zone)">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </div>
+        }
+        @if (!config.allowed_zones || config.allowed_zones.length === 0) {
+          <div class="empty-text">All zones accept updates</div>
+        }
+      </div>
+
+      <div class="add-row">
+        <mat-form-field appearance="outline" class="flex-grow">
+          <mat-label>Zone Name</mat-label>
+          <input matInput [(ngModel)]="newZone" placeholder="example.com" (keyup.enter)="addZone()">
+        </mat-form-field>
+        <button mat-raised-button color="primary" (click)="addZone()" [disabled]="!newZone">
+          <mat-icon>add</mat-icon>
+          Add
+        </button>
+      </div>
+    </div>
+
+    <!-- Record Types -->
+    <div class="card-section">
+      <div class="section-header">
+        <h2>Allowed Record Types</h2>
+        <p class="section-desc">Select which DNS record types can be created/updated dynamically</p>
+      </div>
+
+      <div class="record-types">
+        @for (type of allRecordTypes; track type) {
+          <button mat-stroked-button 
+                  [class.selected]="isTypeAllowed(type)"
+                  (click)="toggleRecordType(type)">
+            <mat-icon>{{ isTypeAllowed(type) ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
+            {{ type }}
+          </button>
+        }
+      </div>
+    </div>
+
+    <!-- Options -->
+    <div class="card-section">
+      <div class="section-header">
+        <h2>Options</h2>
+      </div>
+
+      <div class="options-grid">
+        <div class="toggle-row">
+          <mat-slide-toggle [(ngModel)]="config.auto_ptr">
+            Auto-create reverse PTR records
+          </mat-slide-toggle>
+          <span class="toggle-hint">Automatically create PTR records for A/AAAA updates</span>
+        </div>
+
+        <div class="toggle-row">
+          <mat-slide-toggle [(ngModel)]="config.logging">
+            Log all update requests
+          </mat-slide-toggle>
+          <span class="toggle-hint">Record all update attempts in the audit log</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Save Button -->
+    <div class="card-actions">
+      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving || loading">
+        @if (saving) {
+          <mat-icon class="spin">sync</mat-icon>
+          Saving...
+        } @else {
+          <mat-icon>save</mat-icon>
+          Save Configuration
+        }
+      </button>
+    </div>
+  </mat-card>
+
+  <!-- MikroTik Configuration Example -->
+  <mat-card class="content-card info-card">
+    <div class="card-section">
+      <div class="section-header">
+        <h2>MikroTik RouterOS Configuration</h2>
+        <p class="section-desc">Example configuration for MikroTik DHCP server to send DNS updates</p>
+      </div>
+
+      <div class="code-block">
+        <pre>/ip/dns
+set allow-remote-requests=no
+
+/ip/dhcp-server
+set [find name="dhcp1"] script=""
+set [find name="dhcp1"] lease-script="
+  :if ($leaseBound = 1) do={{ '{' }}
+    :log info \"DHCP: Lease bound $leaseActMAC -> $leaseActIP\"
+    /ip/dns/static/add name=\"$\"leaseActMAC\"\" address=$leaseActIP disabled=no
+  {{ '}' }} else={{ '{' }}
+    :log info \"DHCP: Lease released $leaseActMAC\"
+    /ip/dns/static/remove [find name=\"$\"leaseActMAC\"\"]
+  {{ '}' }}
+"</pre>
+      </div>
+
+      <p class="note">
+        <mat-icon>info</mat-icon>
+        For RFC 2136 Updates, enable Dynamic DNS in MikroTik under IP → DHCP Server → DHCP Tab with your DNS server address.
+      </p>
+    </div>
+  </mat-card>
+</div>

@@ -36,6 +36,13 @@ type BlocklistConfig struct {
 	LogBlocked bool
 }
 
+// StorageInterface defines methods for dynamic record storage
+type StorageInterface interface {
+	AddRecord(zone string, record interface{}) error
+	DeleteRecord(zone, name string, recordType string) error
+	ReloadConfig() error
+}
+
 // Server represents the DNS server
 type Server struct {
 	config    *config.ParsedConfig
@@ -44,9 +51,11 @@ type Server struct {
 	dnssec    *dnssec.Manager
 	transfer  *transfer.Handler
 	secondary *secondary.Manager
-	rrl       *rrl.Limiter     // Response Rate Limiter
-	querylog  *querylog.Logger // Query Logger
-	blocklist BlocklistChecker // Blocklist checker
+	update    *UpdateHandler    // RFC 2136 dynamic updates
+	rrl       *rrl.Limiter      // Response Rate Limiter
+	querylog  *querylog.Logger  // Query Logger
+	blocklist BlocklistChecker  // Blocklist checker
+	storage   StorageInterface  // Storage for dynamic records
 	mu        sync.RWMutex
 
 	// DNSSEC key store for loading keys from database
@@ -96,6 +105,8 @@ func New(cfg *config.ParsedConfig) *Server {
 	srv.loadDNSSEC(cfg)
 	// Initialize transfer handler (srv implements ZoneDataProvider)
 	srv.transfer = transfer.New(cfg, srv)
+	// Initialize update handler (RFC 2136)
+	srv.update = NewUpdateHandler(srv)
 	// Initialize secondary zone manager
 	if len(cfg.SecondaryZones) > 0 {
 		srv.secondary = secondary.New(cfg)
@@ -712,6 +723,19 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			return
 		}
 		// No transfer handler, refuse
+		m := new(dns.Msg)
+		m.SetRcode(r, dns.RcodeRefused)
+		w.WriteMsg(m)
+		return
+	}
+
+	// Handle UPDATE messages (opcode 5, RFC 2136)
+	if r.Opcode == dns.OpcodeUpdate {
+		if s.update != nil {
+			s.update.HandleUpdate(w, r)
+			return
+		}
+		// No update handler, refuse
 		m := new(dns.Msg)
 		m.SetRcode(r, dns.RcodeRefused)
 		w.WriteMsg(m)
@@ -2380,4 +2404,86 @@ func (s *Server) RemoveTXTRecord(fqdn string) error {
 	delete(s.acmeRecords, fqdn)
 	log.Printf("Removed ACME challenge TXT record: %s", fqdn)
 	return nil
+}
+
+// SetStorage sets the storage interface for dynamic records
+func (s *Server) SetStorage(storage StorageInterface) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.storage = storage
+}
+
+// getStorage returns the storage interface (thread-safe)
+func (s *Server) getStorage() StorageInterface {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.storage
+}
+
+// SetUpdateConfig sets the dynamic update configuration
+func (s *Server) SetUpdateConfig(cfg UpdateConfig) {
+	if s.update != nil {
+		s.update.SetConfig(cfg)
+	}
+}
+
+// GetUpdateHandler returns the update handler
+func (s *Server) GetUpdateHandler() *UpdateHandler {
+	return s.update
+}
+
+// addDynamicRecord adds a record via storage (for RFC 2136 updates)
+func (s *Server) addDynamicRecord(record map[string]interface{}) error {
+	storage := s.getStorage()
+	if storage == nil {
+		return fmt.Errorf("storage not configured")
+	}
+
+	zone, ok := record["zone"].(string)
+	if !ok {
+		return fmt.Errorf("zone not specified in record")
+	}
+
+	if err := storage.AddRecord(zone, record); err != nil {
+		return err
+	}
+
+	// Reload config to pick up new record
+	return storage.ReloadConfig()
+}
+
+// deleteDynamicRecord deletes a specific record via storage
+func (s *Server) deleteDynamicRecord(name, zone string, rrtype uint16, rr dns.RR) error {
+	storage := s.getStorage()
+	if storage == nil {
+		return fmt.Errorf("storage not configured")
+	}
+
+	recordType := dns.TypeToString[rrtype]
+	if err := storage.DeleteRecord(zone, name, recordType); err != nil {
+		return err
+	}
+
+	return storage.ReloadConfig()
+}
+
+// deleteAllDynamicRecords deletes all records of a type at a name
+func (s *Server) deleteAllDynamicRecords(name, zone string, rrtype uint16) error {
+	storage := s.getStorage()
+	if storage == nil {
+		return fmt.Errorf("storage not configured")
+	}
+
+	var recordType string
+	if rrtype == dns.TypeANY {
+		recordType = "" // Empty means all types
+	} else {
+		recordType = dns.TypeToString[rrtype]
+	}
+
+	if err := storage.DeleteRecord(zone, name, recordType); err != nil {
+		return err
+	}
+
+	return storage.ReloadConfig()
 }

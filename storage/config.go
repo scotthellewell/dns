@@ -10,16 +10,17 @@ import (
 
 // Config keys
 const (
-	ConfigKeyServer      = "server"
-	ConfigKeyRecursion   = "recursion"
-	ConfigKeyRateLimit   = "rate_limit"
-	ConfigKeyQueryLog    = "query_log"
-	ConfigKeyTransfer    = "transfer"
-	ConfigKeyOIDC        = "oidc"
-	ConfigKeyWebAuthn    = "webauthn"
-	ConfigKeyACME        = "acme"
-	ConfigKeyACMEAcctKey = "acme_account_key"
-	ConfigKeyACMEState   = "acme_state"
+	ConfigKeyServer        = "server"
+	ConfigKeyRecursion     = "recursion"
+	ConfigKeyRateLimit     = "rate_limit"
+	ConfigKeyQueryLog      = "query_log"
+	ConfigKeyTransfer      = "transfer"
+	ConfigKeyOIDC          = "oidc"
+	ConfigKeyWebAuthn      = "webauthn"
+	ConfigKeyACME          = "acme"
+	ConfigKeyACMEAcctKey   = "acme_account_key"
+	ConfigKeyACMEState     = "acme_state"
+	ConfigKeyDynamicUpdate = "dynamic_update"
 )
 
 // GetServerConfig retrieves the server configuration.
@@ -237,6 +238,53 @@ func (s *Store) UpdateTransferConfig(config *TransferConfig) error {
 		}
 		return bucket.Put([]byte(ConfigKeyTransfer), data)
 	})
+}
+
+// GetDynamicUpdateConfig retrieves the RFC 2136 dynamic update configuration.
+func (s *Store) GetDynamicUpdateConfig() (*DynamicUpdateConfig, error) {
+	var config DynamicUpdateConfig
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("config"))
+		data := bucket.Get([]byte(ConfigKeyDynamicUpdate))
+		if data == nil {
+			return ErrNotFound
+		}
+		return json.Unmarshal(data, &config)
+	})
+
+	if err == ErrNotFound {
+		// Return defaults
+		return &DynamicUpdateConfig{
+			Enabled:      false,
+			AllowedNets:  []string{},
+			AllowedZones: []string{},
+			TSIGKeys:     []TSIGKey{},
+			AutoPTR:      true,
+			AllowedTypes: []string{"A", "AAAA", "PTR", "TXT"},
+			Logging:      true,
+		}, nil
+	}
+
+	return &config, err
+}
+
+// UpdateDynamicUpdateConfig saves the RFC 2136 dynamic update configuration.
+func (s *Store) UpdateDynamicUpdateConfig(config *DynamicUpdateConfig) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("config"))
+		data, err := json.Marshal(config)
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(ConfigKeyDynamicUpdate), data)
+	})
+
+	if err == nil {
+		recordChange(EntityTypeDynamicUpdate, ConfigKeyDynamicUpdate, "", OpUpdate, config)
+	}
+
+	return err
 }
 
 // GetOIDCConfig retrieves the OIDC configuration.
