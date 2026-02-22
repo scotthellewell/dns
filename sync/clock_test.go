@@ -258,6 +258,12 @@ func TestOpLogEntry_Fields(t *testing.T) {
 	if entry.Operation != OpCreate {
 		t.Errorf("Expected Operation '%s', got '%s'", OpCreate, entry.Operation)
 	}
+	if entry.Timestamp != now {
+		t.Errorf("Expected Timestamp '%v', got '%v'", now, entry.Timestamp)
+	}
+	if entry.TenantID != "tenant-1" {
+		t.Errorf("Expected TenantID 'tenant-1', got '%s'", entry.TenantID)
+	}
 }
 
 func TestGenerateID(t *testing.T) {

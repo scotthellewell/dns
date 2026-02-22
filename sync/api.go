@@ -47,7 +47,7 @@ func (h *APIHandler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *APIHandler) getConfig(w http.ResponseWriter, r *http.Request) {
+func (h *APIHandler) getConfig(w http.ResponseWriter, _ *http.Request) {
 	// Return current config (without exposing full shared secret)
 	cfg := h.manager.config
 	dto := SyncConfigDTO{
@@ -202,7 +202,7 @@ func (h *APIHandler) HandlePeers(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *APIHandler) listPeers(w http.ResponseWriter, r *http.Request) {
+func (h *APIHandler) listPeers(w http.ResponseWriter, _ *http.Request) {
 	peers := make([]PeerConfig, len(h.manager.config.Peers))
 	copy(peers, h.manager.config.Peers)
 
