@@ -74,7 +74,7 @@ func TestSetAndGet(t *testing.T) {
 
 	c.Set(key, ips, cnames, ttl)
 
-	entry, ok := c.Get(key)
+	entry, _, ok := c.Get(key)
 	if !ok {
 		t.Fatal("Get() returned not ok for existing key")
 	}
@@ -88,7 +88,7 @@ func TestSetAndGet(t *testing.T) {
 
 func TestGet_NotFound(t *testing.T) {
 	c := New(100)
-	_, ok := c.Get("nonexistent")
+	_, _, ok := c.Get("nonexistent")
 	if ok {
 		t.Error("Get() returned ok for nonexistent key")
 	}
@@ -113,7 +113,7 @@ func TestSet_TTLCap(t *testing.T) {
 
 	c.Set(key, ips, nil, 86400)
 
-	entry, ok := c.Get(key)
+	entry, _, ok := c.Get(key)
 	if !ok {
 		t.Fatal("Get() returned not ok")
 	}
@@ -130,7 +130,7 @@ func TestGet_Expired(t *testing.T) {
 	c.Set(key, ips, nil, 1)
 	time.Sleep(1100 * time.Millisecond)
 
-	_, ok := c.Get(key)
+	_, _, ok := c.Get(key)
 	if ok {
 		t.Error("Get() returned ok for expired entry")
 	}
@@ -143,12 +143,12 @@ func TestGet_TTLDecreases(t *testing.T) {
 
 	c.Set(key, ips, nil, 60)
 
-	entry1, _ := c.Get(key)
+	entry1, _, _ := c.Get(key)
 	ttl1 := entry1.TTL
 
 	time.Sleep(100 * time.Millisecond)
 
-	entry2, _ := c.Get(key)
+	entry2, _, _ := c.Get(key)
 	ttl2 := entry2.TTL
 
 	if ttl2 > ttl1 {
@@ -205,7 +205,7 @@ func TestCNAMEs(t *testing.T) {
 
 	c.Set(key, nil, cnames, 300)
 
-	entry, ok := c.Get(key)
+	entry, _, ok := c.Get(key)
 	if !ok {
 		t.Fatal("Get() returned not ok")
 	}

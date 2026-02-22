@@ -476,24 +476,24 @@ mail    IN      MX  10  mail.example.com."></textarea>
       
       <div class="preview-summary">
         <div class="summary-item">
-          <strong>Zone:</strong> {{ importPreview.zone?.name }}
+          <strong>Zone:</strong> {{ importPreview.zone.name }}
         </div>
         <div class="summary-item">
           <strong>Records:</strong> {{ importPreview.record_count }}
         </div>
-        <div class="summary-item" *ngIf="importPreview.zone?.ttl">
-          <strong>Default TTL:</strong> {{ importPreview.zone?.ttl }}s
+        <div class="summary-item" *ngIf="importPreview.zone.ttl">
+          <strong>Default TTL:</strong> {{ importPreview.zone.ttl }}s
         </div>
       </div>
 
-      <div class="preview-warnings" *ngIf="importPreview.warnings?.length">
+      <div class="preview-warnings" *ngIf="importPreview.warnings.length">
         <h4>⚠️ Warnings</h4>
         <ul>
           <li *ngFor="let warning of importPreview.warnings">{{ warning }}</li>
         </ul>
       </div>
 
-      <div class="preview-errors" *ngIf="importPreview.errors?.length">
+      <div class="preview-errors" *ngIf="importPreview.errors.length">
         <h4>❌ Errors (these records will be skipped)</h4>
         <ul>
           <li *ngFor="let error of importPreview.errors">{{ error }}</li>

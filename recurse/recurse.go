@@ -525,6 +525,7 @@ func (r *Resolver) queryIterative(name string, qtype uint16, nameservers []strin
 	// Collect results, use first successful one
 	var lastResp *dns.Msg
 	received := 0
+queryLoop:
 	for received < len(nameservers) {
 		select {
 		case result := <-results:
@@ -596,7 +597,7 @@ func (r *Resolver) queryIterative(name string, qtype uint16, nameservers []strin
 
 		case <-ctx.Done():
 			// Timeout waiting for responses
-			break
+			break queryLoop
 		}
 	}
 
@@ -851,6 +852,7 @@ func (r *Resolver) queryAnyIterative(name string, qtype uint16, nameservers []st
 	}
 
 	received := 0
+queryAnyLoop:
 	for received < len(nameservers) {
 		select {
 		case result := <-results:
@@ -892,7 +894,7 @@ func (r *Resolver) queryAnyIterative(name string, qtype uint16, nameservers []st
 			}
 
 		case <-ctx.Done():
-			break
+			break queryAnyLoop
 		}
 	}
 

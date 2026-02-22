@@ -205,14 +205,13 @@
 
     <!-- Save Button -->
     <div class="card-actions">
-      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving || loading">
-        @if (saving) {
-          <mat-icon class="spin">sync</mat-icon>
-          Saving...
-        } @else {
-          <mat-icon>save</mat-icon>
-          Save Configuration
-        }
+      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving || loading" *ngIf="saving">
+        <mat-icon class="spin">sync</mat-icon>
+        Saving...
+      </button>
+      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving || loading" *ngIf="!saving">
+        <mat-icon>save</mat-icon>
+        Save Configuration
       </button>
     </div>
   </mat-card>
