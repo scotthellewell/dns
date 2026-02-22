@@ -118,8 +118,8 @@ func (a *blocklistServerAdapter) GetConfig() *server.BlocklistConfig {
 
 // serverStorageAdapter adapts storage.Store to server.StorageInterface for RFC 2136 updates
 type serverStorageAdapter struct {
-	store       *storage.Store
-	apiHandler  *api.Handler
+	store      *storage.Store
+	apiHandler *api.Handler
 }
 
 func (a *serverStorageAdapter) AddRecord(zone string, record interface{}) error {
@@ -135,7 +135,7 @@ func (a *serverStorageAdapter) AddRecord(zone string, record interface{}) error 
 	name, _ := rec["name"].(string)
 	// Normalize name - remove trailing dot if present
 	name = strings.TrimSuffix(name, ".")
-	
+
 	// Strip zone suffix from name if present (RFC 2136 sends full FQDN)
 	// e.g., "ddns-test.quicktechresults.com" -> "ddns-test" when zone is "quicktechresults.com"
 	zoneSuffix := "." + zone
@@ -145,7 +145,7 @@ func (a *serverStorageAdapter) AddRecord(zone string, record interface{}) error 
 		// Record at zone apex
 		name = "@"
 	}
-	
+
 	recordType, _ := rec["type"].(string)
 	ttl, _ := rec["ttl"].(int)
 	if ttl == 0 {

@@ -38,19 +38,19 @@ type Stats struct {
 
 // Handler provides the HTTP API for the DNS server
 type Handler struct {
-	config              *config.ParsedConfig
-	rawConfig           *config.Config
-	configPath          string
-	stats               *Stats
-	metrics             *metrics.Collector
-	configMu            sync.RWMutex
-	onConfigUpdate      func(*config.ParsedConfig)
-	onClearDNSSECCache  func()                                  // Called to clear DNSSEC validation caches
+	config               *config.ParsedConfig
+	rawConfig            *config.Config
+	configPath           string
+	stats                *Stats
+	metrics              *metrics.Collector
+	configMu             sync.RWMutex
+	onConfigUpdate       func(*config.ParsedConfig)
+	onClearDNSSECCache   func()                                                              // Called to clear DNSSEC validation caches
 	onUpdateConfigChange func(enabled bool, allowedNets, allowedKeys []string, autoPTR bool) // Called when dynamic update config changes
-	store               interface{} // Optional storage backend (*storage.Store)
-	secondaryMgr        SecondaryZoneProvider
-	secondaryMgrLock    sync.RWMutex
-	blocklistMgr        BlocklistManager
+	store                interface{}                                                         // Optional storage backend (*storage.Store)
+	secondaryMgr         SecondaryZoneProvider
+	secondaryMgrLock     sync.RWMutex
+	blocklistMgr         BlocklistManager
 }
 
 // SetClearDNSSECCacheCallback sets the callback to clear DNSSEC caches
@@ -927,123 +927,6 @@ func (h *Handler) handleRecord(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) collectRecords(typeFilter string) []RecordRequest {
-	var records []RecordRequest
-
-	if typeFilter == "" || typeFilter == "A" {
-		for _, r := range h.rawConfig.Records.A {
-			records = append(records, RecordRequest{Type: "A", Name: r.Name, IP: r.IP, TTL: r.TTL})
-		}
-	}
-	if typeFilter == "" || typeFilter == "AAAA" {
-		for _, r := range h.rawConfig.Records.AAAA {
-			records = append(records, RecordRequest{Type: "AAAA", Name: r.Name, IP: r.IP, TTL: r.TTL})
-		}
-	}
-	if typeFilter == "" || typeFilter == "MX" {
-		for _, r := range h.rawConfig.Records.MX {
-			records = append(records, RecordRequest{Type: "MX", Name: r.Name, Priority: r.Priority, Target: r.Target, TTL: r.TTL})
-		}
-	}
-	if typeFilter == "" || typeFilter == "TXT" {
-		for _, r := range h.rawConfig.Records.TXT {
-			records = append(records, RecordRequest{Type: "TXT", Name: r.Name, Values: r.Values, TTL: r.TTL})
-		}
-	}
-	if typeFilter == "" || typeFilter == "NS" {
-		for _, r := range h.rawConfig.Records.NS {
-			records = append(records, RecordRequest{Type: "NS", Name: r.Name, Target: r.Target, TTL: r.TTL})
-		}
-	}
-	if typeFilter == "" || typeFilter == "SOA" {
-		for _, r := range h.rawConfig.Records.SOA {
-			records = append(records, RecordRequest{
-				Type: "SOA", Name: r.Name, MName: r.MName, RName: r.RName,
-				Serial: r.Serial, Refresh: r.Refresh, Retry: r.Retry,
-				Expire: r.Expire, Minimum: r.Minimum, TTL: r.TTL,
-			})
-		}
-	}
-	if typeFilter == "" || typeFilter == "CNAME" {
-		for _, r := range h.rawConfig.Records.CNAME {
-			records = append(records, RecordRequest{Type: "CNAME", Name: r.Name, Target: r.Target, TTL: r.TTL})
-		}
-	}
-	if typeFilter == "" || typeFilter == "SRV" {
-		for _, r := range h.rawConfig.Records.SRV {
-			records = append(records, RecordRequest{
-				Type: "SRV", Name: r.Name, Priority: r.Priority, Weight: r.Weight,
-				Port: r.Port, Target: r.Target, TTL: r.TTL,
-			})
-		}
-	}
-	if typeFilter == "" || typeFilter == "CAA" {
-		for _, r := range h.rawConfig.Records.CAA {
-			records = append(records, RecordRequest{Type: "CAA", Name: r.Name, Flag: r.Flag, Tag: r.Tag, Value: r.Value, TTL: r.TTL})
-		}
-	}
-	if typeFilter == "" || typeFilter == "PTR" {
-		for _, r := range h.rawConfig.Records.PTR {
-			records = append(records, RecordRequest{Type: "PTR", IP: r.IP, Hostname: r.Hostname, TTL: r.TTL})
-		}
-	}
-	if typeFilter == "" || typeFilter == "ALIAS" {
-		for _, r := range h.rawConfig.Records.ALIAS {
-			records = append(records, RecordRequest{Type: "ALIAS", Name: r.Name, Target: r.Target, TTL: r.TTL})
-		}
-	}
-	if typeFilter == "" || typeFilter == "SSHFP" {
-		for _, r := range h.rawConfig.Records.SSHFP {
-			records = append(records, RecordRequest{
-				Type: "SSHFP", Name: r.Name, Algorithm: r.Algorithm,
-				FPType: r.Type, Fingerprint: r.Fingerprint, TTL: r.TTL,
-			})
-		}
-	}
-	if typeFilter == "" || typeFilter == "TLSA" {
-		for _, r := range h.rawConfig.Records.TLSA {
-			records = append(records, RecordRequest{
-				Type: "TLSA", Name: r.Name, Usage: r.Usage, Selector: r.Selector,
-				MatchingType: r.MatchingType, Certificate: r.Certificate, TTL: r.TTL,
-			})
-		}
-	}
-	if typeFilter == "" || typeFilter == "NAPTR" {
-		for _, r := range h.rawConfig.Records.NAPTR {
-			records = append(records, RecordRequest{
-				Type: "NAPTR", Name: r.Name, Order: r.Order, Preference: r.Preference,
-				Flags: r.Flags, Service: r.Service, Regexp: r.Regexp,
-				Replacement: r.Replacement, TTL: r.TTL,
-			})
-		}
-	}
-	if typeFilter == "" || typeFilter == "SVCB" {
-		for _, r := range h.rawConfig.Records.SVCB {
-			records = append(records, RecordRequest{
-				Type: "SVCB", Name: r.Name, Priority: r.Priority,
-				Target: r.Target, Params: r.Params, TTL: r.TTL,
-			})
-		}
-	}
-	if typeFilter == "" || typeFilter == "HTTPS" {
-		for _, r := range h.rawConfig.Records.HTTPS {
-			records = append(records, RecordRequest{
-				Type: "HTTPS", Name: r.Name, Priority: r.Priority,
-				Target: r.Target, Params: r.Params, TTL: r.TTL,
-			})
-		}
-	}
-	if typeFilter == "" || typeFilter == "LOC" {
-		for _, r := range h.rawConfig.Records.LOC {
-			records = append(records, RecordRequest{
-				Type: "LOC", Name: r.Name, Latitude: r.Latitude, Longitude: r.Longitude,
-				Altitude: r.Altitude, Size: r.Size, HorizPre: r.HorizPre, VertPre: r.VertPre, TTL: r.TTL,
-			})
-		}
-	}
-
-	return records
-}
 
 // collectRecordsFiltered returns records filtered by type and tenant
 func (h *Handler) collectRecordsFiltered(typeFilter, zoneFilter string, session *auth.Session) []RecordRequest {

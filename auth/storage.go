@@ -267,7 +267,7 @@ func (sm *StorageManager) CreateSessionForOIDC(subject, email, displayName, role
 	// Check if user exists by subject (stored as ID) or email
 	user, err := sm.store.GetUser(subject)
 	if err != nil {
-		user, err = sm.store.GetUserByUsername(email)
+		user, _ = sm.store.GetUserByUsername(email)
 	}
 
 	if user != nil {

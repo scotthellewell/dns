@@ -51,11 +51,11 @@ type Server struct {
 	dnssec    *dnssec.Manager
 	transfer  *transfer.Handler
 	secondary *secondary.Manager
-	update    *UpdateHandler    // RFC 2136 dynamic updates
-	rrl       *rrl.Limiter      // Response Rate Limiter
-	querylog  *querylog.Logger  // Query Logger
-	blocklist BlocklistChecker  // Blocklist checker
-	storage   StorageInterface  // Storage for dynamic records
+	update    *UpdateHandler   // RFC 2136 dynamic updates
+	rrl       *rrl.Limiter     // Response Rate Limiter
+	querylog  *querylog.Logger // Query Logger
+	blocklist BlocklistChecker // Blocklist checker
+	storage   StorageInterface // Storage for dynamic records
 	mu        sync.RWMutex
 
 	// DNSSEC key store for loading keys from database
@@ -1688,9 +1688,7 @@ func (s *Server) handleDNSKEY(m *dns.Msg, q dns.Question) {
 		return
 	}
 
-	for _, key := range signer.GetDNSKEYs() {
-		m.Answer = append(m.Answer, key)
-	}
+	m.Answer = append(m.Answer, signer.GetDNSKEYs()...)
 }
 
 // handleDS handles DS queries

@@ -520,12 +520,12 @@ func (s *Store) StoreCertificate(cert *TLSCertificate) error {
 		}
 		return bucket.Put([]byte(cert.Domain), data)
 	})
-	
+
 	if err == nil {
 		// Record for sync - use "tls_cert" entity type
 		recordChange("tls_cert", cert.Domain, "", "create", cert)
 	}
-	
+
 	return err
 }
 
@@ -551,11 +551,11 @@ func (s *Store) DeleteCertificate(domain string) error {
 		bucket := tx.Bucket([]byte("certificates"))
 		return bucket.Delete([]byte(domain))
 	})
-	
+
 	if err == nil {
 		recordChange("tls_cert", domain, "", "delete", nil)
 	}
-	
+
 	return err
 }
 

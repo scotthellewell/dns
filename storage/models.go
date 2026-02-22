@@ -39,7 +39,7 @@ type Tenant struct {
 	Name                 string    `json:"name"`
 	Description          string    `json:"description,omitempty"`
 	IsMain               bool      `json:"is_main,omitempty"`
-	DefaultNameservers   []string  `json:"default_nameservers,omitempty"`   // Default NS records for zones in this tenant
+	DefaultNameservers   []string  `json:"default_nameservers,omitempty"`    // Default NS records for zones in this tenant
 	DefaultNameserverTTL uint32    `json:"default_nameserver_ttl,omitempty"` // TTL for default NS records (0 = use zone default)
 	CreatedAt            time.Time `json:"created_at"`
 	CreatedBy            string    `json:"created_by,omitempty"`
@@ -404,8 +404,8 @@ type DNSSECKeys struct {
 }
 
 // Getter methods for DNSSECKeys to implement server.DNSSECKeyData interface
-func (k *DNSSECKeys) GetZoneName() string  { return k.ZoneName }
-func (k *DNSSECKeys) GetAlgorithm() string { return k.Algorithm }
+func (k *DNSSECKeys) GetZoneName() string   { return k.ZoneName }
+func (k *DNSSECKeys) GetAlgorithm() string  { return k.Algorithm }
 func (k *DNSSECKeys) GetKSKPrivate() string { return k.KSKPrivate }
 func (k *DNSSECKeys) GetZSKPrivate() string { return k.ZSKPrivate }
 func (k *DNSSECKeys) IsEnabled() bool       { return k.Enabled }
@@ -585,11 +585,11 @@ type ACMEState struct {
 
 // DynamicUpdateConfig holds RFC 2136 dynamic DNS update settings.
 type DynamicUpdateConfig struct {
-	Enabled      bool              `json:"enabled"`
-	AllowedNets  []string          `json:"allowed_nets"`  // CIDR networks allowed to send updates
-	AllowedZones []string          `json:"allowed_zones"` // Zones that accept updates (empty = all)
-	TSIGKeys     []TSIGKey         `json:"tsig_keys"`     // TSIG keys for authentication
-	AutoPTR      bool              `json:"auto_ptr"`      // Auto-create reverse PTR records
-	AllowedTypes []string          `json:"allowed_types"` // Allowed record types (A, AAAA, PTR, TXT)
-	Logging      bool              `json:"logging"`       // Log all update requests
+	Enabled      bool      `json:"enabled"`
+	AllowedNets  []string  `json:"allowed_nets"`  // CIDR networks allowed to send updates
+	AllowedZones []string  `json:"allowed_zones"` // Zones that accept updates (empty = all)
+	TSIGKeys     []TSIGKey `json:"tsig_keys"`     // TSIG keys for authentication
+	AutoPTR      bool      `json:"auto_ptr"`      // Auto-create reverse PTR records
+	AllowedTypes []string  `json:"allowed_types"` // Allowed record types (A, AAAA, PTR, TXT)
+	Logging      bool      `json:"logging"`       // Log all update requests
 }

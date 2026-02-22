@@ -612,7 +612,7 @@ const (
 
 type ParsedRecursion struct {
 	Enabled           bool
-	Mode              string   // "disabled", "partial", or "full"
+	Mode              string // "disabled", "partial", or "full"
 	Upstream          []string
 	Timeout           int
 	MaxDepth          int
@@ -703,9 +703,9 @@ type ParsedConfig struct {
 	QueryLog       QueryLogConfig        // Query logging settings
 
 	// Tenant settings
-	TenantDefaults    map[string]TenantDefaults // TenantID -> defaults
-	ZoneTenants       map[string]string         // ZoneName -> TenantID
-	MainTenantID      string                    // The ID of the main tenant
+	TenantDefaults map[string]TenantDefaults // TenantID -> defaults
+	ZoneTenants    map[string]string         // ZoneName -> TenantID
+	MainTenantID   string                    // The ID of the main tenant
 
 	// Static records
 	ARecords     map[string][]ParsedARecord     // Name -> A records

@@ -127,8 +127,6 @@ type ACMEManager struct {
 	state          ACMEState
 	certManager    CertUploader
 	dnsProvider    DNSProvider
-	httpServer     *http.Server
-	httpChallenge  *http01.ProviderServer
 	configFile     string
 	stateFile      string
 	accountKeyFile string

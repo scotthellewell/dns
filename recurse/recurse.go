@@ -676,60 +676,6 @@ func (r *Resolver) extractDelegationWithZone(resp *dns.Msg) ([]string, string, u
 	return servers, zone, ttl
 }
 
-// extractDelegation extracts nameserver IPs from a delegation response
-// Returns IPv4 servers first, then IPv6 servers (for fallback)
-func (r *Resolver) extractDelegation(resp *dns.Msg) []string {
-	var nsNames []string
-	var ipv4Servers []string
-	var ipv6Servers []string
-
-	// Get NS record names from authority section
-	for _, rr := range resp.Ns {
-		if ns, ok := rr.(*dns.NS); ok {
-			nsNames = append(nsNames, ns.Ns)
-		}
-	}
-
-	// Try to find glue records in additional section
-	for _, rr := range resp.Extra {
-		switch v := rr.(type) {
-		case *dns.A:
-			for _, nsName := range nsNames {
-				if strings.EqualFold(v.Hdr.Name, nsName) {
-					ipv4Servers = append(ipv4Servers, v.A.String()+":53")
-					break
-				}
-			}
-		case *dns.AAAA:
-			for _, nsName := range nsNames {
-				if strings.EqualFold(v.Hdr.Name, nsName) {
-					ipv6Servers = append(ipv6Servers, "["+v.AAAA.String()+"]:53")
-					break
-				}
-			}
-		}
-	}
-
-	// Return IPv4 first, then IPv6 as fallback
-	servers := append(ipv4Servers, ipv6Servers...)
-
-	// If no glue records, resolve the NS names
-	if len(servers) == 0 && len(nsNames) > 0 {
-		// Try to resolve the first NS name (avoid infinite recursion)
-		for _, nsName := range nsNames {
-			ips, _, _, found := r.queryIterative(nsName, dns.TypeA, rootServers, 0)
-			if found && len(ips) > 0 {
-				for _, ip := range ips {
-					servers = append(servers, ip.String()+":53")
-				}
-				break
-			}
-		}
-	}
-
-	return servers
-}
-
 // extractRecords extracts IPs and CNAMEs from a response
 func (r *Resolver) extractRecords(resp *dns.Msg, qtype uint16) ([]net.IP, []string, uint32, bool) {
 	var ips []net.IP

@@ -80,41 +80,6 @@ func (h *Handler) hasStorage() bool {
 	return h.getStore() != nil
 }
 
-// getZonesFromStorage returns zones from storage backend
-func (h *Handler) getZonesFromStorage(tenantID string) ([]*storage.Zone, error) {
-	store := h.getStore()
-	if store == nil {
-		return nil, nil
-	}
-	return store.ListZones(tenantID)
-}
-
-// getRecordsFromStorage returns records from storage backend
-func (h *Handler) getRecordsFromStorage(zoneName string) ([]storage.Record, error) {
-	store := h.getStore()
-	if store == nil {
-		return nil, nil
-	}
-	return store.GetAllZoneRecords(zoneName)
-}
-
-// getSecondaryZonesFromStorage returns secondary zones from storage backend
-func (h *Handler) getSecondaryZonesFromStorage() ([]storage.SecondaryZone, error) {
-	store := h.getStore()
-	if store == nil {
-		return nil, nil
-	}
-	return store.ListSecondaryZones()
-}
-
-// getTransferConfigFromStorage returns transfer config from storage backend
-func (h *Handler) getTransferConfigFromStorage() (*storage.TransferConfig, error) {
-	store := h.getStore()
-	if store == nil {
-		return nil, nil
-	}
-	return store.GetTransferConfig()
-}
 
 // handleZonesStorage handles zones API using storage backend
 func (h *Handler) handleZonesStorage(w http.ResponseWriter, r *http.Request, session *auth.Session) {

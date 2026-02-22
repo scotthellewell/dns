@@ -64,14 +64,14 @@ func (c *Cache) Get(key string) (*Entry, bool, bool) {
 	}
 
 	now := time.Now()
-	
+
 	// Update access tracking
 	entry.HitCount++
 	entry.LastAccess = now
 
 	// Check if expired
 	expired := now.After(entry.ExpiresAt)
-	
+
 	if expired {
 		// Check if within stale window
 		if c.staleAge > 0 && now.Before(entry.ExpiresAt.Add(c.staleAge)) {
@@ -160,7 +160,7 @@ func (c *Cache) SetWithNegative(key string, ips []net.IP, cnames []string, ttl u
 // evictOldest removes expired entries and oldest entries if still over limit
 func (c *Cache) evictOldest() {
 	now := time.Now()
-	
+
 	// First pass: remove expired entries
 	for key, entry := range c.entries {
 		if now.After(entry.ExpiresAt) {

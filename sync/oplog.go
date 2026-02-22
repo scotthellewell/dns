@@ -7,6 +7,7 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	berrors "go.etcd.io/bbolt/errors"
 )
 
 var (
@@ -252,7 +253,7 @@ func (o *OpLog) Purge() (int64, error) {
 		}
 
 		// Delete and recreate oplog bucket
-		if err := tx.DeleteBucket(oplogBucket); err != nil && err != bolt.ErrBucketNotFound {
+		if err := tx.DeleteBucket(oplogBucket); err != nil && err != berrors.ErrBucketNotFound {
 			return err
 		}
 		if _, err := tx.CreateBucket(oplogBucket); err != nil {
@@ -260,7 +261,7 @@ func (o *OpLog) Purge() (int64, error) {
 		}
 
 		// Delete and recreate peer state bucket
-		if err := tx.DeleteBucket(peerStateBucket); err != nil && err != bolt.ErrBucketNotFound {
+		if err := tx.DeleteBucket(peerStateBucket); err != nil && err != berrors.ErrBucketNotFound {
 			return err
 		}
 		if _, err := tx.CreateBucket(peerStateBucket); err != nil {

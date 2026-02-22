@@ -31,14 +31,6 @@ func RecordContentID(zone, name, recordType string, data json.RawMessage) string
 	return fmt.Sprintf("%s:%s:%s:%s", zone, name, recordType, dataHash)
 }
 
-func parseRecordKey(key string) (zone, name, recordType string, ok bool) {
-	parts := strings.SplitN(key, ":", 3)
-	if len(parts) != 3 {
-		return "", "", "", false
-	}
-	return parts[0], parts[1], parts[2], true
-}
-
 // CreateRecord creates a new DNS record.
 // For A/AAAA records, it automatically creates PTR records in matching reverse zones.
 func (s *Store) CreateRecord(record *Record) error {

@@ -4,23 +4,6 @@ import (
 	"time"
 )
 
-// StoreAdapter adapts storage.Store to the blocklist.Store interface.
-type StoreAdapter struct {
-	store interface {
-		GetBlocklistConfig() (interface{}, error)
-		SaveBlocklistConfig(config interface{}) error
-		GetBlocklistSources() (interface{}, error)
-		SaveBlocklistSource(source interface{}) error
-		DeleteBlocklistSource(id string) error
-		GetBlocklistWhitelist() ([]string, error)
-		SaveBlocklistWhitelist(entries []string) error
-		AddBlockedDomains(sourceID string, domains []string) error
-		RemoveBlockedDomainsForSource(sourceID string) error
-		IsBlocked(domain string) (bool, error)
-		GetAllBlockedDomains() ([]string, error)
-		GetBlockedDomainCount() (int, error)
-	}
-}
 
 // StorageStore is the interface for the actual storage package.
 type StorageStore interface {
