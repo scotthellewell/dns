@@ -508,11 +508,14 @@ func TestConcurrentQueries(t *testing.T) {
 		for i := 0; i < 50; i++ {
 			go func(n int) {
 				client := &dns.Client{Timeout: 5 * time.Second}
-				host := "host1"
-				if n%3 == 1 {
+				var host string
+				switch n % 3 {
+				case 1:
 					host = "host2"
-				} else if n%3 == 2 {
+				case 2:
 					host = "host3"
+				default:
+					host = "host1"
 				}
 
 				msg := new(dns.Msg)
