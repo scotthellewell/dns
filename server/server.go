@@ -496,7 +496,7 @@ func (s *Server) isAuthoritative(name string, cfg *config.ParsedConfig) bool {
 }
 
 // createSOAForZone creates a SOA record for the given zone to include in Authority section
-func (s *Server) createSOAForZone(zoneName string, cfg *config.ParsedConfig) *dns.SOA {
+func (s *Server) createSOAForZone(zoneName string, _ *config.ParsedConfig) *dns.SOA {
 	// Use resolver's LookupSOA which has the actual SOA data
 	record, found := s.getResolver().LookupSOA(zoneName)
 	if !found {
@@ -1511,7 +1511,7 @@ func (s *Server) handleNS(m *dns.Msg, q dns.Question) {
 }
 
 // addGlueRecords adds A and AAAA records for the given nameserver to the Extra section
-func (s *Server) addGlueRecords(m *dns.Msg, nameserver string, ttl uint32) {
+func (s *Server) addGlueRecords(m *dns.Msg, nameserver string, _ uint32) {
 	resolver := s.getResolver()
 
 	// Look up A records for the nameserver
@@ -1726,7 +1726,7 @@ func (s *Server) handleDelegation(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg, 
 }
 
 // handleDelegationForward queries the delegated nameservers and returns the answer
-func (s *Server) handleDelegationForward(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg, q dns.Question, del *config.ParsedDelegation, wantDNSSEC bool) bool {
+func (s *Server) handleDelegationForward(w dns.ResponseWriter, r *dns.Msg, _ *dns.Msg, _ dns.Question, del *config.ParsedDelegation, _ bool) bool {
 	// Build list of nameserver addresses to query
 	var servers []string
 	for _, ns := range del.Nameservers {

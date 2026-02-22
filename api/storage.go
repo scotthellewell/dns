@@ -1078,7 +1078,7 @@ func dnsRRToStorageRecord(rr dns.RR, zoneName string) (*storage.Record, error) {
 }
 
 // handleTransferStorage handles transfer config API using storage backend
-func (h *Handler) handleTransferStorage(w http.ResponseWriter, r *http.Request, session *auth.Session) {
+func (h *Handler) handleTransferStorage(w http.ResponseWriter, r *http.Request, _ *auth.Session) {
 	store := h.getStore()
 	if store == nil {
 		h.errorResponse(w, "Storage not available", http.StatusInternalServerError)
