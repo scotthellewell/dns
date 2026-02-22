@@ -177,7 +177,7 @@ func (h *UpdateHandler) isAuthorized(clientIP net.IP, r *dns.Msg) bool {
 }
 
 // checkPrerequisites verifies that prerequisites are met
-func (h *UpdateHandler) checkPrerequisites(prereqs []dns.RR, zone string) error {
+func (h *UpdateHandler) checkPrerequisites(prereqs []dns.RR, _ string) error {
 	// Types of prerequisites:
 	// - Name in use (class=ANY, type=ANY, RDATA empty)
 	// - Name not in use (class=NONE, type=ANY, RDATA empty)
@@ -414,7 +414,7 @@ func (h *UpdateHandler) deleteAllRecords(name, zone string, rrtype uint16) error
 }
 
 // createReversePTR creates a PTR record for A/AAAA records
-func (h *UpdateHandler) createReversePTR(rr dns.RR, zone, source string) {
+func (h *UpdateHandler) createReversePTR(rr dns.RR, _, source string) {
 	var ip net.IP
 	var hostname string
 

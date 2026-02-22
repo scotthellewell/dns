@@ -1617,7 +1617,7 @@ func (h *Handler) handleDelegation(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRecordStorage handles single record API (DELETE/PUT) using storage backend
-func (h *Handler) handleRecordStorage(w http.ResponseWriter, r *http.Request, recordType string, recordID string) {
+func (h *Handler) handleRecordStorage(w http.ResponseWriter, r *http.Request, _ string, recordID string) {
 	store := h.getStore()
 	if store == nil {
 		h.errorResponse(w, "Storage not available", http.StatusInternalServerError)

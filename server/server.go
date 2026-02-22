@@ -1770,7 +1770,7 @@ func (s *Server) handleDelegationForward(w dns.ResponseWriter, r *dns.Msg, _ *dn
 }
 
 // handleDelegationReferral returns NS referral records
-func (s *Server) handleDelegationReferral(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg, q dns.Question, del *config.ParsedDelegation) bool {
+func (s *Server) handleDelegationReferral(w dns.ResponseWriter, _ *dns.Msg, m *dns.Msg, _ dns.Question, del *config.ParsedDelegation) bool {
 	m.Authoritative = false
 	m.Rcode = dns.RcodeSuccess
 
@@ -2496,7 +2496,7 @@ func (s *Server) addDynamicRecord(record map[string]interface{}) error {
 }
 
 // deleteDynamicRecord deletes a specific record via storage
-func (s *Server) deleteDynamicRecord(name, zone string, rrtype uint16, rr dns.RR) error {
+func (s *Server) deleteDynamicRecord(name, zone string, rrtype uint16, _ dns.RR) error {
 	storage := s.getStorage()
 	if storage == nil {
 		return fmt.Errorf("storage not configured")
