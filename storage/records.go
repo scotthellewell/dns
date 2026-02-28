@@ -967,14 +967,17 @@ func (s *Store) getReverseZoneForIPInTx(tx *bolt.Tx, ip net.IP, tenantID string)
 	indexBucket := tx.Bucket([]byte("indexes"))
 	zonesBucket := tx.Bucket([]byte("zones"))
 
-	// Iterate through reverse zone index to find matching zone
-	prefix := []byte("reverse_zone:")
-	c := indexBucket.Cursor()
+	// Use the nested sub-bucket for reverse zone lookups
+	reverseIdx := indexBucket.Bucket([]byte(IndexReverseZones))
+	if reverseIdx == nil {
+		return nil, nil
+	}
 
 	var bestMatch *Zone
 	var bestBits int
 
-	for k, v := c.Seek(prefix); k != nil && strings.HasPrefix(string(k), string(prefix)); k, v = c.Next() {
+	c := reverseIdx.Cursor()
+	for k, v := c.First(); k != nil; k, v = c.Next() {
 		zoneName := string(v)
 
 		zoneData := zonesBucket.Get([]byte(zoneName))

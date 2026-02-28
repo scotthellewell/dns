@@ -53,12 +53,16 @@ func (s *Store) Export(w io.Writer) error {
 		}
 
 		// Export records
+		// Records are stored as []Record per key (zone:name:type),
+		// so we must unmarshal as a slice and append all entries.
 		recordsBucket := tx.Bucket(BucketRecords)
 		if recordsBucket != nil {
 			recordsBucket.ForEach(func(k, v []byte) error {
-				var record Record
-				if err := json.Unmarshal(v, &record); err == nil {
-					backup.Records = append(backup.Records, &record)
+				var records []Record
+				if err := json.Unmarshal(v, &records); err == nil {
+					for i := range records {
+						backup.Records = append(backup.Records, &records[i])
+					}
 				}
 				return nil
 			})
