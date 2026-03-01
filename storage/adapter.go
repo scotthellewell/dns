@@ -251,6 +251,55 @@ func (s *Store) BuildParsedConfig() (*config.ParsedConfig, error) {
 		}
 	}
 
+	// Load delegations from storage
+	delegations, err := s.ListDelegations("")
+	if err == nil {
+		for _, d := range delegations {
+			if !d.Active {
+				continue
+			}
+			zone := d.ChildZone
+			if !strings.HasSuffix(zone, ".") {
+				zone += "."
+			}
+
+			// Parse nameservers
+			nameservers := make([]string, 0, len(d.Nameservers))
+			for _, ns := range d.Nameservers {
+				if !strings.HasSuffix(ns, ".") {
+					ns += "."
+				}
+				nameservers = append(nameservers, ns)
+			}
+
+			// Parse glue records
+			glue := make(map[string][]net.IP)
+			for hostname, ips := range d.Glue {
+				if !strings.HasSuffix(hostname, ".") {
+					hostname += "."
+				}
+				for _, ipStr := range ips {
+					if ip := net.ParseIP(ipStr); ip != nil {
+						glue[hostname] = append(glue[hostname], ip)
+					}
+				}
+			}
+
+			ttl := d.TTL
+			if ttl == 0 {
+				ttl = 3600
+			}
+
+			parsed.Delegations = append(parsed.Delegations, config.ParsedDelegation{
+				Zone:        zone,
+				Nameservers: nameservers,
+				Glue:        glue,
+				Forward:     d.Forward,
+				TTL:         ttl,
+			})
+		}
+	}
+
 	return parsed, nil
 }
 

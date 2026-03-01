@@ -729,15 +729,18 @@ func delegationKey(parentZone, childZone string) string {
 }
 
 // CreateDelegation creates a new zone delegation.
+// For forward-only delegations (Forward=true), parent zone is optional — queries are
+// forwarded to the nameservers without requiring a parent zone to exist.
 func (s *Store) CreateDelegation(d *Delegation) error {
-	if d.ParentZone == "" {
-		return fmt.Errorf("parent zone required")
-	}
 	if d.ChildZone == "" {
 		return fmt.Errorf("child zone required")
 	}
 	if len(d.Nameservers) == 0 {
 		return fmt.Errorf("at least one nameserver required")
+	}
+	// Parent zone is required for referral-style delegations but optional for forward-only
+	if d.ParentZone == "" && !d.Forward {
+		return fmt.Errorf("parent zone required for non-forward delegations")
 	}
 
 	d.CreatedAt = time.Now().UTC()
@@ -745,18 +748,31 @@ func (s *Store) CreateDelegation(d *Delegation) error {
 		d.TTL = 3600
 	}
 
+	// Use a synthetic parent key for forward-only delegations without a parent zone
+	parentKey := d.ParentZone
+	if parentKey == "" {
+		parentKey = "_forward"
+	}
+
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		// Verify parent zone exists
-		zonesBucket := tx.Bucket(BucketZones)
-		if zonesBucket.Get([]byte(d.ParentZone)) == nil {
-			return fmt.Errorf("parent zone %s not found", d.ParentZone)
+		// Verify parent zone exists (skip for forward-only delegations without parent)
+		if d.ParentZone != "" {
+			zonesBucket := tx.Bucket(BucketZones)
+			if zonesBucket.Get([]byte(d.ParentZone)) == nil {
+				return fmt.Errorf("parent zone %s not found", d.ParentZone)
+			}
 		}
 
 		// Check if delegation already exists
 		delegBucket := tx.Bucket(BucketDelegations)
-		key := delegationKey(d.ParentZone, d.ChildZone)
+		key := delegationKey(parentKey, d.ChildZone)
 		if delegBucket.Get([]byte(key)) != nil {
 			return ErrAlreadyExists
+		}
+
+		// For forward-only delegations without parent zone, skip NS/glue record creation
+		if d.ParentZone == "" && d.Forward {
+			return putJSON(tx, BucketDelegations, key, d)
 		}
 
 		// Create NS records for the delegation in the parent zone
@@ -885,7 +901,7 @@ func (s *Store) CreateDelegation(d *Delegation) error {
 	})
 
 	if err == nil {
-		recordChange(EntityTypeDelegation, delegationKey(d.ParentZone, d.ChildZone), "", OpCreate, d)
+		recordChange(EntityTypeDelegation, delegationKey(parentKey, d.ChildZone), "", OpCreate, d)
 	}
 
 	return err

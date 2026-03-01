@@ -1553,6 +1553,9 @@ func (h *Handler) handleDelegations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Rebuild config so delegation takes effect immediately
+		h.UpdateConfigFromStorage() // best-effort; errors are non-fatal
+
 		h.jsonResponse(w, req)
 
 	default:
@@ -1600,6 +1603,10 @@ func (h *Handler) handleDelegation(w http.ResponseWriter, r *http.Request) {
 			h.errorResponse(w, "Failed to update delegation: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// Rebuild config so delegation changes take effect immediately
+		h.UpdateConfigFromStorage() // best-effort; errors are non-fatal
+
 		h.jsonResponse(w, req)
 
 	case "DELETE":
@@ -1609,6 +1616,10 @@ func (h *Handler) handleDelegation(w http.ResponseWriter, r *http.Request) {
 			h.errorResponse(w, "Failed to delete delegation: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// Rebuild config so delegation removal takes effect immediately
+		h.UpdateConfigFromStorage() // best-effort; errors are non-fatal
+
 		h.jsonResponse(w, map[string]interface{}{"status": "deleted"})
 
 	default:

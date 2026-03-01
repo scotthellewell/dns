@@ -325,6 +325,7 @@ type Delegation struct {
 	Nameservers     []string            `json:"nameservers"`
 	Glue            map[string][]string `json:"glue,omitempty"`
 	DSRecords       []DSRecordData      `json:"ds_records,omitempty"` // DS records for DNSSEC chain of trust
+	Forward         bool                `json:"forward"`              // If true, forward queries to NS servers; if false, return NS referral
 	GrantedToTenant string              `json:"granted_to_tenant,omitempty"`
 	Active          bool                `json:"active"`
 	TTL             uint32              `json:"ttl"`

@@ -1793,7 +1793,9 @@ func (s *Server) handleDelegationForward(w dns.ResponseWriter, r *dns.Msg, _ *dn
 
 		// Got a response, forward it back
 		resp.Id = r.Id
-		w.WriteMsg(resp)
+		if err := w.WriteMsg(resp); err != nil {
+			log.Printf("[ERROR] Delegation forward WriteMsg failed: %v", err)
+		}
 		return true
 	}
 
