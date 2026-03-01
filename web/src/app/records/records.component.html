@@ -57,6 +57,7 @@
           <tr>
             <th>Child Zone</th>
             <th>Parent Zone</th>
+            <th>Mode</th>
             <th>Nameservers</th>
             <th>DNSSEC</th>
             <th>Actions</th>
@@ -65,7 +66,11 @@
         <tbody>
           <tr *ngFor="let delegation of delegations">
             <td><code class="zone-name">{{ delegation.child_zone }}</code></td>
-            <td><code class="zone-name">{{ delegation.parent_zone }}</code></td>
+            <td><code class="zone-name">{{ delegation.parent_zone || '—' }}</code></td>
+            <td>
+              <span *ngIf="delegation.forward" class="mode-badge forward" title="Queries are forwarded to nameservers and answers returned directly">Forward</span>
+              <span *ngIf="!delegation.forward" class="mode-badge referral" title="NS referral records returned to client">Referral</span>
+            </td>
             <td>
               <span *ngFor="let ns of delegation.nameservers; let last = last">
                 <code>{{ ns }}</code>{{ last ? '' : ', ' }}
@@ -320,11 +325,19 @@
     </div>
     <div class="modal-body">
       <p class="delegation-intro">
-        Create a delegation to a subdomain. This will create NS records pointing to the delegated nameservers,
-        optional glue records for in-bailiwick nameservers, and DS records for DNSSEC chain of trust.
+        Create a delegation to a subdomain. In <strong>referral</strong> mode, NS records are returned to the client.
+        In <strong>forward</strong> mode, queries are sent to the nameservers and answers returned directly (conditional forwarding).
       </p>
 
       <div class="form-group">
+        <label class="toggle-label">
+          <input type="checkbox" [(ngModel)]="delegationData.forward">
+          <span>Forward mode</span>
+        </label>
+        <small>When enabled, queries are forwarded to nameservers and answers returned directly (no parent zone required)</small>
+      </div>
+
+      <div class="form-group" *ngIf="!delegationData.forward">
         <label for="parent_zone">Parent Zone</label>
         <select id="parent_zone" [(ngModel)]="delegationData.parent_zone">
           <option value="">Select a zone</option>
@@ -334,10 +347,10 @@
       </div>
 
       <div class="form-group">
-        <label for="child_zone">Delegated Subdomain</label>
+        <label for="child_zone">{{ delegationData.forward ? 'Zone to Forward' : 'Delegated Subdomain' }}</label>
         <input type="text" id="child_zone" [(ngModel)]="delegationData.child_zone" 
-               placeholder="e.g., subdomain or sub.domain">
-        <small>Just the subdomain part (will be combined with parent zone)</small>
+               [placeholder]="delegationData.forward ? 'e.g., r1lab.local' : 'e.g., subdomain or sub.domain'">
+        <small>{{ delegationData.forward ? 'The full domain name to forward queries for' : 'Just the subdomain part (will be combined with parent zone)' }}</small>
       </div>
 
       <div class="form-section">

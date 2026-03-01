@@ -80,7 +80,6 @@ func (h *Handler) hasStorage() bool {
 	return h.getStore() != nil
 }
 
-
 // handleZonesStorage handles zones API using storage backend
 func (h *Handler) handleZonesStorage(w http.ResponseWriter, r *http.Request, session *auth.Session) {
 	store := h.getStore()

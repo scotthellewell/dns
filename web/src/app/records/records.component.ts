@@ -42,6 +42,7 @@ export class RecordsComponent implements OnInit {
     parent_zone: '',
     child_zone: '',
     nameservers: [''],
+    forward: false,
     glue_records: [],
     ds_records: []
   };
@@ -339,6 +340,7 @@ export class RecordsComponent implements OnInit {
         parent_zone: this.selectedZone || '',
         child_zone: '',
         nameservers: [''],
+        forward: false,
         glue_records: [],
         ds_records: []
       };
@@ -547,9 +549,9 @@ export class RecordsComponent implements OnInit {
   }
 
   saveDelegation(): void {
-    // Validate
-    if (!this.delegationData.parent_zone) {
-      this.toast.error('Parent zone is required');
+    // Validate - parent zone required for referral delegations, optional for forward-only
+    if (!this.delegationData.forward && !this.delegationData.parent_zone) {
+      this.toast.error('Parent zone is required for referral delegations');
       return;
     }
     if (!this.delegationData.child_zone) {
@@ -564,6 +566,11 @@ export class RecordsComponent implements OnInit {
     // Clean up empty entries
     this.delegationData.nameservers = this.delegationData.nameservers.filter(ns => ns.trim());
     
+    // For forward-only delegations, clear parent zone
+    if (this.delegationData.forward) {
+      this.delegationData.parent_zone = '';
+    }
+
     this.api.createDelegation(this.delegationData).subscribe({
       next: () => {
         this.toast.success('Delegation created successfully');
@@ -578,9 +585,14 @@ export class RecordsComponent implements OnInit {
   }
 
   deleteDelegation(delegation: Delegation): void {
-    if (!confirm(`Delete delegation for ${delegation.child_zone}.${delegation.parent_zone}?`)) return;
+    const displayName = delegation.forward 
+      ? delegation.child_zone 
+      : `${delegation.child_zone}.${delegation.parent_zone}`;
+    if (!confirm(`Delete delegation for ${displayName}?`)) return;
 
-    this.api.deleteDelegation(delegation.parent_zone, delegation.child_zone).subscribe({
+    // Use _forward as parent key for forward-only delegations
+    const parentKey = delegation.parent_zone || '_forward';
+    this.api.deleteDelegation(parentKey, delegation.child_zone).subscribe({
       next: () => {
         this.toast.success('Delegation deleted successfully');
         this.loadDelegations();

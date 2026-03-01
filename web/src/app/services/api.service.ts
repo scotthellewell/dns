@@ -324,6 +324,7 @@ export interface Delegation {
   parent_zone: string;
   child_zone: string;
   nameservers: string[];
+  forward?: boolean;
   glue_records?: GlueRecord[];
   ds_records?: DsRecordData[];
 }
