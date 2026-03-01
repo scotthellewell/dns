@@ -723,6 +723,28 @@ export class ApiService {
       body: { domains: [domain] }
     });
   }
+
+  // Geofeed (RFC 8805)
+  getGeofeedEntries(): Observable<GeoEntry[]> {
+    return this.http.get<GeoEntry[]>(`${this.baseUrl}/geofeed`);
+  }
+
+  createGeofeedEntry(entry: Partial<GeoEntry>): Observable<GeoEntry> {
+    return this.http.post<GeoEntry>(`${this.baseUrl}/geofeed`, entry);
+  }
+
+  updateGeofeedEntry(id: string, entry: Partial<GeoEntry>): Observable<GeoEntry> {
+    return this.http.put<GeoEntry>(`${this.baseUrl}/geofeed/${id}`, entry);
+  }
+
+  deleteGeofeedEntry(id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/geofeed/${id}`);
+  }
+
+  getGeofeedCSVUrl(): string {
+    // Public endpoint URL for the CSV feed
+    return `${window.location.origin}/geofeed.csv`;
+  }
 }
 
 // Cluster Sync types
@@ -782,4 +804,15 @@ export interface ACMEConfig {
 
 export interface ServerSettings {
   listen: string;
+}
+
+// Geofeed (RFC 8805)
+export interface GeoEntry {
+  id: string;
+  prefix: string;
+  country: string;
+  region: string;
+  city: string;
+  postal_code: string;
+  enabled: boolean;
 }

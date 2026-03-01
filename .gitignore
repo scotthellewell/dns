@@ -59,6 +59,10 @@ web/test-results/
 # Playwright
 playwright/.cache/
 .credentials
+# Environment files (contain secrets)
+.env
+.env.*
+
 # Database files (NEVER commit these - contain sensitive data)
 *.db
 *.db-journal

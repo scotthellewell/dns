@@ -1,0 +1,223 @@
+<div class="page-container">
+  <div class="page-header">
+    <h1>IP Geolocation Feed</h1>
+    <p class="subtitle">RFC 8805/9632 geofeed — publish IP prefix geolocation data for RIRs and geolocation services</p>
+  </div>
+
+  <!-- Stats Overview -->
+  <div class="stats-row">
+    <mat-card class="stat-card">
+      <div class="stat-content">
+        <mat-icon>public</mat-icon>
+        <div class="stat-text">
+          <span class="stat-value">{{entries.length}}</span>
+          <span class="stat-label">Total Entries</span>
+        </div>
+      </div>
+    </mat-card>
+    <mat-card class="stat-card">
+      <div class="stat-content">
+        <mat-icon class="active">check_circle</mat-icon>
+        <div class="stat-text">
+          <span class="stat-value">{{getEnabledCount()}}</span>
+          <span class="stat-label">Enabled</span>
+        </div>
+      </div>
+    </mat-card>
+    <mat-card class="stat-card clickable" (click)="copyCSVUrl()" matTooltip="Click to copy URL">
+      <div class="stat-content">
+        <mat-icon>link</mat-icon>
+        <div class="stat-text">
+          <span class="stat-value csv-url">{{csvUrl}}</span>
+          <span class="stat-label">Public Feed URL (click to copy)</span>
+        </div>
+      </div>
+    </mat-card>
+  </div>
+
+  @if (loading) {
+    <div class="loading-container">
+      <mat-spinner diameter="40"></mat-spinner>
+      <span>Loading geofeed entries...</span>
+    </div>
+  } @else {
+    <!-- Entries Table -->
+    <mat-card class="content-card">
+      <div class="card-section">
+        <div class="section-header">
+          <h2>Geofeed Entries</h2>
+          <button mat-raised-button color="primary" (click)="showAddForm = !showAddForm">
+            <mat-icon>{{showAddForm ? 'close' : 'add'}}</mat-icon>
+            {{showAddForm ? 'Cancel' : 'Add Entry'}}
+          </button>
+        </div>
+
+        <!-- Add Entry Form -->
+        @if (showAddForm) {
+          <div class="add-form">
+            <div class="form-row">
+              <mat-form-field appearance="outline">
+                <mat-label>IP Prefix (CIDR)</mat-label>
+                <input matInput [(ngModel)]="newEntry.prefix" placeholder="e.g., 23.148.184.0/24">
+                <mat-hint>IPv4 or IPv6 prefix in CIDR notation</mat-hint>
+              </mat-form-field>
+              <mat-form-field appearance="outline">
+                <mat-label>Country Code</mat-label>
+                <input matInput [(ngModel)]="newEntry.country" placeholder="e.g., US" maxlength="2">
+                <mat-hint>ISO 3166-1 alpha-2</mat-hint>
+              </mat-form-field>
+              <mat-form-field appearance="outline">
+                <mat-label>Region</mat-label>
+                <input matInput [(ngModel)]="newEntry.region" placeholder="e.g., US-UT">
+                <mat-hint>ISO 3166-2 subdivision</mat-hint>
+              </mat-form-field>
+              <mat-form-field appearance="outline">
+                <mat-label>City</mat-label>
+                <input matInput [(ngModel)]="newEntry.city" placeholder="e.g., Lindon">
+              </mat-form-field>
+              <mat-form-field appearance="outline">
+                <mat-label>Postal Code</mat-label>
+                <input matInput [(ngModel)]="newEntry.postal_code" placeholder="e.g., 84042">
+              </mat-form-field>
+            </div>
+            <div class="form-actions">
+              <mat-slide-toggle [(ngModel)]="newEntry.enabled" color="primary">Enabled</mat-slide-toggle>
+              <button mat-raised-button color="primary" (click)="addEntry()">
+                <mat-icon>save</mat-icon> Create Entry
+              </button>
+            </div>
+          </div>
+          <mat-divider></mat-divider>
+        }
+
+        <!-- Entries Table -->
+        @if (entries.length === 0) {
+          <div class="empty-state">
+            <mat-icon>public_off</mat-icon>
+            <p>No geofeed entries yet. Add your first IP prefix geolocation entry.</p>
+          </div>
+        } @else {
+          <table mat-table [dataSource]="entries" class="entries-table">
+            <ng-container matColumnDef="prefix">
+              <th mat-header-cell *matHeaderCellDef>Prefix</th>
+              <td mat-cell *matCellDef="let entry">
+                @if (editingId === entry.id) {
+                  <mat-form-field appearance="outline" class="compact-field">
+                    <input matInput [(ngModel)]="editEntry.prefix">
+                  </mat-form-field>
+                } @else {
+                  <code>{{entry.prefix}}</code>
+                }
+              </td>
+            </ng-container>
+
+            <ng-container matColumnDef="country">
+              <th mat-header-cell *matHeaderCellDef>Country</th>
+              <td mat-cell *matCellDef="let entry">
+                @if (editingId === entry.id) {
+                  <mat-form-field appearance="outline" class="compact-field">
+                    <input matInput [(ngModel)]="editEntry.country" maxlength="2">
+                  </mat-form-field>
+                } @else {
+                  {{entry.country}}
+                }
+              </td>
+            </ng-container>
+
+            <ng-container matColumnDef="region">
+              <th mat-header-cell *matHeaderCellDef>Region</th>
+              <td mat-cell *matCellDef="let entry">
+                @if (editingId === entry.id) {
+                  <mat-form-field appearance="outline" class="compact-field">
+                    <input matInput [(ngModel)]="editEntry.region">
+                  </mat-form-field>
+                } @else {
+                  {{entry.region}}
+                }
+              </td>
+            </ng-container>
+
+            <ng-container matColumnDef="city">
+              <th mat-header-cell *matHeaderCellDef>City</th>
+              <td mat-cell *matCellDef="let entry">
+                @if (editingId === entry.id) {
+                  <mat-form-field appearance="outline" class="compact-field">
+                    <input matInput [(ngModel)]="editEntry.city">
+                  </mat-form-field>
+                } @else {
+                  {{entry.city}}
+                }
+              </td>
+            </ng-container>
+
+            <ng-container matColumnDef="postal_code">
+              <th mat-header-cell *matHeaderCellDef>Postal Code</th>
+              <td mat-cell *matCellDef="let entry">
+                @if (editingId === entry.id) {
+                  <mat-form-field appearance="outline" class="compact-field">
+                    <input matInput [(ngModel)]="editEntry.postal_code">
+                  </mat-form-field>
+                } @else {
+                  {{entry.postal_code}}
+                }
+              </td>
+            </ng-container>
+
+            <ng-container matColumnDef="enabled">
+              <th mat-header-cell *matHeaderCellDef>Status</th>
+              <td mat-cell *matCellDef="let entry">
+                <mat-slide-toggle
+                  [checked]="entry.enabled"
+                  (change)="toggleEnabled(entry)"
+                  color="primary">
+                </mat-slide-toggle>
+              </td>
+            </ng-container>
+
+            <ng-container matColumnDef="actions">
+              <th mat-header-cell *matHeaderCellDef>Actions</th>
+              <td mat-cell *matCellDef="let entry">
+                @if (editingId === entry.id) {
+                  <button mat-icon-button color="primary" (click)="saveEdit()" matTooltip="Save">
+                    <mat-icon>save</mat-icon>
+                  </button>
+                  <button mat-icon-button (click)="cancelEdit()" matTooltip="Cancel">
+                    <mat-icon>close</mat-icon>
+                  </button>
+                } @else {
+                  <button mat-icon-button (click)="startEdit(entry)" matTooltip="Edit">
+                    <mat-icon>edit</mat-icon>
+                  </button>
+                  <button mat-icon-button color="warn" (click)="deleteEntry(entry)" matTooltip="Delete">
+                    <mat-icon>delete</mat-icon>
+                  </button>
+                }
+              </td>
+            </ng-container>
+
+            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+            <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+          </table>
+        }
+      </div>
+    </mat-card>
+
+    <!-- Info Card -->
+    <mat-card class="content-card info-card">
+      <div class="card-section">
+        <h2>About Geofeeds</h2>
+        <p>
+          A geofeed (RFC 8805, RFC 9632) is a CSV file that maps IP address prefixes to their geographic locations.
+          This data is consumed by Regional Internet Registries (RIRs), geolocation databases (MaxMind, IPInfo),
+          and CDN providers to improve IP geolocation accuracy.
+        </p>
+        <h3>Usage</h3>
+        <ul>
+          <li>Add this URL to your RIR's inetnum/inet6num <code>geofeed</code> attribute</li>
+          <li>Reference it in RPSL objects for your IP allocations</li>
+          <li>The CSV is publicly accessible at <a [href]="csvUrl" target="_blank">{{csvUrl}}</a></li>
+        </ul>
+      </div>
+    </mat-card>
+  }
+</div>

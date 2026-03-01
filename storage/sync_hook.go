@@ -69,6 +69,7 @@ const (
 	EntityTypeBlocklistSource    = dnssync.EntityBlocklistSource
 	EntityTypeBlocklistWhitelist = dnssync.EntityBlocklistWhitelist
 	EntityTypeDynamicUpdate      = dnssync.EntityDynamicUpdate
+	EntityTypeGeofeed            = dnssync.EntityGeofeed
 )
 
 // Operation constants

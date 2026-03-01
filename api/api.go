@@ -234,6 +234,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/blocklist/whitelist", h.corsMiddleware(h.handleBlocklistWhitelist))
 	mux.HandleFunc("/api/blocklist/test/", h.corsMiddleware(h.handleBlocklistTest))
 	mux.HandleFunc("/api/blocklist/refresh", h.corsMiddleware(h.handleBlocklistRefresh))
+
+	// Geofeed (RFC 8805)
+	mux.HandleFunc("/api/geofeed", h.corsMiddleware(h.handleGeofeed))
+	mux.HandleFunc("/api/geofeed/", h.corsMiddleware(h.handleGeofeedEntry))
+	mux.HandleFunc("/geofeed.csv", h.handleGeofeedCSV) // Public endpoint - no auth
 }
 
 // RegisterRoutesWithAuth registers all API routes with authentication middleware
@@ -286,6 +291,11 @@ func (h *Handler) RegisterRoutesWithAuth(mux *http.ServeMux, authMgr AuthMiddlew
 	mux.HandleFunc("/api/blocklist/whitelist", wrap(h.handleBlocklistWhitelist))
 	mux.HandleFunc("/api/blocklist/test/", wrap(h.handleBlocklistTest))
 	mux.HandleFunc("/api/blocklist/refresh", wrap(h.handleBlocklistRefresh))
+
+	// Geofeed (RFC 8805)
+	mux.HandleFunc("/api/geofeed", wrap(h.handleGeofeed))
+	mux.HandleFunc("/api/geofeed/", wrap(h.handleGeofeedEntry))
+	mux.HandleFunc("/geofeed.csv", h.handleGeofeedCSV) // Public endpoint - no auth
 }
 
 // CORSMiddleware adds CORS headers - standalone version for use outside Handler
@@ -926,7 +936,6 @@ func (h *Handler) handleRecord(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
-
 
 // collectRecordsFiltered returns records filtered by type and tenant
 func (h *Handler) collectRecordsFiltered(typeFilter, zoneFilter string, session *auth.Session) []RecordRequest {

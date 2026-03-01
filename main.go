@@ -1006,6 +1006,8 @@ func applyDelete(store *storage.Store, entityType, entityID string) error {
 		return store.DeleteCertificate(entityID)
 	case sync.EntityBlocklistSource:
 		return store.DeleteBlocklistSource(entityID)
+	case sync.EntityGeofeed:
+		return store.DeleteGeoEntry(entityID)
 	default:
 		log.Printf("[sync] Unknown entity type for delete: %s", entityType)
 		return nil
@@ -1292,6 +1294,22 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 		log.Printf("[sync] Syncing blocklist whitelist (%d entries)", len(entries))
 		return store.SaveBlocklistWhitelist(entries)
 
+	case sync.EntityGeofeed:
+		var geoEntry storage.GeoEntry
+		if err := json.Unmarshal(data, &geoEntry); err != nil {
+			return err
+		}
+		existing, _ := store.GetGeoEntry(geoEntry.ID)
+		if existing != nil {
+			if !entityHasChanged(existing, &geoEntry) {
+				log.Printf("[sync] Geofeed entry %s unchanged, skipping update", geoEntry.ID)
+				return nil
+			}
+			return store.UpdateGeoEntry(&geoEntry)
+		}
+		log.Printf("[sync] Creating synced geofeed entry %s (%s → %s, %s)", geoEntry.ID, geoEntry.Prefix, geoEntry.Country, geoEntry.City)
+		return store.CreateGeoEntry(&geoEntry)
+
 	default:
 		log.Printf("[sync] Unknown entity type: %s", entry.EntityType)
 		return nil
@@ -1473,6 +1491,21 @@ func createFullSyncProvider(store *storage.Store) sync.FullSyncProvider {
 				TenantID:   "",
 				Data:       recursionCfg,
 			})
+		}
+
+		// Get all geofeed entries (for cluster-wide geolocation feed)
+		geoEntries, err := store.ListGeoEntries()
+		if err != nil {
+			log.Printf("[sync] Warning: failed to list geofeed entries: %v", err)
+		} else {
+			for _, entry := range geoEntries {
+				items = append(items, sync.FullSyncDataItem{
+					EntityType: sync.EntityGeofeed,
+					EntityID:   entry.ID,
+					TenantID:   "",
+					Data:       entry,
+				})
+			}
 		}
 
 		log.Printf("[sync] Full sync provider collected %d items", len(items))

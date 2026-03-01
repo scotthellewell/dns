@@ -16,6 +16,7 @@ import { SetupComponent } from './setup/setup.component';
 import { TenantsComponent } from './tenants/tenants.component';
 import { ClusterSyncComponent } from './cluster-sync/cluster-sync.component';
 import { UsersComponent } from './users/users.component';
+import { GeofeedComponent } from './geofeed/geofeed.component';
 import { authGuard, loginGuard, adminGuard, setupGuard, superAdminGuard } from './guards/auth.guard';
 
 export const routes: Routes = [
@@ -32,6 +33,7 @@ export const routes: Routes = [
   { path: 'recursion', component: RecursionComponent, canActivate: [superAdminGuard] },
   { path: 'blocklist', component: BlocklistComponent, canActivate: [superAdminGuard] },
   { path: 'network', component: NetworkComponent, canActivate: [superAdminGuard] },
+  { path: 'geofeed', component: GeofeedComponent, canActivate: [superAdminGuard] },
   { path: 'cluster-sync', component: ClusterSyncComponent, canActivate: [superAdminGuard] },
   { path: 'tenants', component: TenantsComponent, canActivate: [superAdminGuard] },
   { path: 'users', component: UsersComponent, canActivate: [adminGuard] },

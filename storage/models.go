@@ -593,3 +593,14 @@ type DynamicUpdateConfig struct {
 	AllowedTypes []string  `json:"allowed_types"` // Allowed record types (A, AAAA, PTR, TXT)
 	Logging      bool      `json:"logging"`       // Log all update requests
 }
+
+// GeoEntry represents an RFC 8805/9632 geofeed entry mapping an IP prefix to a geographic location.
+type GeoEntry struct {
+	ID         string `json:"id"`
+	Prefix     string `json:"prefix"`      // CIDR notation: e.g., "23.148.184.0/24" or "2602:FF29::/40"
+	Country    string `json:"country"`     // ISO 3166-1 alpha-2 country code: e.g., "US"
+	Region     string `json:"region"`      // ISO 3166-2 subdivision: e.g., "US-UT"
+	City       string `json:"city"`        // City name: e.g., "Lindon"
+	PostalCode string `json:"postal_code"` // Postal code: e.g., "84042"
+	Enabled    bool   `json:"enabled"`     // Whether this entry is included in the geofeed output
+}

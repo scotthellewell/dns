@@ -537,39 +537,37 @@ func (s *Server) handleRedirect(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg, or
 		return false
 	}
 
-	// Resolve the target host to get its IPs
-	var ips []net.IP
-	var err error
+	// Resolve the target host using the server's own recursive resolver
+	// (not net.LookupIP which uses the system resolver and can loop back to us)
+	res := s.getResolver()
+	rec := s.getRecursion()
 
+	localLookupA := func(name string) (net.IP, uint32, bool) { return res.LookupA(name) }
+	localLookupAAAA := func(name string) (net.IP, uint32, bool) { return res.LookupAAAA(name) }
+	localCNAME := func(name string) (string, uint32, bool) { return res.LookupCNAME(name) }
+
+	// Ensure target has trailing dot for DNS resolution
+	target := targetHost
+	if !strings.HasSuffix(target, ".") {
+		target += "."
+	}
+
+	var ips []net.IP
 	switch q.Qtype {
 	case dns.TypeA:
-		ips, err = net.LookupIP(targetHost)
-		if err != nil {
-			log.Printf("[redirect] Failed to resolve %s: %v", targetHost, err)
-			return false
-		}
-		// Filter to IPv4 only
-		var ipv4s []net.IP
-		for _, ip := range ips {
+		result := rec.ResolveAExternal(target, localLookupA, localCNAME)
+		for _, ip := range result.IPs {
 			if ip.To4() != nil {
-				ipv4s = append(ipv4s, ip.To4())
+				ips = append(ips, ip.To4())
 			}
 		}
-		ips = ipv4s
 	case dns.TypeAAAA:
-		ips, err = net.LookupIP(targetHost)
-		if err != nil {
-			log.Printf("[redirect] Failed to resolve %s: %v", targetHost, err)
-			return false
-		}
-		// Filter to IPv6 only
-		var ipv6s []net.IP
-		for _, ip := range ips {
+		result := rec.ResolveAAAAExternal(target, localLookupAAAA, localCNAME)
+		for _, ip := range result.IPs {
 			if ip.To4() == nil && ip.To16() != nil {
-				ipv6s = append(ipv6s, ip)
+				ips = append(ips, ip)
 			}
 		}
-		ips = ipv6s
 	}
 
 	if len(ips) == 0 {
@@ -1034,10 +1032,15 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				}
 			}
 
-			// If requested type is A but we're returning NODATA, don't proceed further
-			if qtype == dns.TypeA || qtype == dns.TypeAAAA {
-				// Already handled above
+			// For authoritative NODATA/NXDOMAIN, write response immediately and return.
+			// This prevents any further processing that could re-trigger the empty-answer path.
+			if err := w.WriteMsg(m); err != nil {
+				log.Printf("WriteMsg error (NODATA/NXDOMAIN): %v", err)
 			}
+			if s.querylog != nil {
+				s.querylog.Log(clientIPStr, r, m, time.Since(startTime))
+			}
+			return
 		} else {
 			// Not authoritative - default to success (let caching handle it)
 			m.Rcode = dns.RcodeSuccess
@@ -1131,7 +1134,23 @@ func (s *Server) handleA(m *dns.Msg, q dns.Question) {
 		return res.LookupCNAME(name)
 	}
 
-	result := rec.ResolveA(q.Name, 0, localLookup, localCNAME)
+	// For authoritative domains, only do local lookups to prevent DNS query loops.
+	// In "full" recursion mode, ResolveA would query upstream servers for domains we own;
+	// if upstream includes this server or cluster peers, that creates an infinite query loop.
+	cfg := s.getConfig()
+	var result recurse.Result
+	if s.isAuthoritative(q.Name, cfg) {
+		if ip, ttl, found := localLookup(q.Name); found {
+			result = recurse.Result{IPs: []net.IP{ip}, TTL: ttl, Found: true, FromLocal: true}
+		} else if target, _, found := localCNAME(q.Name); found {
+			// CNAME exists — resolve the target (may be external, depth=1 allows that)
+			result = rec.ResolveA(target, 1, localLookup, localCNAME)
+			result.CNAMEs = append([]string{q.Name}, result.CNAMEs...)
+		}
+		// If neither A nor CNAME found, result stays empty → NODATA handled by caller
+	} else {
+		result = rec.ResolveA(q.Name, 0, localLookup, localCNAME)
+	}
 
 	// Add CNAME records to the answer (if any were followed)
 	for i, cname := range result.CNAMEs {
@@ -1247,7 +1266,21 @@ func (s *Server) handleAAAA(m *dns.Msg, q dns.Question) {
 		return res.LookupCNAME(name)
 	}
 
-	result := rec.ResolveAAAA(q.Name, 0, localLookup, localCNAME)
+	// For authoritative domains, only do local lookups to prevent DNS query loops.
+	// In "full" recursion mode, ResolveAAAA would query upstream servers for domains we own;
+	// if upstream includes this server or cluster peers, that creates an infinite query loop.
+	cfg := s.getConfig()
+	var result recurse.Result
+	if s.isAuthoritative(q.Name, cfg) {
+		if ip, ttl, found := localLookup(q.Name); found {
+			result = recurse.Result{IPs: []net.IP{ip}, TTL: ttl, Found: true, FromLocal: true}
+		} else if target, _, found := localCNAME(q.Name); found {
+			result = rec.ResolveAAAA(target, 1, localLookup, localCNAME)
+			result.CNAMEs = append([]string{q.Name}, result.CNAMEs...)
+		}
+	} else {
+		result = rec.ResolveAAAA(q.Name, 0, localLookup, localCNAME)
+	}
 
 	// Add CNAME records to the answer (if any were followed)
 	for i, cname := range result.CNAMEs {

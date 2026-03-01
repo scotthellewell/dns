@@ -15,6 +15,12 @@ import (
 	"github.com/scott/dns/dnssecval"
 )
 
+// maxIterativeDepth is the maximum depth for iterative resolution.
+// This must be higher than config.MaxDepth because iterative resolution
+// increments depth for both delegation hops (root→TLD→auth) AND CNAME follows.
+// A domain with 3 CNAMEs and 3 delegation hops per CNAME needs ~12 depth levels.
+const maxIterativeDepth = 30
+
 // Root DNS servers (IANA root servers)
 var rootServers = []string{
 	"198.41.0.4:53",     // a.root-servers.net
@@ -367,7 +373,7 @@ func (r *Resolver) resolve(name string, qtype uint16, depth int, forceExternal b
 			// Return empty result for negative cache hit
 			return result
 		}
-		
+
 		// If entry is stale, trigger background refresh
 		if stale && !entry.Fetching {
 			r.cache.MarkFetching(cacheKey, true)
@@ -376,7 +382,7 @@ func (r *Resolver) resolve(name string, qtype uint16, depth int, forceExternal b
 				r.queryExternal(name, qtype, depth)
 			}()
 		}
-		
+
 		result.IPs = entry.IPs
 		result.CNAMEs = entry.CNAMEs
 		result.TTL = entry.TTL
@@ -480,12 +486,14 @@ func (r *Resolver) queryForward(name string, qtype uint16, depth int) ([]net.IP,
 // queryIterative does iterative resolution starting from the given nameservers
 // Queries all servers in parallel and uses the first successful response
 func (r *Resolver) queryIterative(name string, qtype uint16, nameservers []string, depth int) ([]net.IP, []string, uint32, bool) {
-	if depth > r.config.MaxDepth {
+	if depth > maxIterativeDepth {
 		return nil, nil, 0, false
 	}
 
-	// If starting from root servers (depth 0), check for cached delegations
-	if depth == 0 && len(nameservers) == len(rootServers) {
+	// If starting from root servers, check for cached delegations to skip
+	// redundant root→TLD→auth walks. This is critical for CNAME chains where
+	// each hop would otherwise consume 2-3 depth levels for delegation.
+	if len(nameservers) == len(rootServers) {
 		if cachedServers, zone := r.findCachedDelegation(name); cachedServers != nil {
 			// Found a cached delegation closer to the target
 			log.Printf("[recurse] Using cached delegation for %s (from %s)", name, zone)
@@ -768,7 +776,7 @@ func (r *Resolver) queryAnyForward(name string, qtype uint16) (*dns.Msg, error) 
 
 // queryAnyIterative does iterative resolution for any record type starting from root servers
 func (r *Resolver) queryAnyIterative(name string, qtype uint16, nameservers []string, depth int) (*dns.Msg, error) {
-	if depth > r.config.MaxDepth {
+	if depth > maxIterativeDepth {
 		return nil, errors.New("max recursion depth exceeded")
 	}
 
