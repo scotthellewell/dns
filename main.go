@@ -774,6 +774,10 @@ func loadSyncConfig(store *storage.Store) *config.SyncConfig {
 			if peerURL == "" {
 				peerURL = p.Address
 			}
+			peerURL = strings.TrimSpace(peerURL)
+			if peerURL == "" {
+				continue
+			}
 			cfg.Peers = append(cfg.Peers, config.SyncPeerConfig{
 				ID:                 p.ID,
 				Address:            peerURL,
@@ -813,9 +817,13 @@ func initSyncManager(store *storage.Store, cfg *config.SyncConfig) *sync.Manager
 
 	// Add peers
 	for _, p := range cfg.Peers {
+		peerURL := strings.TrimSpace(p.Address)
+		if peerURL == "" {
+			continue
+		}
 		syncCfg.Peers = append(syncCfg.Peers, sync.PeerConfig{
 			ID:                 p.ID,
-			URL:                p.Address,
+			URL:                peerURL,
 			APIKey:             p.APIKey,
 			InsecureSkipVerify: p.InsecureSkipVerify,
 		})

@@ -1393,7 +1393,7 @@ func (s *Server) handleCNAME(m *dns.Msg, q dns.Question) {
 	// No local records - try recursive resolution if enabled in full mode
 	rec := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeCNAME)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
@@ -1437,7 +1437,7 @@ func (s *Server) handleMX(m *dns.Msg, q dns.Question) {
 	// No local records - try recursive resolution if enabled in full mode
 	rec := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeMX)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
@@ -1492,9 +1492,11 @@ func (s *Server) handleTXT(m *dns.Msg, q dns.Question) {
 	}
 
 	// No local records - try recursive resolution if enabled in full mode
+	// But NOT for authoritative zones to prevent DNS query loops
+	// (upstream NS for our zones point back to us, causing infinite recursion)
 	rec := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeTXT)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
@@ -1534,10 +1536,11 @@ func (s *Server) handleNS(m *dns.Msg, q dns.Question) {
 	}
 
 	// No local records - try recursive resolution if enabled in full mode
-	rec := s.getRecursion()
+	// But NOT for authoritative zones to prevent DNS query loops
+	recursion := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
-		resp, err := rec.QueryAny(q.Name, dns.TypeNS)
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
+		resp, err := recursion.QueryAny(q.Name, dns.TypeNS)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
 			m.Ns = append(m.Ns, resp.Ns...)
@@ -1612,7 +1615,7 @@ func (s *Server) handleSRV(m *dns.Msg, q dns.Question) {
 	// No local records - try recursive resolution if enabled in full mode
 	rec := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeSRV)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
@@ -1661,7 +1664,7 @@ func (s *Server) handleSOA(m *dns.Msg, q dns.Question) {
 	// No local records - try recursive resolution if enabled in full mode
 	rec := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeSOA)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
@@ -1701,7 +1704,7 @@ func (s *Server) handleCAA(m *dns.Msg, q dns.Question) {
 	// No local records - try recursive resolution if enabled in full mode
 	rec := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeCAA)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
@@ -1883,7 +1886,7 @@ func (s *Server) handleSSHFP(m *dns.Msg, q dns.Question) {
 	// No local records - try recursive resolution if enabled in full mode
 	rec := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeSSHFP)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
@@ -1918,7 +1921,7 @@ func (s *Server) handleTLSA(m *dns.Msg, q dns.Question) {
 	// No local records - try recursive resolution if enabled in full mode
 	rec := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeTLSA)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
@@ -1955,7 +1958,7 @@ func (s *Server) handleNAPTR(m *dns.Msg, q dns.Question) {
 	// No local records - try recursive resolution if enabled in full mode
 	rec := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeNAPTR)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
@@ -1990,7 +1993,7 @@ func (s *Server) handleSVCB(m *dns.Msg, q dns.Question) {
 	// No local records - try recursive resolution if enabled in full mode
 	rec := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeSVCB)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
@@ -2027,7 +2030,7 @@ func (s *Server) handleHTTPS(m *dns.Msg, q dns.Question) {
 	// No local records - try recursive resolution if enabled in full mode
 	rec := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeHTTPS)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
@@ -2121,7 +2124,7 @@ func (s *Server) handleLOC(m *dns.Msg, q dns.Question) {
 	// No local records - try recursive resolution if enabled in full mode
 	rec := s.getRecursion()
 	cfg := s.getConfig()
-	if cfg.Recursion.Mode == "full" {
+	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeLOC)
 		if err == nil && resp != nil && len(resp.Answer) > 0 {
 			m.Answer = append(m.Answer, resp.Answer...)
