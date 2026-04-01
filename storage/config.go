@@ -138,13 +138,13 @@ func (s *Store) GetRateLimitConfig() (*RateLimitConfig, error) {
 	})
 
 	if err == ErrNotFound {
-		// Return defaults
+		// Return defaults - RRL enabled to mitigate DNS amplification attacks
 		return &RateLimitConfig{
-			Enabled:         false,
-			ResponsesPerSec: 100,
+			Enabled:         true,
+			ResponsesPerSec: 5,
 			SlipRatio:       2,
 			WindowSeconds:   1,
-			WhitelistCIDRs:  []string{"127.0.0.1/8", "::1/128"},
+			WhitelistCIDRs:  []string{"127.0.0.0/8", "::1/128", "10.10.10.0/24", "23.148.184.0/27", "23.148.184.32/28", "192.168.100.0/24", "172.93.55.0/24", "209.182.235.0/24"},
 		}, nil
 	}
 

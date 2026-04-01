@@ -759,6 +759,25 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
+	// Minimize ANY queries per RFC 8482 to mitigate DNS amplification attacks.
+	// Return a minimal HINFO response instead of all records.
+	if len(r.Question) > 0 && r.Question[0].Qtype == dns.TypeANY {
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.Answer = append(m.Answer, &dns.HINFO{
+			Hdr: dns.RR_Header{
+				Name:   r.Question[0].Name,
+				Rrtype: dns.TypeHINFO,
+				Class:  dns.ClassINET,
+				Ttl:    60,
+			},
+			Cpu: "RFC8482",
+			Os:  "",
+		})
+		w.WriteMsg(m)
+		return
+	}
+
 	// Handle NOTIFY messages (opcode 4)
 	if r.Opcode == dns.OpcodeNotify {
 		if s.transfer != nil {
@@ -912,12 +931,9 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	// If name exists but has no records of the requested type, use NOERROR
 	if len(m.Answer) == 0 && len(r.Question) > 0 {
 		qname := r.Question[0].Name
-		qtype := r.Question[0].Qtype
 		isAuth := s.isAuthoritative(qname, cfg)
-		log.Printf("[NSEC DEBUG] Empty answer for %s type %d, isAuthoritative=%v, numZones=%d", qname, qtype, isAuth, len(cfg.Zones))
 		// Check if this is an authoritative zone and if the name exists
 		if isAuth {
-			log.Printf("[NSEC DEBUG] isAuthoritative=true for %s", qname)
 			// For authoritative zones, check if name exists
 			resolver := s.getResolver()
 			dnssecMgr := s.getDNSSEC()
@@ -942,30 +958,23 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					}
 				}
 			}
-			log.Printf("[NSEC DEBUG] zoneName=%q (from SOA lookup), wantDNSSEC=%v, HasDNSSEC=%v", zoneName, wantDNSSEC, dnssecMgr.HasDNSSEC())
 
 			if resolver.NameExists(qname) {
 				// Name exists, just no records of this type - NOERROR (NODATA)
 				m.Rcode = dns.RcodeSuccess
-				log.Printf("[NSEC DEBUG] NODATA for %s, wantDNSSEC=%v, hasDNSSEC=%v, zoneName=%q", qname, wantDNSSEC, dnssecMgr.HasDNSSEC(), zoneName)
 
 				// For DNSSEC, add SOA and NSEC to Authority section
 				if wantDNSSEC && dnssecMgr.HasDNSSEC() && zoneName != "" {
 					// Add SOA to Authority section
 					if soa := s.createSOAForZone(zoneName, cfg); soa != nil {
 						m.Ns = append(m.Ns, soa)
-						log.Printf("[NSEC DEBUG] Added SOA for %s", zoneName)
-					} else {
-						log.Printf("[NSEC DEBUG] Failed to create SOA for %s", zoneName)
 					}
 
 					// Get record types that exist at this name
 					types := resolver.GetRecordTypes(qname)
-					log.Printf("[NSEC DEBUG] Got %d record types for %s: %v", len(types), qname, types)
 					if len(types) > 0 {
 						signer := dnssecMgr.GetSigner(qname)
 						if signer != nil {
-							log.Printf("[NSEC DEBUG] Got signer for %s", qname)
 							// Create NSEC record - for NODATA, next domain points to itself (simplified)
 							nsec := signer.CreateNSEC(qname, qname, types, 3600)
 							m.Ns = append(m.Ns, nsec)
@@ -975,8 +984,6 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 							expiration := uint32(time.Now().Add(7 * 24 * time.Hour).Unix())
 							if rrsig, err := signer.SignNSEC(nsec, inception, expiration); err == nil {
 								m.Ns = append(m.Ns, rrsig)
-							} else {
-								log.Printf("[NSEC DEBUG] SignNSEC error: %v", err)
 							}
 
 							// Sign SOA
@@ -984,12 +991,8 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 								soaRRset := []dns.RR{m.Ns[0]}
 								if soaRRsig, err := signer.SignRRSet(soaRRset, inception, expiration); err == nil {
 									m.Ns = append(m.Ns, soaRRsig)
-								} else {
-									log.Printf("[NSEC DEBUG] SignRRSet error: %v", err)
 								}
 							}
-						} else {
-							log.Printf("[NSEC DEBUG] No signer found for %s", qname)
 						}
 					}
 				}

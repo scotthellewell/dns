@@ -8,8 +8,8 @@ import (
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Enabled {
-		t.Error("Expected Enabled to be false")
+	if !cfg.Enabled {
+		t.Error("Expected Enabled to be true")
 	}
 	if cfg.ResponsesPerSec != 5 {
 		t.Errorf("Expected ResponsesPerSec=5, got %d", cfg.ResponsesPerSec)
