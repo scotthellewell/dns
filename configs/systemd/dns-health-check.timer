@@ -1,0 +1,9 @@
+[Unit]
+Description=DNS Server Health Check Timer
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=300
+
+[Install]
+WantedBy=timers.target

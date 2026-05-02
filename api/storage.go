@@ -1118,6 +1118,54 @@ func (h *Handler) handleTransferStorage(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
+// handleRRLStorage handles RRL config API using storage backend
+func (h *Handler) handleRRLStorage(w http.ResponseWriter, r *http.Request) {
+	store := h.getStore()
+	if store == nil {
+		h.errorResponse(w, "Storage not available", http.StatusInternalServerError)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		cfg, err := store.GetRateLimitConfig()
+		if err != nil {
+			h.jsonResponse(w, map[string]interface{}{
+				"enabled":            false,
+				"responses_per_sec":  5,
+				"slip_ratio":         2,
+				"window_seconds":     1,
+				"whitelist_cidrs":    []string{},
+			})
+			return
+		}
+		h.jsonResponse(w, cfg)
+
+	case "PUT":
+		var cfg storage.RateLimitConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			h.errorResponse(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if err := store.UpdateRateLimitConfig(&cfg); err != nil {
+			h.errorResponse(w, "Failed to save RRL config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Rebuild config to update DNS server
+		if err := h.UpdateConfigFromStorage(); err != nil {
+			h.errorResponse(w, "Failed to update config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		h.jsonResponse(w, map[string]interface{}{"status": "ok"})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // handleRecursionStorage handles recursion config API using storage backend
 func (h *Handler) handleRecursionStorage(w http.ResponseWriter, r *http.Request) {
 	store := h.getStore()

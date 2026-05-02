@@ -13,6 +13,7 @@ import (
 	"github.com/scott/dns/cache"
 	"github.com/scott/dns/config"
 	"github.com/scott/dns/dnssecval"
+	"golang.org/x/sync/singleflight"
 )
 
 // maxIterativeDepth is the maximum depth for iterative resolution.
@@ -44,6 +45,16 @@ type delegation struct {
 	expiresAt time.Time // When this delegation expires
 }
 
+// isRootServers checks if the given nameservers slice is the root servers list.
+// Uses pointer comparison to detect the exact rootServers variable, preventing
+// false positives with TLDs that happen to have 13 delegation addresses (e.g., .lv).
+func isRootServers(servers []string) bool {
+	if len(servers) == 0 || len(servers) != len(rootServers) {
+		return false
+	}
+	return &servers[0] == &rootServers[0]
+}
+
 // Resolver handles recursive DNS queries
 type Resolver struct {
 	config      config.ParsedRecursion
@@ -53,6 +64,7 @@ type Resolver struct {
 	cache       *cache.Cache         // TTL-based response cache
 	validator   *dnssecval.Validator // DNSSEC validator
 	delegations sync.Map             // zone name -> *delegation (cached NS records)
+	nsResolve   singleflight.Group   // dedup concurrent NS IP resolutions
 }
 
 // New creates a new recursive resolver
@@ -112,6 +124,39 @@ func (r *Resolver) getDelegation(zone string) ([]string, bool) {
 		r.delegations.Delete(zone)
 	}
 	return nil, false
+}
+
+// resolveNSIP resolves a nameserver hostname to IPs with caching and singleflight dedup.
+// This prevents thundering herd when many concurrent queries need the same NS IP.
+func (r *Resolver) resolveNSIP(nsName string) ([]net.IP, uint32, bool) {
+	// Check cache first
+	cacheKey := cache.Key(nsName, dns.TypeA)
+	if entry, _, ok := r.cache.Get(cacheKey); ok && !entry.Negative && len(entry.IPs) > 0 {
+		return entry.IPs, entry.TTL, true
+	}
+
+	// Singleflight: only one goroutine resolves, others wait
+	type nsResult struct {
+		ips []net.IP
+		ttl uint32
+	}
+	val, _, _ := r.nsResolve.Do(cacheKey, func() (interface{}, error) {
+		// Double-check cache (another goroutine may have populated it)
+		if entry, _, ok := r.cache.Get(cacheKey); ok && !entry.Negative && len(entry.IPs) > 0 {
+			return &nsResult{ips: entry.IPs, ttl: entry.TTL}, nil
+		}
+		ips, _, ttl, found := r.queryIterative(nsName, dns.TypeA, rootServers, 0)
+		if found && len(ips) > 0 {
+			r.cache.Set(cacheKey, ips, nil, ttl)
+			return &nsResult{ips: ips, ttl: ttl}, nil
+		}
+		return nil, errors.New("NS resolution failed")
+	})
+	if val != nil {
+		res := val.(*nsResult)
+		return res.ips, res.ttl, true
+	}
+	return nil, 0, false
 }
 
 // setDelegation caches NS servers for a zone with TTL
@@ -229,8 +274,7 @@ func (r *Resolver) queryForValidationIterative(name string, qtype uint16, server
 			// No glue records - need to resolve NS names
 			for _, rr := range resp.Ns {
 				if ns, ok := rr.(*dns.NS); ok {
-					// Resolve NS name to get IP
-					nsIPs, _, _, found := r.queryIterative(ns.Ns, dns.TypeA, rootServers, depth+1)
+					nsIPs, _, found := r.resolveNSIP(ns.Ns)
 					if found && len(nsIPs) > 0 {
 						nsServer := nsIPs[0].String() + ":53"
 						return r.queryForValidationIterative(name, qtype, []string{nsServer}, depth+1)
@@ -493,10 +537,10 @@ func (r *Resolver) queryIterative(name string, qtype uint16, nameservers []strin
 	// If starting from root servers, check for cached delegations to skip
 	// redundant root→TLD→auth walks. This is critical for CNAME chains where
 	// each hop would otherwise consume 2-3 depth levels for delegation.
-	if len(nameservers) == len(rootServers) {
-		if cachedServers, zone := r.findCachedDelegation(name); cachedServers != nil {
+	isRoot := isRootServers(nameservers)
+	if isRoot {
+		if cachedServers, _ := r.findCachedDelegation(name); cachedServers != nil {
 			// Found a cached delegation closer to the target
-			log.Printf("[recurse] Using cached delegation for %s (from %s)", name, zone)
 			return r.queryIterative(name, qtype, cachedServers, depth+1)
 		}
 	}
@@ -533,15 +577,18 @@ func (r *Resolver) queryIterative(name string, qtype uint16, nameservers []strin
 	// Collect results, use first successful one
 	var lastResp *dns.Msg
 	received := 0
+	var errors []string
 queryLoop:
 	for received < len(nameservers) {
 		select {
 		case result := <-results:
 			received++
 			if result.err != nil {
+				errors = append(errors, result.server+":"+result.err.Error())
 				continue
 			}
 			if result.resp == nil {
+				errors = append(errors, result.server+":nil-resp")
 				continue
 			}
 
@@ -553,14 +600,9 @@ queryLoop:
 				valResult := r.validator.ValidateResponse(result.resp, name, qtype)
 				if valResult.Bogus {
 					// DNSSEC validation failed - do NOT return results
-					log.Printf("DNSSEC: Validation BOGUS for %s: %s", name, valResult.WhyBogus)
 					return nil, nil, 0, false // Return failure, not just continue
 				}
-				if valResult.Secure {
-					log.Printf("DNSSEC: Validated SECURE for %s", name)
-				} else if valResult.Insecure {
-					log.Printf("DNSSEC: Zone %s is INSECURE (not signed)", name)
-				}
+
 
 				ips, cnames, ttl, found := r.extractRecords(result.resp, qtype)
 				if found {
@@ -591,6 +633,14 @@ queryLoop:
 					r.setDelegation(zone, nextServers, ttl)
 					cancel() // Cancel other pending queries
 					return r.queryIterative(name, qtype, nextServers, depth+1)
+				} else {
+					// Log NS names that couldn't be resolved
+					var nsNames []string
+					for _, rr := range result.resp.Ns {
+						if ns, ok := rr.(*dns.NS); ok {
+							nsNames = append(nsNames, ns.Ns)
+						}
+					}
 				}
 			}
 
@@ -620,6 +670,13 @@ queryLoop:
 	}
 
 	return nil, nil, 0, false
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // extractDelegationWithZone extracts nameserver IPs from a delegation response
@@ -671,8 +728,8 @@ func (r *Resolver) extractDelegationWithZone(resp *dns.Msg) ([]string, string, u
 	if len(servers) == 0 && len(nsNames) > 0 {
 		// Try to resolve the first NS name (avoid infinite recursion)
 		for _, nsName := range nsNames {
-			ips, _, _, found := r.queryIterative(nsName, dns.TypeA, rootServers, 0)
-			if found && len(ips) > 0 {
+			ips, _, found := r.resolveNSIP(nsName)
+			if found {
 				for _, ip := range ips {
 					servers = append(servers, ip.String()+":53")
 				}

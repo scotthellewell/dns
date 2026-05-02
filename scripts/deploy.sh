@@ -92,6 +92,21 @@ deploy_to_server() {
     ssh "$server" "mkdir -p /home/dns/dns/web/dist/dns-admin/browser"
     scp -r "$REPO_DIR/web/dist/dns-admin/browser/"* "$server:/home/dns/dns/web/dist/dns-admin/browser/"
     
+    # Deploy systemd configs (service + health check)
+    log "  Deploying systemd configs..."
+    scp "$REPO_DIR/configs/systemd/dns-server-vm.service" "$server:/tmp/dns-server.service"
+    scp "$REPO_DIR/configs/systemd/dns-health-check.sh" "$server:/tmp/dns-health-check.sh"
+    scp "$REPO_DIR/configs/systemd/dns-health-check.service" "$server:/tmp/dns-health-check.service"
+    scp "$REPO_DIR/configs/systemd/dns-health-check.timer" "$server:/tmp/dns-health-check.timer"
+    ssh "$server" "sudo mv /tmp/dns-server.service /etc/systemd/system/dns-server.service && \
+        sudo mv /tmp/dns-health-check.sh /usr/local/bin/dns-health-check.sh && \
+        sudo chmod +x /usr/local/bin/dns-health-check.sh && \
+        sudo mv /tmp/dns-health-check.service /etc/systemd/system/dns-health-check.service && \
+        sudo mv /tmp/dns-health-check.timer /etc/systemd/system/dns-health-check.timer && \
+        sudo systemctl daemon-reload && \
+        sudo systemctl enable dns-health-check.timer && \
+        sudo systemctl start dns-health-check.timer"
+    
     # Start service
     log "  Starting dns-server..."
     ssh "$server" "sudo systemctl start dns-server"
@@ -146,24 +161,42 @@ deploy_to_lxc() {
     ssh "$pve_server" "rm /tmp/$BINARY_NAME"
     
     # Deploy frontend - create tarball first for easier transfer (exclude macOS metadata)
+    # Use per-VMID temp files to allow parallel LXC deploys
+    local frontend_tar="/tmp/dns-frontend-${vmid}.tar.gz"
     log "  Packaging frontend..."
     cd "$REPO_DIR"
-    COPYFILE_DISABLE=1 tar -czf /tmp/dns-frontend.tar.gz -C web/dist/dns-admin/browser .
+    COPYFILE_DISABLE=1 tar -czf "$frontend_tar" -C web/dist/dns-admin/browser .
     
     log "  Uploading frontend..."
-    scp /tmp/dns-frontend.tar.gz "$pve_server:/tmp/dns-frontend.tar.gz"
+    scp "$frontend_tar" "$pve_server:/tmp/dns-frontend-${vmid}.tar.gz"
     
     log "  Installing frontend into container..."
     ssh "$pve_server" "pct exec $vmid -- mkdir -p /opt/dns-server/web/dist/dns-admin/browser"
     ssh "$pve_server" "pct exec $vmid -- rm -rf /opt/dns-server/web/dist/dns-admin/browser/*"
-    ssh "$pve_server" "pct push $vmid /tmp/dns-frontend.tar.gz /tmp/dns-frontend.tar.gz"
-    ssh "$pve_server" "pct exec $vmid -- tar -xzf /tmp/dns-frontend.tar.gz -C /opt/dns-server/web/dist/dns-admin/browser"
-    ssh "$pve_server" "pct exec $vmid -- rm /tmp/dns-frontend.tar.gz"
-    ssh "$pve_server" "rm /tmp/dns-frontend.tar.gz"
-    rm /tmp/dns-frontend.tar.gz
+    ssh "$pve_server" "pct push $vmid /tmp/dns-frontend-${vmid}.tar.gz /tmp/dns-frontend-${vmid}.tar.gz"
+    ssh "$pve_server" "pct exec $vmid -- tar -xzf /tmp/dns-frontend-${vmid}.tar.gz -C /opt/dns-server/web/dist/dns-admin/browser"
+    ssh "$pve_server" "pct exec $vmid -- rm /tmp/dns-frontend-${vmid}.tar.gz"
+    ssh "$pve_server" "rm /tmp/dns-frontend-${vmid}.tar.gz"
+    rm "$frontend_tar"
     
     # Remove any macOS metadata files that might have been created
     ssh "$pve_server" "pct exec $vmid -- find /opt/dns-server/web -name '._*' -delete 2>/dev/null" || true
+    
+    # Deploy systemd configs (service + health check)
+    log "  Deploying systemd configs..."
+    scp "$REPO_DIR/configs/systemd/dns-server-lxc.service" "$pve_server:/tmp/dns-server.service"
+    scp "$REPO_DIR/configs/systemd/dns-health-check.sh" "$pve_server:/tmp/dns-health-check.sh"
+    scp "$REPO_DIR/configs/systemd/dns-health-check.service" "$pve_server:/tmp/dns-health-check.service"
+    scp "$REPO_DIR/configs/systemd/dns-health-check.timer" "$pve_server:/tmp/dns-health-check.timer"
+    ssh "$pve_server" "pct push $vmid /tmp/dns-server.service /etc/systemd/system/dns-server.service"
+    ssh "$pve_server" "pct push $vmid /tmp/dns-health-check.sh /usr/local/bin/dns-health-check.sh"
+    ssh "$pve_server" "pct exec $vmid -- chmod +x /usr/local/bin/dns-health-check.sh"
+    ssh "$pve_server" "pct push $vmid /tmp/dns-health-check.service /etc/systemd/system/dns-health-check.service"
+    ssh "$pve_server" "pct push $vmid /tmp/dns-health-check.timer /etc/systemd/system/dns-health-check.timer"
+    ssh "$pve_server" "pct exec $vmid -- systemctl daemon-reload"
+    ssh "$pve_server" "pct exec $vmid -- systemctl enable dns-health-check.timer"
+    ssh "$pve_server" "pct exec $vmid -- systemctl start dns-health-check.timer"
+    ssh "$pve_server" "rm /tmp/dns-server.service /tmp/dns-health-check.sh /tmp/dns-health-check.service /tmp/dns-health-check.timer"
     
     # Start service
     log "  Starting dns-server..."
@@ -202,8 +235,11 @@ build_docker_image() {
     fi
     
     # Build with buildkit disabled (helps with compatibility)
+    # Use Dockerfile.prebuilt since we already have the compiled binary and frontend
     log "  Building Docker image..."
-    DOCKER_BUILDKIT=0 docker build --platform linux/amd64 -t dns-server:chr .
+    DOCKER_BUILDKIT=0 docker build --platform linux/amd64 \
+        -f Dockerfile.prebuilt --build-arg BINARY="$BINARY_NAME" \
+        -t dns-server:chr .
     
     # MikroTik requires Docker v1 format (layer.tar), not OCI format (blobs/sha256/)
     # Use skopeo to convert from Docker daemon to docker-archive (v1) format
@@ -225,16 +261,15 @@ deploy_to_chr() {
     
     log "Deploying to $server_name (CHR container on $chr_ip)..."
     
-    # Build Docker image (unless skip-build)
+    # Build Docker image (unless skip-build or image already exists from pre-build)
     local tar_path="/tmp/dns-server-chr.tar"
-    if [ "$SKIP_BUILD" = false ]; then
+    if [ -f "$tar_path" ]; then
+        log "  Using existing Docker image: $tar_path"
+    elif [ "$SKIP_BUILD" = false ]; then
         build_docker_image
         tar_path="$DOCKER_IMAGE_TAR"
     else
-        if [ ! -f "$tar_path" ]; then
-            error "Docker image not found: $tar_path. Run without --skip-build first."
-        fi
-        log "  Using existing Docker image: $tar_path"
+        error "Docker image not found: $tar_path. Run without --skip-build first."
     fi
     
     # Get current container number - check by name OR by root-dir (in case name differs)
@@ -349,6 +384,71 @@ deploy_to_chr() {
     log "  ✓ $server_name deployment complete"
 }
 
+# Run multiple deploy functions in parallel with per-server log capture
+deploy_parallel() {
+    local pids=()
+    local names=()
+    local logs=()
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Launch each argument pair (function + args) as a background job
+    while [ $# -gt 0 ]; do
+        local func="$1"; shift
+        local args=()
+        # Collect args until we hit "---" delimiter or run out
+        while [ $# -gt 0 ] && [ "$1" != "---" ]; do
+            args+=("$1"); shift
+        done
+        # Skip the "---" delimiter
+        [ $# -gt 0 ] && shift
+
+        local name="${args[${#args[@]}-1]}"  # last arg is always server_name
+        local logfile="$tmpdir/$name.log"
+        names+=("$name")
+        logs+=("$logfile")
+
+        # Run in subshell, capturing output; use trap to always write exit code
+        (
+            set +e
+            trap 'echo $? > "'"$logfile"'.rc"' EXIT
+            "$func" "${args[@]}" > "$logfile" 2>&1
+        ) &
+        pids+=($!)
+    done
+
+    # Wait for all and collect results
+    local failed=0
+    for i in "${!pids[@]}"; do
+        wait "${pids[$i]}" 2>/dev/null || true
+        local rc
+        rc=$(cat "${logs[$i]}.rc" 2>/dev/null || echo "1")
+        if [ "$rc" -eq 0 ]; then
+            echo -e "${GREEN}[INFO]${NC} ✓ ${names[$i]} deployed successfully"
+        else
+            echo -e "${RED}[ERROR]${NC} ✗ ${names[$i]} deployment failed (exit code $rc)"
+            failed=$((failed + 1))
+        fi
+    done
+
+    # Show full logs
+    echo ""
+    for i in "${!names[@]}"; do
+        local rc
+        rc=$(cat "${logs[$i]}.rc" 2>/dev/null || echo "1")
+        echo -e "${GREEN}[INFO]${NC} === ${names[$i]} log ==="
+        cat "${logs[$i]}"
+        echo ""
+    done
+
+    # Cleanup
+    rm -rf "$tmpdir"
+
+    if [ "$failed" -gt 0 ]; then
+        error "$failed server(s) failed deployment"
+    fi
+}
+
 show_usage() {
     echo "Usage: $0 [dns-1|dns-2|dns-3|dns-4|dns-5|all|vms|lxc|chr] [--skip-build]"
     echo ""
@@ -429,22 +529,29 @@ case $TARGET in
         deploy_to_chr "$DNS5_CHR_IP" "dns-5"
         ;;
     vms)
-        deploy_to_server "$DNS1_IP" "dns-1"
-        deploy_to_server "$DNS2_IP" "dns-2"
+        deploy_parallel \
+            deploy_to_server "$DNS1_IP" "dns-1" --- \
+            deploy_to_server "$DNS2_IP" "dns-2"
         ;;
     lxc)
-        deploy_to_lxc "$DNS3_PVE_IP" "$DNS3_LXC_VMID" "dns-3"
-        deploy_to_lxc "$DNS4_PVE_IP" "$DNS4_LXC_VMID" "dns-4"
+        deploy_parallel \
+            deploy_to_lxc "$DNS3_PVE_IP" "$DNS3_LXC_VMID" "dns-3" --- \
+            deploy_to_lxc "$DNS4_PVE_IP" "$DNS4_LXC_VMID" "dns-4"
         ;;
     chr)
         deploy_to_chr "$DNS5_CHR_IP" "dns-5"
         ;;
     all)
-        deploy_to_server "$DNS1_IP" "dns-1"
-        deploy_to_server "$DNS2_IP" "dns-2"
-        deploy_to_lxc "$DNS3_PVE_IP" "$DNS3_LXC_VMID" "dns-3"
-        deploy_to_lxc "$DNS4_PVE_IP" "$DNS4_LXC_VMID" "dns-4"
-        deploy_to_chr "$DNS5_CHR_IP" "dns-5"
+        # Pre-build Docker image for CHR before parallel phase
+        if [ "$SKIP_BUILD" = false ]; then
+            build_docker_image
+        fi
+        deploy_parallel \
+            deploy_to_server "$DNS1_IP" "dns-1" --- \
+            deploy_to_server "$DNS2_IP" "dns-2" --- \
+            deploy_to_lxc "$DNS3_PVE_IP" "$DNS3_LXC_VMID" "dns-3" --- \
+            deploy_to_lxc "$DNS4_PVE_IP" "$DNS4_LXC_VMID" "dns-4" --- \
+            deploy_to_chr "$DNS5_CHR_IP" "dns-5"
         ;;
 esac
 

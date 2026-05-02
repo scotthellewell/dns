@@ -748,9 +748,11 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		switch action {
 		case rrl.Refuse:
 			// Silently drop - don't send response for DDoS mitigation
+			log.Printf("RRL: Refuse query from %s for %s", clientIP, r.Question[0].Name)
 			return
 		case rrl.Slip:
 			// Send truncated response to force TCP retry
+			log.Printf("RRL: Slip query from %s for %s", clientIP, r.Question[0].Name)
 			m := new(dns.Msg)
 			m.SetReply(r)
 			m.Truncated = true

@@ -222,12 +222,52 @@ Check that both servers can reach each other on port 443 (HTTPS/WSS). The sync u
 
 ## Multi-Server Deployment
 
-For HA deployments with multiple servers, repeat the deployment steps for each server. The servers will automatically sync data via their peer connections once running.
+Use the automated deploy script for all servers:
+
+```bash
+# Deploy to all 5 servers (parallel where possible)
+./scripts/deploy.sh all
+
+# Deploy to individual servers
+./scripts/deploy.sh dns-1
+./scripts/deploy.sh dns-3
+```
+
+The script handles building, deploying, capabilities, health checks, and service management automatically. It deploys dns-1/dns-2 in parallel, then dns-3/dns-4 in parallel, then dns-5.
 
 ### Current Production Servers
 
-Servers are configured in the application's config and use hostnames like:
-- `dns-1.<domain>/sync`
-- `dns-2.<domain>/sync`
+| Server | Type | IP | Host | Binary Path |
+|--------|------|----|------|------------|
+| dns-1 | VM 105 | 23.148.184.39 | ssdnode-1 | /home/dns/dns/dns-linux-amd64 |
+| dns-2 | VM 106 | 23.148.184.40 | ssdnode-2 | /home/dns/dns/dns-linux-amd64 |
+| dns-3 | LXC 107 | 209.182.235.45 | ssdnode-1 | /opt/dns-server/dns-server |
+| dns-4 | LXC 108 | 172.93.55.21 | ssdnode-2 | /opt/dns-server/dns-server |
+| dns-5 | Container | 23.154.8.32 | Paradox CHR | /app/dns-server (Docker) |
 
-The sync endpoint is WebSocket over HTTPS (wss://).
+### Protection Layers
+
+All servers have multi-layer DDoS protection:
+1. **IP Block** — Static block lists at host firewall (iptables/RouterOS)
+2. **Rate Limit** — Per-IP hashlimit (3-5 qps) at host firewall
+3. **Auto-Ban** — RouterOS auto-bans IPs exceeding thresholds (24h)
+4. **RRL** — Application-level Response Rate Limiting (5 resp/sec/client)
+
+See `network/docs/firewall.md` for full firewall documentation.
+
+### Health Checks
+
+All servers run `dns-health-check.timer` (systemd timer, every 5 minutes) that auto-restarts the DNS server if queries fail.
+
+### RRL Configuration
+
+Response Rate Limiting is managed via API:
+```bash
+# Get current config
+curl -sk -H "X-API-Key: <key>" https://<server>/api/rrl
+
+# Update config
+curl -sk -X PUT -H "X-API-Key: <key>" -H "Content-Type: application/json" \
+  -d '{"enabled":true,"responses_per_sec":5,"slip_ratio":2,"window_seconds":1}' \
+  https://<server>/api/rrl
+```

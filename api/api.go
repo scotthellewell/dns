@@ -211,6 +211,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Recursion settings
 	mux.HandleFunc("/api/recursion", h.corsMiddleware(h.handleRecursion))
 
+	// Rate limiting (RRL)
+	mux.HandleFunc("/api/rrl", h.corsMiddleware(h.handleRRL))
+
 	// DNSSEC settings
 	mux.HandleFunc("/api/dnssec", h.corsMiddleware(h.handleDNSSEC))
 
@@ -273,6 +276,7 @@ func (h *Handler) RegisterRoutesWithAuth(mux *http.ServeMux, authMgr AuthMiddlew
 	mux.HandleFunc("/api/transfer", wrap(h.handleTransfer))
 	mux.HandleFunc("/api/dynamic-updates", wrap(h.handleDynamicUpdates))
 	mux.HandleFunc("/api/recursion", wrap(h.handleRecursion))
+	mux.HandleFunc("/api/rrl", wrap(h.handleRRL))
 	mux.HandleFunc("/api/dnssec", wrap(h.handleDNSSEC))
 	mux.HandleFunc("/api/settings", wrap(h.handleSettings))
 	mux.HandleFunc("/api/audit", wrap(h.handleAudit))
@@ -1572,6 +1576,15 @@ func (h *Handler) handleRecursion(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (h *Handler) handleRRL(w http.ResponseWriter, r *http.Request) {
+	// Use storage backend if available
+	if h.hasStorage() {
+		h.handleRRLStorage(w, r)
+		return
+	}
+	http.Error(w, "Storage not available", http.StatusInternalServerError)
 }
 
 func (h *Handler) handleDNSSEC(w http.ResponseWriter, r *http.Request) {

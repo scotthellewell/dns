@@ -1,0 +1,6 @@
+[Unit]
+Description=DNS Server Health Check
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dns-health-check.sh
