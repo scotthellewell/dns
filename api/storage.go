@@ -1131,11 +1131,11 @@ func (h *Handler) handleRRLStorage(w http.ResponseWriter, r *http.Request) {
 		cfg, err := store.GetRateLimitConfig()
 		if err != nil {
 			h.jsonResponse(w, map[string]interface{}{
-				"enabled":            false,
-				"responses_per_sec":  5,
-				"slip_ratio":         2,
-				"window_seconds":     1,
-				"whitelist_cidrs":    []string{},
+				"enabled":           false,
+				"responses_per_sec": 5,
+				"slip_ratio":        2,
+				"window_seconds":    1,
+				"whitelist_cidrs":   []string{},
 			})
 			return
 		}

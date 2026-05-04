@@ -603,7 +603,6 @@ queryLoop:
 					return nil, nil, 0, false // Return failure, not just continue
 				}
 
-
 				ips, cnames, ttl, found := r.extractRecords(result.resp, qtype)
 				if found {
 					return ips, cnames, ttl, true
