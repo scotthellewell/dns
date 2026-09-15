@@ -18,6 +18,8 @@ import (
 	"github.com/scott/dns/rrl"
 	"github.com/scott/dns/secondary"
 	"github.com/scott/dns/transfer"
+
+	"github.com/scott/dns/logging"
 )
 
 // BlocklistChecker interface for blocklist functionality.
@@ -859,16 +861,16 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	for _, q := range r.Question {
-		log.Printf("Query: %s %s from %s (DNSSEC: %v)", dns.TypeToString[q.Qtype], q.Name, clientIPStr, wantDNSSEC)
+		logging.Debugf("Query: %s %s from %s (DNSSEC: %v)", dns.TypeToString[q.Qtype], q.Name, clientIPStr, wantDNSSEC)
 
 		// Check for delegation before local processing
 		if del, found := cfg.FindDelegation(q.Name); found {
-			log.Printf("[DEBUG] Found delegation for %s -> %s (forward: %v)", q.Name, del.Zone, del.Forward)
+			logging.Debugf("[DEBUG] Found delegation for %s -> %s (forward: %v)", q.Name, del.Zone, del.Forward)
 			if s.handleDelegation(w, r, m, q, del, wantDNSSEC) {
-				log.Printf("[DEBUG] Delegation handled, returning")
+				logging.Debugf("[DEBUG] Delegation handled, returning")
 				return // Delegation handled the request
 			}
-			log.Printf("[DEBUG] Delegation not handled, continuing to local processing")
+			logging.Debugf("[DEBUG] Delegation not handled, continuing to local processing")
 		}
 
 		switch q.Qtype {

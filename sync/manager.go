@@ -17,6 +17,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	bolt "go.etcd.io/bbolt"
+
+	"github.com/scott/dns/logging"
 )
 
 // ProtocolVersion is the current sync protocol version
@@ -909,7 +911,7 @@ func (m *Manager) savePeerStates() {
 	for _, peer := range m.peers {
 		if peer.state != nil && peer.state.Connected {
 			// Log the state being saved for debugging
-			log.Printf("[sync] Saving peer state for %s: LastHLC Physical=%d Logical=%d ServerID=%s",
+			logging.Debugf("[sync] Saving peer state for %s: LastHLC Physical=%d Logical=%d ServerID=%s",
 				peer.serverID, peer.state.LastHLC.Physical, peer.state.LastHLC.Logical, peer.state.LastHLC.ServerID)
 			if err := m.oplog.SavePeerState(peer.state); err != nil {
 				log.Printf("[sync] Failed to save peer state for %s: %v", peer.serverID, err)
@@ -941,7 +943,7 @@ func (p *peerConn) readLoop() {
 
 		// Only log non-keepalive messages
 		if msg.Type != MsgPing && msg.Type != MsgPong {
-			log.Printf("[sync] readLoop received message type=%s from peer %s", msg.Type, p.serverID)
+			logging.Debugf("[sync] readLoop received message type=%s from peer %s", msg.Type, p.serverID)
 		}
 		p.handleMessage(msg)
 	}
@@ -1104,7 +1106,7 @@ func (p *peerConn) handleChange(payload *ChangePayload) {
 	p.state.LastSyncTime = time.Now()
 
 	// Save state after every change to ensure we don't re-sync on restart
-	log.Printf("[sync] Saving peer state for %s after change: LastHLC Physical=%d Logical=%d ServerID=%s",
+	logging.Debugf("[sync] Saving peer state for %s after change: LastHLC Physical=%d Logical=%d ServerID=%s",
 		p.serverID, p.state.LastHLC.Physical, p.state.LastHLC.Logical, p.state.LastHLC.ServerID)
 	if err := p.manager.oplog.SavePeerState(p.state); err != nil {
 		log.Printf("[sync] Failed to save peer state for %s: %v", p.serverID, err)
@@ -1247,7 +1249,7 @@ func (p *peerConn) handleSyncResponse(payload *SyncResponsePayload) {
 	// Save peer state immediately after processing sync response
 	// This ensures we don't re-sync the same data if the server restarts
 	if highestHLC.Compare(HybridLogicalClock{}) > 0 { // Only save if we actually received entries
-		log.Printf("[sync] Saving peer state for %s after sync: LastHLC Physical=%d Logical=%d",
+		logging.Debugf("[sync] Saving peer state for %s after sync: LastHLC Physical=%d Logical=%d",
 			p.serverID, p.state.LastHLC.Physical, p.state.LastHLC.Logical)
 		if err := p.manager.oplog.SavePeerState(p.state); err != nil {
 			log.Printf("[sync] Failed to save peer state for %s: %v", p.serverID, err)

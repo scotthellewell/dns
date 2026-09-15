@@ -1,0 +1,26 @@
+[Unit]
+Description=DNS Server
+After=network.target
+
+[Service]
+Type=simple
+User=dns
+WorkingDirectory=/home/dns/dns
+ExecStart=/home/dns/dns/dns-linux-amd64
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+# Log verbosity: error | warn | info | debug
+# "debug" restores per-query logging; "info" is the quiet production default.
+Environment=DNS_LOG_LEVEL=info
+
+# Memory limits - prevent OOM by letting systemd reclaim before kernel kills
+MemoryMax=768M
+MemoryHigh=640M
+
+# Auto-restart weekly to mitigate memory leaks
+RuntimeMaxSec=604800
+
+[Install]
+WantedBy=multi-user.target

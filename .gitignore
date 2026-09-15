@@ -3,6 +3,10 @@ dns
 dnsserver
 dns-server
 dns-server-*
+# ...but systemd unit files are config, not binaries. The unanchored
+# 'dns-server-*' above silently excluded these, so deploy.sh shipped
+# referencing files that were never committed.
+!configs/systemd/dns-server-*.service
 dns-linux*
 e2e.test
 __debug_bin*
