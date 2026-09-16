@@ -30,7 +30,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o d
 FROM alpine:3.21
 
 # Install ca-certificates for HTTPS, tzdata for timezones, iproute2 for IPv6 config
-RUN apk add --no-cache ca-certificates tzdata iproute2
+RUN apk add --no-cache ca-certificates tzdata iproute2 tini
 
 # Create non-root user
 RUN adduser -D -u 1000 dnsuser
@@ -76,5 +76,8 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider --no-check-certificate https://localhost:443/api/health || exit 1
 
 # Default command - use entrypoint script for IPv6 setup
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+#
+# Wrapped in tini so PID 1 reaps orphaned children; see Dockerfile.prebuilt for
+# why (accumulated HEALTHCHECK zombies exhausted the PID table).
+ENTRYPOINT ["/sbin/tini", "--", "/app/docker-entrypoint.sh"]
 CMD ["-data", "/app/data"]

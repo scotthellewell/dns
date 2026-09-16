@@ -3,7 +3,7 @@
 FROM alpine:3.21
 
 # Install ca-certificates for HTTPS and tzdata for timezones
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata tini
 
 # Create non-root user
 RUN adduser -D -u 1000 dnsuser
@@ -43,5 +43,12 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider --no-check-certificate https://localhost:443/api/health || exit 1
 
 # Default command
-ENTRYPOINT ["/app/dns-server"]
+#
+# Run under tini so PID 1 reaps orphaned children. The Go binary does not reap
+# arbitrary orphans, so every HEALTHCHECK wget that got reparented to it stayed
+# a zombie. At one probe per 30s those accumulated until the PID table was full
+# and fork() started returning EAGAIN ("Resource temporarily unavailable"),
+# which made the health check fail permanently on a server that was serving DNS
+# perfectly well.
+ENTRYPOINT ["/sbin/tini", "--", "/app/dns-server"]
 CMD ["-data", "/app/data"]
