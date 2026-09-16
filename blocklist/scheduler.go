@@ -16,15 +16,23 @@ type Scheduler struct {
 	wg         sync.WaitGroup
 	running    bool
 	mu         sync.Mutex
+
+	// lastAttempt records when each source was last *attempted*, as opposed
+	// to BlocklistSource.LastUpdate which only advances on success. Kept in
+	// memory on purpose: when a fetch was tried is a node-local fact, and
+	// replicating it would make every attempt look like an entity change.
+	attemptMu   sync.Mutex
+	lastAttempt map[string]time.Time
 }
 
 // NewScheduler creates a new update scheduler.
 func NewScheduler(manager *Manager) *Scheduler {
 	return &Scheduler{
-		manager:    manager,
-		downloader: NewDownloader(),
-		parser:     NewParser(),
-		stopCh:     make(chan struct{}),
+		manager:     manager,
+		downloader:  NewDownloader(),
+		parser:      NewParser(),
+		stopCh:      make(chan struct{}),
+		lastAttempt: make(map[string]time.Time),
 	}
 }
 
@@ -98,7 +106,7 @@ func (s *Scheduler) checkAndUpdateSources() {
 
 		// Check if update is needed
 		nextUpdate := source.LastUpdate.Add(time.Duration(source.UpdateMinutes) * time.Minute)
-		if now.After(nextUpdate) {
+		if now.After(nextUpdate) && s.readyToAttempt(source.ID, source.ErrorCount, now) {
 			log.Printf("[blocklist-scheduler] Source %s needs update (last: %s, interval: %dm)",
 				source.ID, source.LastUpdate.Format(time.RFC3339), source.UpdateMinutes)
 			go s.UpdateSource(source.ID)
@@ -209,4 +217,33 @@ func (s *Scheduler) updateSourceWithRetry(sourceID string) {
 
 	log.Printf("[blocklist-scheduler] Successfully updated source: %s (%d domains)",
 		source.Name, len(parseResult.Domains))
+}
+
+// readyToAttempt reports whether a source may be fetched now, and records the
+// attempt if so.
+//
+// LastUpdate only advances on a successful download, so a source whose URL is
+// permanently broken stays past due forever and would be retried on every
+// scheduler tick - once a minute rather than once per UpdateMinutes. Each of
+// those failures increments ErrorCount and writes the source back to storage,
+// which replicates the change to every peer, so one dead URL produced a
+// continuous cluster-wide sync storm. Back off on consecutive failures, capped
+// at the source's normal interval.
+func (s *Scheduler) readyToAttempt(sourceID string, errorCount int, now time.Time) bool {
+	s.attemptMu.Lock()
+	defer s.attemptMu.Unlock()
+
+	if errorCount > 0 {
+		shift := errorCount
+		if shift > 6 {
+			shift = 6
+		}
+		backoff := time.Duration(1<<uint(shift)) * time.Minute
+		if last, ok := s.lastAttempt[sourceID]; ok && now.Before(last.Add(backoff)) {
+			return false
+		}
+	}
+
+	s.lastAttempt[sourceID] = now
+	return true
 }

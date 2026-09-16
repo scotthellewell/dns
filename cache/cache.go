@@ -122,6 +122,14 @@ func (c *Cache) SetNegative(key string, ttl uint32) {
 // SetWithNegative stores an entry in the cache with optional negative flag
 func (c *Cache) SetWithNegative(key string, ips []net.IP, cnames []string, ttl uint32, negative bool) {
 	if ttl == 0 {
+		if !negative {
+			// RFC 2181 s8: a zero TTL means use the record for the current
+			// transaction only and do not cache it. DNS-based failover (GSLB,
+			// health-checked endpoints) publishes TTL 0 precisely to force a
+			// re-query, so caching it pinned clients to a dead endpoint for a
+			// full minute after a failover.
+			return
+		}
 		ttl = 60 // Default negative cache TTL of 60 seconds
 	}
 

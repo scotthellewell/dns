@@ -1044,9 +1044,22 @@ func entityHasChanged(existing, incoming interface{}) bool {
 		return true
 	}
 
-	// Remove timestamp fields that we want to ignore
-	timestampFields := []string{"created_at", "updated_at", "CreatedAt", "UpdatedAt", "last_sync_time", "LastSyncTime"}
-	for _, field := range timestampFields {
+	// Remove fields that describe a single node's own bookkeeping rather than
+	// the shared entity. Comparing them made every local refresh look like a
+	// real change: each node stamps its own last_update/last_etag and counts
+	// its own fetch errors, so peers saw a difference, saved it, rebroadcast,
+	// and the entity ping-ponged around the cluster forever. A failing
+	// blocklist source turned that into a continuous sync storm.
+	localFields := []string{
+		"created_at", "updated_at", "CreatedAt", "UpdatedAt",
+		"last_sync_time", "LastSyncTime",
+		"last_update", "LastUpdate",
+		"last_etag", "LastETag",
+		"last_error", "LastError",
+		"error_count", "ErrorCount",
+		"entry_count", "EntryCount",
+	}
+	for _, field := range localFields {
 		delete(existingMap, field)
 		delete(incomingMap, field)
 	}
