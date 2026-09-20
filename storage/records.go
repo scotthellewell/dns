@@ -90,10 +90,18 @@ func (s *Store) CreateRecord(record *Record) error {
 			}
 		}
 
-		// Check for duplicate - same data content
-		dataStr := string(record.Data)
+		// Check for duplicate - same data content.
+		//
+		// Compare canonicalised JSON, not raw bytes: Data is a json.RawMessage,
+		// so the same rdata reaches us with different key ordering depending on
+		// which path produced it (UI, API, sync, zone import) and a byte compare
+		// silently lets a duplicate through. TTL is deliberately NOT part of the
+		// identity - an RRset carries a single TTL, so the same rdata at a
+		// different TTL is still a duplicate rather than a second record. Use
+		// UpdateRecord to change a TTL.
+		incoming := canonicalJSON(record.Data)
 		for _, r := range records {
-			if string(r.Data) == dataStr && r.TTL == record.TTL {
+			if canonicalJSON(r.Data) == incoming {
 				// Duplicate found - skip adding
 				return fmt.Errorf("duplicate record exists")
 			}
@@ -1227,4 +1235,24 @@ func (s *Store) DeduplicateRecords() (int, error) {
 	})
 
 	return removedCount, err
+}
+
+// canonicalJSON renders JSON with map keys in a stable order so that two
+// encodings of the same value compare equal. Input that will not parse is
+// returned with only surrounding whitespace trimmed, so a malformed value can
+// still match another copy of itself byte-for-byte rather than being treated
+// as unique.
+func canonicalJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var v interface{}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return strings.TrimSpace(string(raw))
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return strings.TrimSpace(string(raw))
+	}
+	return string(b)
 }
