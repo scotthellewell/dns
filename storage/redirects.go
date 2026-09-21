@@ -39,9 +39,16 @@ func (s *Store) GetRedirect(id string) (*RedirectRule, error) {
 	return &rule, nil
 }
 
-// CreateRedirect creates a new redirect rule
-func (s *Store) CreateRedirect(rule *RedirectRule) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+// putRedirect writes the rule and records the change for cluster sync.
+//
+// Redirect rules were previously stored without recording a sync change, so
+// they never replicated: a rule added on one server stayed on that server and
+// the cluster answered the same name differently depending on which node a
+// client happened to use. That is how a SafeSearch rule ended up on two of
+// five resolvers, making a Google service host resolve to the SafeSearch VIP
+// on some servers and correctly on others.
+func (s *Store) putRedirect(rule *RedirectRule, op string) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists(BucketRedirects)
 		if err != nil {
 			return err
@@ -52,22 +59,35 @@ func (s *Store) CreateRedirect(rule *RedirectRule) error {
 		}
 		return b.Put([]byte(rule.ID), data)
 	})
+	if err == nil {
+		recordChange(EntityTypeRedirect, rule.ID, "", op, rule)
+	}
+	return err
+}
+
+// CreateRedirect creates a new redirect rule
+func (s *Store) CreateRedirect(rule *RedirectRule) error {
+	return s.putRedirect(rule, OpCreate)
 }
 
 // UpdateRedirect updates an existing redirect rule
 func (s *Store) UpdateRedirect(rule *RedirectRule) error {
-	return s.CreateRedirect(rule)
+	return s.putRedirect(rule, OpUpdate)
 }
 
 // DeleteRedirect deletes a redirect rule by ID
 func (s *Store) DeleteRedirect(id string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(BucketRedirects)
 		if b == nil {
 			return nil
 		}
 		return b.Delete([]byte(id))
 	})
+	if err == nil {
+		recordChange(EntityTypeRedirect, id, "", OpDelete, nil)
+	}
+	return err
 }
 
 // ListRedirects returns all redirect rules

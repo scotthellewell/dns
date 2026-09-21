@@ -180,6 +180,7 @@ const (
 	EntityBlocklistWhitelist = "blocklist_whitelist"
 	EntityDynamicUpdate      = "dynamic_update"
 	EntityGeofeed            = "geofeed"
+	EntityRedirect           = "redirect"
 )
 
 // OpLogEntry represents a single operation in the operation log

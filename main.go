@@ -1016,6 +1016,8 @@ func applyDelete(store *storage.Store, entityType, entityID string) error {
 		return store.DeleteBlocklistSource(entityID)
 	case sync.EntityGeofeed:
 		return store.DeleteGeoEntry(entityID)
+	case sync.EntityRedirect:
+		return store.DeleteRedirect(entityID)
 	default:
 		log.Printf("[sync] Unknown entity type for delete: %s", entityType)
 		return nil
@@ -1331,6 +1333,22 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 		log.Printf("[sync] Creating synced geofeed entry %s (%s → %s, %s)", geoEntry.ID, geoEntry.Prefix, geoEntry.Country, geoEntry.City)
 		return store.CreateGeoEntry(&geoEntry)
 
+	case sync.EntityRedirect:
+		var rule storage.RedirectRule
+		if err := json.Unmarshal(data, &rule); err != nil {
+			return err
+		}
+		existing, _ := store.GetRedirect(rule.ID)
+		if existing != nil {
+			if !entityHasChanged(existing, &rule) {
+				log.Printf("[sync] Redirect %s unchanged, skipping update", rule.ID)
+				return nil
+			}
+			return store.UpdateRedirect(&rule)
+		}
+		log.Printf("[sync] Syncing redirect %s (%s -> %s, enabled: %v)", rule.ID, rule.MatchDomain, rule.TargetHost, rule.Enabled)
+		return store.CreateRedirect(&rule)
+
 	default:
 		log.Printf("[sync] Unknown entity type: %s", entry.EntityType)
 		return nil
@@ -1525,6 +1543,23 @@ func createFullSyncProvider(store *storage.Store) sync.FullSyncProvider {
 					EntityID:   entry.ID,
 					TenantID:   "",
 					Data:       entry,
+				})
+			}
+		}
+
+		// Redirect rules (SafeSearch, restricted mode and similar) - these are
+		// cluster-wide policy, so a node missing one answers differently from
+		// its peers for the same name.
+		redirects, err := store.ListRedirects()
+		if err != nil {
+			log.Printf("[sync] Warning: failed to list redirects: %v", err)
+		} else {
+			for _, rule := range redirects {
+				items = append(items, sync.FullSyncDataItem{
+					EntityType: sync.EntityRedirect,
+					EntityID:   rule.ID,
+					TenantID:   "",
+					Data:       rule,
 				})
 			}
 		}
