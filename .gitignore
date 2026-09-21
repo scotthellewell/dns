@@ -63,6 +63,11 @@ web/test-results/
 # Playwright
 playwright/.cache/
 .credentials
+# API keys and other secrets - never commit
+api-key.txt
+*api-key*.txt
+*.key
+!ssl-dhparams.pem
 # Environment files (contain secrets)
 .env
 .env.*
