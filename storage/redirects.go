@@ -112,9 +112,9 @@ func (s *Store) MatchRedirect(domain string) (*RedirectRule, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
-	
+
 	for _, rule := range rules {
 		if matchDomain(rule.MatchDomain, domain) {
 			return rule, nil
@@ -131,22 +131,25 @@ func (s *Store) MatchRedirect(domain string) (*RedirectRule, error) {
 // - Double wildcard: "*.google.*" matches "www.google.com", "www.google.co.uk"
 func matchDomain(pattern, domain string) bool {
 	pattern = strings.ToLower(strings.TrimSuffix(pattern, "."))
-	
+
 	// Exact match
 	if pattern == domain {
 		return true
 	}
-	
-	// Double wildcard: *.google.*
+
+	// Double wildcard: *.google.* - "the label google, under any TLD".
+	//
+	// This must stay anchored to the end of the name. An earlier version tested
+	// strings.Contains(domain, ".google.") || strings.HasPrefix(domain,
+	// "google."), which matches any name that merely has a google label
+	// somewhere - including google.com.example.com, a domain Google does not
+	// own. A redirect rule built on that pattern silently hijacks third-party
+	// names.
 	if strings.HasPrefix(pattern, "*.") && strings.HasSuffix(pattern, ".*") {
-		// Extract the middle part: "google" from "*.google.*"
-		middle := pattern[2:len(pattern)-2] // "google"
-		// Check if domain contains ".google." or starts with "google."
-		return strings.Contains(domain, "."+middle+".") || 
-		       strings.HasPrefix(domain, middle+".") ||
-		       domain == middle
+		middle := pattern[2 : len(pattern)-2] // "google"
+		return matchesLabelUnderTLD(domain, middle)
 	}
-	
+
 	// Wildcard at start: *.google.com
 	if strings.HasPrefix(pattern, "*.") {
 		suffix := pattern[1:] // ".google.com"
@@ -158,14 +161,44 @@ func matchDomain(pattern, domain string) bool {
 			return true
 		}
 	}
-	
-	// Wildcard at end: google.*
+
+	// Wildcard at end: google.* or www.google.* - the name IS <prefix>.<tld>,
+	// not merely a name beginning with the prefix. Matching on prefix alone
+	// would accept google.com.example.com.
 	if strings.HasSuffix(pattern, ".*") {
-		prefix := pattern[:len(pattern)-2] + "." // "google."
-		if strings.HasPrefix(domain, prefix) {
+		prefix := pattern[:len(pattern)-2] // "google" or "www.google"
+		if rest, ok := strings.CutPrefix(domain, prefix+"."); ok {
+			// What follows must be a public suffix and nothing more.
+			if n := len(strings.Split(rest, ".")); n >= 1 && n <= 2 {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// matchesLabelUnderTLD reports whether label appears as a domain label that is
+// followed only by a public suffix - so "google" matches google.com,
+// www.google.com and google.co.uk, but not google.com.example.com.
+//
+// There is no public suffix list here, so the suffix is approximated as at most
+// two trailing labels. That covers com, net, co.uk, com.au and the like. The
+// approximation is deliberately conservative: erring towards NOT matching
+// leaves a name resolving normally, whereas erring the other way silently
+// redirects somebody else's domain.
+func matchesLabelUnderTLD(domain, label string) bool {
+	if label == "" {
+		return false
+	}
+	parts := strings.Split(domain, ".")
+	for i, p := range parts {
+		if p != label {
+			continue
+		}
+		if trailing := len(parts) - i - 1; trailing >= 1 && trailing <= 2 {
 			return true
 		}
 	}
-	
 	return false
 }

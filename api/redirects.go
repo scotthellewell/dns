@@ -27,14 +27,26 @@ func (h *Handler) handleRedirects(w http.ResponseWriter, r *http.Request) {
 		if rules == nil {
 			rules = []*storage.RedirectRule{}
 		}
-		
+
 		// Also include presets for safe search
 		presets := []map[string]interface{}{
+			// Scoped to the search hosts on purpose. "*.google.*" also matches
+			// every Google *service* host - mtalk (FCM push), play, and
+			// android.clients among them - and pointing those at the SafeSearch
+			// front-end, which only answers on 443, breaks them with a silent
+			// connect timeout rather than an error anyone would look for.
 			{
 				"id":          "google-safesearch",
 				"name":        "Google Safe Search",
-				"description": "Enforces Safe Search on all Google domains",
-				"match":       "*.google.*",
+				"description": "Enforces Safe Search on Google search hosts (www.google.<tld>)",
+				"match":       "www.google.*",
+				"target":      "forcesafesearch.google.com",
+			},
+			{
+				"id":          "google-safesearch-bare",
+				"name":        "Google Safe Search (bare domain)",
+				"description": "Enforces Safe Search on google.<tld> without a www prefix",
+				"match":       "google.*",
 				"target":      "forcesafesearch.google.com",
 			},
 			{
