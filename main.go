@@ -20,6 +20,7 @@ import (
 	"github.com/scott/dns/blocklist"
 	"github.com/scott/dns/certs"
 	"github.com/scott/dns/config"
+	"github.com/scott/dns/dnssecval"
 	"github.com/scott/dns/ports"
 	"github.com/scott/dns/secondary"
 	"github.com/scott/dns/server"
@@ -59,6 +60,27 @@ func (a *secondaryCacheAdapter) GetSecondaryZoneCache(zone string) (*secondary.Z
 
 func (a *secondaryCacheAdapter) DeleteSecondaryZoneCache(zone string) error {
 	return a.store.DeleteSecondaryZoneCache(zone)
+}
+
+// trustAnchorStoreAdapter persists RFC 5011 root trust anchor state in the
+// node-local config bucket (not replicated: each node tracks its own timers)
+type trustAnchorStoreAdapter struct {
+	store *storage.Store
+}
+
+const configKeyTrustAnchors = "dnssec_trust_anchors"
+
+func (a *trustAnchorStoreAdapter) LoadTrustAnchors() ([]dnssecval.AnchorRecord, error) {
+	var recs []dnssecval.AnchorRecord
+	err := a.store.GetConfigValue(configKeyTrustAnchors, &recs)
+	if err == storage.ErrNotFound {
+		return nil, nil
+	}
+	return recs, err
+}
+
+func (a *trustAnchorStoreAdapter) SaveTrustAnchors(recs []dnssecval.AnchorRecord) error {
+	return a.store.SetConfigValue(configKeyTrustAnchors, recs)
 }
 
 // dnssecKeyStoreAdapter adapts storage.Store to server.DNSSECKeyStore interface
@@ -307,6 +329,12 @@ func main() {
 
 	// Create DNS server
 	srv := server.New(parsed)
+
+	// Load RFC 5011 root trust anchor state and keep it refreshed
+	if err := srv.SetTrustAnchorStore(&trustAnchorStoreAdapter{store: store}); err != nil {
+		log.Printf("Warning: Failed to load DNSSEC trust anchor state: %v", err)
+	}
+	srv.StartTrustAnchorRefresh(context.Background())
 
 	// Start recursive DNS cache warmup in background
 	srv.WarmupRecursionCache()

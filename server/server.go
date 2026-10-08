@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/scott/dns/config"
 	"github.com/scott/dns/dnssec"
+	"github.com/scott/dns/dnssecval"
 	"github.com/scott/dns/querylog"
 	"github.com/scott/dns/recurse"
 	"github.com/scott/dns/resolver"
@@ -63,6 +65,10 @@ type Server struct {
 	// DNSSEC key store for loading keys from database
 	dnssecKeyStore DNSSECKeyStore
 
+	// Root trust anchors for DNSSEC validation (RFC 5011), shared across
+	// resolver re-creation on config updates
+	trustAnchors *dnssecval.TrustAnchors
+
 	// Redirect checker for safe search enforcement
 	redirectChecker RedirectChecker
 
@@ -79,12 +85,14 @@ type RedirectChecker interface {
 
 // New creates a new DNS server
 func New(cfg *config.ParsedConfig) *Server {
+	anchors := dnssecval.NewTrustAnchors(dnssecval.BuiltinRootAnchors())
 	srv := &Server{
-		config:      cfg,
-		resolver:    resolver.New(cfg),
-		recursion:   recurse.New(cfg.Recursion),
-		dnssec:      dnssec.NewManager(),
-		acmeRecords: make(map[string]string),
+		config:       cfg,
+		resolver:     resolver.New(cfg),
+		recursion:    recurse.New(cfg.Recursion, anchors),
+		dnssec:       dnssec.NewManager(),
+		acmeRecords:  make(map[string]string),
+		trustAnchors: anchors,
 	}
 
 	// Initialize rate limiter
@@ -139,6 +147,26 @@ func (s *Server) SetDNSSECKeyStore(store DNSSECKeyStore) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dnssecKeyStore = store
+}
+
+// SetTrustAnchorStore loads persisted RFC 5011 trust anchor state and saves
+// future changes to store.
+func (s *Server) SetTrustAnchorStore(store dnssecval.AnchorStore) error {
+	return s.trustAnchors.SetStore(store)
+}
+
+// StartTrustAnchorRefresh periodically fetches the root DNSKEY RRset so RFC
+// 5011 trust anchor rollovers are tracked even when the cache is warm.
+func (s *Server) StartTrustAnchorRefresh(ctx context.Context) {
+	go s.trustAnchors.Run(ctx, func() (*dns.Msg, error) {
+		s.mu.RLock()
+		recursion := s.recursion
+		s.mu.RUnlock()
+		if recursion == nil {
+			return nil, dnssecval.ErrRefreshSkipped
+		}
+		return recursion.QueryRootDNSKEY()
+	})
 }
 
 // loadDNSSEC loads DNSSEC keys from configuration (legacy file-based)
@@ -224,7 +252,7 @@ func (s *Server) UpdateConfig(cfg *config.ParsedConfig) {
 
 	s.config = cfg
 	s.resolver = resolver.New(cfg)
-	s.recursion = recurse.New(cfg.Recursion)
+	s.recursion = recurse.New(cfg.Recursion, s.trustAnchors)
 	s.dnssec = dnssec.NewManager()
 	s.loadDNSSEC(cfg)
 	// Also load DNSSEC keys from storage (database) - important for cluster sync

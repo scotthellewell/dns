@@ -3,6 +3,7 @@ package recurse
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"strings"
@@ -67,8 +68,9 @@ type Resolver struct {
 	nsResolve   singleflight.Group   // dedup concurrent NS IP resolutions
 }
 
-// New creates a new recursive resolver
-func New(cfg config.ParsedRecursion) *Resolver {
+// New creates a new recursive resolver. anchors holds the long-lived root
+// trust anchor state; nil uses the built-in anchors without persistence.
+func New(cfg config.ParsedRecursion, anchors *dnssecval.TrustAnchors) *Resolver {
 	servers := cfg.Upstream
 	iterative := false
 
@@ -99,7 +101,7 @@ func New(cfg config.ParsedRecursion) *Resolver {
 		servers:   servers,
 		iterative: iterative,
 		cache:     c,
-		validator: dnssecval.New(), // DNSSEC validator
+		validator: dnssecval.New(anchors), // DNSSEC validator
 	}
 
 	// Set the query function for DNSSEC validation
@@ -202,8 +204,42 @@ func (r *Resolver) queryForValidation(name string, qtype uint16) (*dns.Msg, erro
 		return r.queryForValidationForward(name, qtype)
 	}
 
-	// Do iterative resolution from root servers
+	// Start from the closest cached delegation. DS records live in the parent
+	// zone, so look up the delegation of the parent name for those.
+	lookup := name
+	if qtype == dns.TypeDS && name != "." {
+		if i := strings.Index(name, "."); i < len(name)-1 {
+			lookup = name[i+1:]
+		} else {
+			lookup = "."
+		}
+	}
+	if servers, _ := r.findCachedDelegation(lookup); servers != nil {
+		if resp, err := r.queryForValidationIterative(name, qtype, servers, 0); err == nil {
+			return resp, nil
+		}
+	}
 	return r.queryForValidationIterative(name, qtype, rootServers, 0)
+}
+
+// QueryRootDNSKEY fetches the root DNSKEY RRset with signatures, for RFC 5011
+// trust anchor refresh.
+func (r *Resolver) QueryRootDNSKEY() (*dns.Msg, error) {
+	if !r.config.Enabled {
+		return nil, dnssecval.ErrRefreshSkipped
+	}
+	return r.queryForValidation(".", dns.TypeDNSKEY)
+}
+
+// exchangeValidation sends a validation query, retrying over TCP if the UDP
+// response was truncated (DNSKEY RRsets with signatures are often large).
+func (r *Resolver) exchangeValidation(m *dns.Msg, server string) (*dns.Msg, error) {
+	resp, _, err := r.client.Exchange(m, server)
+	if err == nil && resp != nil && resp.Truncated {
+		tcp := &dns.Client{Net: "tcp", Timeout: r.client.Timeout}
+		resp, _, err = tcp.Exchange(m, server)
+	}
+	return resp, err
 }
 
 // queryForValidationForward queries upstream resolvers for DNSKEY/DS
@@ -218,11 +254,11 @@ func (r *Resolver) queryForValidationForward(name string, qtype uint16) (*dns.Ms
 		if !strings.Contains(server, ":") {
 			server = server + ":53"
 		}
-		resp, _, err := r.client.Exchange(m, server)
+		resp, err := r.exchangeValidation(m, server)
 		if err != nil {
 			continue
 		}
-		if resp != nil && resp.Rcode == dns.RcodeSuccess {
+		if resp != nil && (resp.Rcode == dns.RcodeSuccess || resp.Rcode == dns.RcodeNameError) {
 			return resp, nil
 		}
 	}
@@ -246,7 +282,7 @@ func (r *Resolver) queryForValidationIterative(name string, qtype uint16, server
 			server = server + ":53"
 		}
 
-		resp, _, err := r.client.Exchange(m, server)
+		resp, err := r.exchangeValidation(m, server)
 		if err != nil {
 			continue
 		}
@@ -798,10 +834,25 @@ func (r *Resolver) QueryAny(name string, qtype uint16) (*dns.Msg, error) {
 		name += "."
 	}
 
+	var resp *dns.Msg
+	var err error
 	if r.iterative {
-		return r.queryAnyIterative(name, qtype, r.servers, 0)
+		resp, err = r.queryAnyIterative(name, qtype, r.servers, 0)
+	} else {
+		resp, err = r.queryAnyForward(name, qtype)
 	}
-	return r.queryAnyForward(name, qtype)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate DNSSEC if records are signed
+	if resp.Rcode == dns.RcodeSuccess && len(resp.Answer) > 0 {
+		if valResult := r.validator.ValidateResponse(resp, name, qtype); valResult.Bogus {
+			log.Printf("DNSSEC: Validation BOGUS for %s: %s", name, valResult.WhyBogus)
+			return nil, fmt.Errorf("DNSSEC validation failed for %s: %s", name, valResult.WhyBogus)
+		}
+	}
+	return resp, nil
 }
 
 // queryAnyForward queries upstream resolvers for any record type (forwarding mode)

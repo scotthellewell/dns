@@ -33,6 +33,8 @@ A full-featured, authoritative DNS server written in Go with DNSSEC, zone transf
 - **Algorithm support**: ECDSAP256SHA256, ECDSAP384SHA384, RSASHA256, RSASHA512, ED25519
 - **Key export/import**: Transfer DNSSEC keys between primary and secondary servers
 - **Token-based key sharing**: Secure automatic key distribution to secondaries
+- **Validating resolver**: Recursive answers are validated along the full chain of trust to the root; unsigned zones must be proven insecure via NSEC/NSEC3
+- **Automated root key rollover (RFC 5011)**: Ships with root KSK-2017 and KSK-2024; tracks new and revoked root keys automatically, with state persisted per node
 
 ### Zone Transfers
 - **AXFR support**: Full zone transfers for secondaries
