@@ -565,6 +565,21 @@ func (s *Store) RaiseZoneSerial(zoneName string, serial uint32) error {
 	return err
 }
 
+// AnnounceZoneSerials broadcasts every zone's current serial so peers that
+// have fallen behind catch up. Peers only ever raise their serial, so this is
+// always safe; it runs at startup so a restart heals any drift.
+func (s *Store) AnnounceZoneSerials() error {
+	zones, err := s.ListZones("")
+	if err != nil {
+		return err
+	}
+	for _, zone := range zones {
+		recordChange(EntityTypeZoneSerial, zone.Name, zone.TenantID, OpUpdate,
+			&ZoneSerial{Zone: zone.Name, Serial: zone.Serial})
+	}
+	return nil
+}
+
 // IncrementZoneSerial increments the zone serial number.
 func (s *Store) IncrementZoneSerial(zoneName string) error {
 	zoneName = strings.TrimSuffix(strings.ToLower(zoneName), ".")

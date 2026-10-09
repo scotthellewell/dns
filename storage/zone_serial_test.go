@@ -131,3 +131,27 @@ func TestIncrementSerialNeverDecreases(t *testing.T) {
 		}
 	}
 }
+
+func TestAnnounceZoneSerials(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	zone := newSerialTestZone(t, store, 2026100917)
+	changes := captureChanges(t)
+
+	if err := store.AnnounceZoneSerials(); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range *changes {
+		if c.entityType != EntityTypeZoneSerial {
+			t.Errorf("announce recorded a %s change", c.entityType)
+			continue
+		}
+		if zs := c.data.(*ZoneSerial); zs.Zone == zone.Name && zs.Serial == 2026100917 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("serial for %s not announced: %+v", zone.Name, *changes)
+	}
+}

@@ -898,6 +898,9 @@ func initSyncManager(store *storage.Store, cfg *config.SyncConfig) *sync.Manager
 		log.Printf("[sync-repair] Starting repair process...")
 		repairSyncEntries(mgr, store)
 		log.Printf("[sync-repair] Repair process complete")
+		if err := store.AnnounceZoneSerials(); err != nil {
+			log.Printf("[sync] Warning: failed to announce zone serials: %v", err)
+		}
 	}()
 
 	log.Printf("[init] Sync manager initialization complete, returning...")
