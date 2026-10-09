@@ -158,6 +158,9 @@ func TestBogusRecursiveAnswerIsServfail(t *testing.T) {
 			if len(resp.Answer) != 0 {
 				t.Errorf("%s attempt %d: bogus answer returned to client", dns.TypeToString[qtype], attempt)
 			}
+			if resp.Authoritative {
+				t.Errorf("%s attempt %d: SERVFAIL for a recursive name marked authoritative", dns.TypeToString[qtype], attempt)
+			}
 		}
 	}
 }

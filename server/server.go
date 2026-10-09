@@ -1189,6 +1189,7 @@ func (s *Server) handleA(m *dns.Msg, q dns.Question) {
 
 	if result.Bogus {
 		m.Rcode = dns.RcodeServerFailure
+		m.Authoritative = false
 		return
 	}
 	if result.Found && !result.FromLocal {
@@ -1327,6 +1328,7 @@ func (s *Server) handleAAAA(m *dns.Msg, q dns.Question) {
 
 	if result.Bogus {
 		m.Rcode = dns.RcodeServerFailure
+		m.Authoritative = false
 		return
 	}
 	if result.Found && !result.FromLocal {
@@ -1422,6 +1424,7 @@ func (s *Server) handleAAAA(m *dns.Msg, q dns.Question) {
 func appendRecursive(m *dns.Msg, resp *dns.Msg, err error) {
 	if errors.Is(err, recurse.ErrDNSSECBogus) {
 		m.Rcode = dns.RcodeServerFailure
+		m.Authoritative = false
 		return
 	}
 	if err != nil || resp == nil || len(resp.Answer) == 0 {
