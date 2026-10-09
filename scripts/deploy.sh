@@ -412,12 +412,26 @@ deploy_to_chr() {
         *) error "  ✗ Container failed to start. Status: $status_line. Check: ssh $chr_server '/container/print detail'" ;;
     esac
     
-    # Check health endpoint
-    log "  Checking health endpoint..."
-    if curl -s -k --connect-timeout 5 "https://$chr_ip/api/health" | grep -q "dns"; then
+    # Check the API (/api/status), from the jump host if one is configured
+    log "  Checking API..."
+    local api_ok=false
+    for _ in $(seq 1 15); do
+        local body
+        if [ -n "$CHR_JUMP" ]; then
+            body=$(ssh "$CHR_JUMP" "curl -s -k --connect-timeout 5 https://$chr_ip/api/status" 2>/dev/null || true)
+        else
+            body=$(curl -s -k --connect-timeout 5 "https://$chr_ip/api/status" 2>/dev/null || true)
+        fi
+        if echo "$body" | grep -q '"status":"running"'; then
+            api_ok=true
+            break
+        fi
+        sleep 2
+    done
+    if [ "$api_ok" = true ]; then
         log "  ✓ API responding"
     else
-        warn "  ⚠ API not responding yet. It may take a moment to start."
+        warn "  ⚠ API not responding after 30s at https://$chr_ip/api/status"
     fi
     
     # Clean up local temp file
