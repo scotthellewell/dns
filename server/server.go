@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -1187,6 +1188,14 @@ func (s *Server) handleA(m *dns.Msg, q dns.Question) {
 		result = rec.ResolveA(q.Name, 0, localLookup, localCNAME)
 	}
 
+	if result.Bogus {
+		m.Rcode = dns.RcodeServerFailure
+		return
+	}
+	if result.Found && !result.FromLocal {
+		m.Authoritative = false
+	}
+
 	// Add CNAME records to the answer (if any were followed)
 	for i, cname := range result.CNAMEs {
 		target := ""
@@ -1317,6 +1326,14 @@ func (s *Server) handleAAAA(m *dns.Msg, q dns.Question) {
 		result = rec.ResolveAAAA(q.Name, 0, localLookup, localCNAME)
 	}
 
+	if result.Bogus {
+		m.Rcode = dns.RcodeServerFailure
+		return
+	}
+	if result.Found && !result.FromLocal {
+		m.Authoritative = false
+	}
+
 	// Add CNAME records to the answer (if any were followed)
 	for i, cname := range result.CNAMEs {
 		target := ""
@@ -1399,6 +1416,43 @@ func (s *Server) handleAAAA(m *dns.Msg, q dns.Question) {
 	}
 }
 
+// appendRecursive copies a recursive answer into m. The upstream OPT record is
+// dropped (m already carries our own), as are DNSSEC records the client did not
+// ask for, and the response is marked non-authoritative. An answer that failed
+// DNSSEC validation becomes SERVFAIL.
+func appendRecursive(m *dns.Msg, resp *dns.Msg, err error) {
+	if errors.Is(err, recurse.ErrDNSSECBogus) {
+		m.Rcode = dns.RcodeServerFailure
+		return
+	}
+	if err != nil || resp == nil || len(resp.Answer) == 0 {
+		return
+	}
+	opt := m.IsEdns0()
+	wantDNSSEC := opt != nil && opt.Do()
+	m.Authoritative = false
+	m.Answer = append(m.Answer, filterRecursive(resp.Answer, wantDNSSEC)...)
+	m.Ns = append(m.Ns, filterRecursive(resp.Ns, wantDNSSEC)...)
+	m.Extra = append(m.Extra, filterRecursive(resp.Extra, wantDNSSEC)...)
+}
+
+// filterRecursive drops OPT records, and DNSSEC records unless wanted (RFC 3225).
+func filterRecursive(rrs []dns.RR, wantDNSSEC bool) []dns.RR {
+	out := make([]dns.RR, 0, len(rrs))
+	for _, rr := range rrs {
+		switch rr.Header().Rrtype {
+		case dns.TypeOPT:
+			continue
+		case dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNSEC3:
+			if !wantDNSSEC {
+				continue
+			}
+		}
+		out = append(out, rr)
+	}
+	return out
+}
+
 // handleCNAME handles CNAME queries
 func (s *Server) handleCNAME(m *dns.Msg, q dns.Question) {
 	// Check secondary zones first
@@ -1427,11 +1481,7 @@ func (s *Server) handleCNAME(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeCNAME)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 
@@ -1471,11 +1521,7 @@ func (s *Server) handleMX(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeMX)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 
@@ -1530,11 +1576,7 @@ func (s *Server) handleTXT(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeTXT)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 
@@ -1573,11 +1615,7 @@ func (s *Server) handleNS(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := recursion.QueryAny(q.Name, dns.TypeNS)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 
@@ -1649,11 +1687,7 @@ func (s *Server) handleSRV(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeSRV)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 
@@ -1698,11 +1732,7 @@ func (s *Server) handleSOA(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeSOA)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 
@@ -1738,11 +1768,7 @@ func (s *Server) handleCAA(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeCAA)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 
@@ -1920,11 +1946,7 @@ func (s *Server) handleSSHFP(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeSSHFP)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 
@@ -1955,11 +1977,7 @@ func (s *Server) handleTLSA(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeTLSA)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 
@@ -1992,11 +2010,7 @@ func (s *Server) handleNAPTR(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeNAPTR)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 
@@ -2027,11 +2041,7 @@ func (s *Server) handleSVCB(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeSVCB)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 
@@ -2064,11 +2074,7 @@ func (s *Server) handleHTTPS(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeHTTPS)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 
@@ -2158,11 +2164,7 @@ func (s *Server) handleLOC(m *dns.Msg, q dns.Question) {
 	cfg := s.getConfig()
 	if cfg.Recursion.Mode == "full" && !s.isAuthoritative(q.Name, cfg) {
 		resp, err := rec.QueryAny(q.Name, dns.TypeLOC)
-		if err == nil && resp != nil && len(resp.Answer) > 0 {
-			m.Answer = append(m.Answer, resp.Answer...)
-			m.Ns = append(m.Ns, resp.Ns...)
-			m.Extra = append(m.Extra, resp.Extra...)
-		}
+		appendRecursive(m, resp, err)
 	}
 }
 

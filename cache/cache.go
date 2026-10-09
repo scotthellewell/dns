@@ -13,6 +13,7 @@ type Entry struct {
 	TTL        uint32
 	ExpiresAt  time.Time
 	Negative   bool      // True if this is a negative cache entry (NXDOMAIN/NODATA)
+	Bogus      bool      // True if the negative entry is a DNSSEC validation failure
 	HitCount   int       // Number of times this entry has been accessed
 	LastAccess time.Time // When this entry was last accessed
 	Fetching   bool      // True if this entry is being refreshed in background
@@ -82,6 +83,7 @@ func (c *Cache) Get(key string) (*Entry, bool, bool) {
 				TTL:        1, // Stale
 				ExpiresAt:  entry.ExpiresAt,
 				Negative:   entry.Negative,
+				Bogus:      entry.Bogus,
 				HitCount:   entry.HitCount,
 				LastAccess: entry.LastAccess,
 				Fetching:   entry.Fetching,
@@ -103,6 +105,7 @@ func (c *Cache) Get(key string) (*Entry, bool, bool) {
 		TTL:        remaining,
 		ExpiresAt:  entry.ExpiresAt,
 		Negative:   entry.Negative,
+		Bogus:      entry.Bogus,
 		HitCount:   entry.HitCount,
 		LastAccess: entry.LastAccess,
 		Fetching:   entry.Fetching,
@@ -117,6 +120,17 @@ func (c *Cache) Set(key string, ips []net.IP, cnames []string, ttl uint32) {
 // SetNegative stores a negative cache entry (NXDOMAIN/NODATA)
 func (c *Cache) SetNegative(key string, ttl uint32) {
 	c.SetWithNegative(key, nil, nil, ttl, true)
+}
+
+// SetBogus stores a negative entry for an answer that failed DNSSEC validation,
+// so repeat queries get SERVFAIL rather than an empty answer.
+func (c *Cache) SetBogus(key string, ttl uint32) {
+	c.SetWithNegative(key, nil, nil, ttl, true)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.entries[key]; ok {
+		e.Bogus = true
+	}
 }
 
 // SetWithNegative stores an entry in the cache with optional negative flag

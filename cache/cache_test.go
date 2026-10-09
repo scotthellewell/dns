@@ -238,3 +238,16 @@ func TestConcurrentAccess(t *testing.T) {
 	<-done
 	<-done
 }
+
+func TestSetBogus(t *testing.T) {
+	c := New(10)
+	c.SetBogus("bad.example.:1", 60)
+	e, _, ok := c.Get("bad.example.:1")
+	if !ok || !e.Negative || !e.Bogus {
+		t.Fatalf("got %+v ok=%v, want negative bogus entry", e, ok)
+	}
+	c.SetNegative("nx.example.:1", 60)
+	if e, _, _ := c.Get("nx.example.:1"); e.Bogus {
+		t.Fatal("plain negative entry marked bogus")
+	}
+}

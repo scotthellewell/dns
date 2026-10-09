@@ -147,7 +147,7 @@ func (r *Resolver) resolveNSIP(nsName string) ([]net.IP, uint32, bool) {
 		if entry, _, ok := r.cache.Get(cacheKey); ok && !entry.Negative && len(entry.IPs) > 0 {
 			return &nsResult{ips: entry.IPs, ttl: entry.TTL}, nil
 		}
-		ips, _, ttl, found := r.queryIterative(nsName, dns.TypeA, rootServers, 0)
+		ips, _, ttl, found, _ := r.queryIterative(nsName, dns.TypeA, rootServers, 0)
 		if found && len(ips) > 0 {
 			r.cache.Set(cacheKey, ips, nil, ttl)
 			return &nsResult{ips: ips, ttl: ttl}, nil
@@ -428,6 +428,7 @@ func (r *Resolver) resolve(name string, qtype uint16, depth int, forceExternal b
 		}
 		result.Found = subResult.Found
 		result.FromLocal = subResult.FromLocal
+		result.Bogus = subResult.Bogus
 		return result
 	}
 
@@ -451,6 +452,7 @@ func (r *Resolver) resolve(name string, qtype uint16, depth int, forceExternal b
 		// Handle negative cache entries
 		if entry.Negative {
 			// Return empty result for negative cache hit
+			result.Bogus = entry.Bogus
 			return result
 		}
 
@@ -472,8 +474,11 @@ func (r *Resolver) resolve(name string, qtype uint16, depth int, forceExternal b
 	}
 
 	// Query upstream servers
-	ips, cnames, ttl, found := r.queryExternal(name, qtype, depth)
-	if found {
+	ips, cnames, ttl, found, bogus := r.queryExternal(name, qtype, depth)
+	if bogus {
+		result.Bogus = true
+		r.cache.SetBogus(cacheKey, 60)
+	} else if found {
 		result.IPs = ips
 		result.CNAMEs = append(result.CNAMEs, cnames...)
 		if ttl < result.TTL {
@@ -495,9 +500,9 @@ func (r *Resolver) resolve(name string, qtype uint16, depth int, forceExternal b
 }
 
 // queryExternal queries upstream DNS servers
-func (r *Resolver) queryExternal(name string, qtype uint16, depth int) ([]net.IP, []string, uint32, bool) {
+func (r *Resolver) queryExternal(name string, qtype uint16, depth int) ([]net.IP, []string, uint32, bool, bool) {
 	if depth > r.config.MaxDepth {
-		return nil, nil, 0, false
+		return nil, nil, 0, false, false
 	}
 
 	if r.iterative {
@@ -507,7 +512,7 @@ func (r *Resolver) queryExternal(name string, qtype uint16, depth int) ([]net.IP
 }
 
 // queryForward queries upstream resolvers (forwarding mode)
-func (r *Resolver) queryForward(name string, qtype uint16, depth int) ([]net.IP, []string, uint32, bool) {
+func (r *Resolver) queryForward(name string, qtype uint16, depth int) ([]net.IP, []string, uint32, bool, bool) {
 	m := new(dns.Msg)
 	m.SetQuestion(name, qtype)
 	m.RecursionDesired = true
@@ -533,7 +538,7 @@ func (r *Resolver) queryForward(name string, qtype uint16, depth int) ([]net.IP,
 		if valResult.Bogus {
 			// DNSSEC validation failed - return failure
 			log.Printf("DNSSEC: Validation BOGUS for %s: %s", name, valResult.WhyBogus)
-			return nil, nil, 0, false
+			return nil, nil, 0, false, true
 		}
 		if valResult.Secure {
 			log.Printf("DNSSEC: Validated SECURE for %s", name)
@@ -541,33 +546,36 @@ func (r *Resolver) queryForward(name string, qtype uint16, depth int) ([]net.IP,
 
 		ips, cnames, ttl, found := r.extractRecords(resp, qtype)
 		if found {
-			return ips, cnames, ttl, true
+			return ips, cnames, ttl, true, false
 		}
 
 		// If we only got CNAMEs, follow them
 		if len(cnames) > 0 {
 			finalTarget := r.getFinalCNAMETarget(resp)
 			if finalTarget != "" {
-				moreIPs, moreCNAMEs, moreTTL, found := r.queryForward(finalTarget, qtype, depth+1)
+				moreIPs, moreCNAMEs, moreTTL, found, bogus := r.queryForward(finalTarget, qtype, depth+1)
+				if bogus {
+					return nil, nil, 0, false, true
+				}
 				if found {
 					cnames = append(cnames, moreCNAMEs...)
 					if moreTTL < ttl {
 						ttl = moreTTL
 					}
-					return moreIPs, cnames, ttl, true
+					return moreIPs, cnames, ttl, true, false
 				}
 			}
 		}
 	}
 
-	return nil, nil, 0, false
+	return nil, nil, 0, false, false
 }
 
 // queryIterative does iterative resolution starting from the given nameservers
 // Queries all servers in parallel and uses the first successful response
-func (r *Resolver) queryIterative(name string, qtype uint16, nameservers []string, depth int) ([]net.IP, []string, uint32, bool) {
+func (r *Resolver) queryIterative(name string, qtype uint16, nameservers []string, depth int) ([]net.IP, []string, uint32, bool, bool) {
 	if depth > maxIterativeDepth {
-		return nil, nil, 0, false
+		return nil, nil, 0, false, false
 	}
 
 	// If starting from root servers, check for cached delegations to skip
@@ -636,25 +644,29 @@ queryLoop:
 				valResult := r.validator.ValidateResponse(result.resp, name, qtype)
 				if valResult.Bogus {
 					// DNSSEC validation failed - do NOT return results
-					return nil, nil, 0, false // Return failure, not just continue
+					log.Printf("DNSSEC: Validation BOGUS for %s: %s", name, valResult.WhyBogus)
+					return nil, nil, 0, false, true
 				}
 
 				ips, cnames, ttl, found := r.extractRecords(result.resp, qtype)
 				if found {
-					return ips, cnames, ttl, true
+					return ips, cnames, ttl, true, false
 				}
 
 				// If we got CNAMEs, follow them
 				if len(cnames) > 0 {
 					finalTarget := r.getFinalCNAMETarget(result.resp)
 					if finalTarget != "" {
-						moreIPs, moreCNAMEs, moreTTL, found := r.queryIterative(finalTarget, qtype, rootServers, depth+1)
+						moreIPs, moreCNAMEs, moreTTL, found, bogus := r.queryIterative(finalTarget, qtype, rootServers, depth+1)
+						if bogus {
+							return nil, nil, 0, false, true
+						}
 						if found {
 							cnames = append(cnames, moreCNAMEs...)
 							if moreTTL < ttl {
 								ttl = moreTTL
 							}
-							return moreIPs, cnames, ttl, true
+							return moreIPs, cnames, ttl, true, false
 						}
 					}
 				}
@@ -682,7 +694,7 @@ queryLoop:
 			// NXDOMAIN - authoritative negative answer
 			if result.resp.Rcode == dns.RcodeNameError {
 				cancel()
-				return nil, nil, 0, false
+				return nil, nil, 0, false, false
 			}
 
 			// Keep track of last response for fallback
@@ -704,7 +716,7 @@ queryLoop:
 		}
 	}
 
-	return nil, nil, 0, false
+	return nil, nil, 0, false, false
 }
 
 func min(a, b int) int {
@@ -820,6 +832,9 @@ func (r *Resolver) getFinalCNAMETarget(resp *dns.Msg) string {
 	return target
 }
 
+// ErrDNSSECBogus is returned (wrapped) when an answer fails DNSSEC validation.
+var ErrDNSSECBogus = errors.New("DNSSEC validation failed")
+
 // QueryAny performs recursive resolution for any record type.
 // It returns the full DNS response message, handling iterative resolution if configured.
 // This is used for record types like MX, TXT, NS that need external resolution.
@@ -849,7 +864,7 @@ func (r *Resolver) QueryAny(name string, qtype uint16) (*dns.Msg, error) {
 	if resp.Rcode == dns.RcodeSuccess && len(resp.Answer) > 0 {
 		if valResult := r.validator.ValidateResponse(resp, name, qtype); valResult.Bogus {
 			log.Printf("DNSSEC: Validation BOGUS for %s: %s", name, valResult.WhyBogus)
-			return nil, fmt.Errorf("DNSSEC validation failed for %s: %s", name, valResult.WhyBogus)
+			return nil, fmt.Errorf("%w for %s: %s", ErrDNSSECBogus, name, valResult.WhyBogus)
 		}
 	}
 	return resp, nil
@@ -1037,7 +1052,7 @@ func (r *Resolver) Prefetch(domains []string) (cached int, errors int) {
 			defer func() { <-semaphore }() // Release
 
 			// Resolve A record
-			ips, _, ttl, found := r.queryExternal(dns.Fqdn(d), dns.TypeA, 0)
+			ips, _, ttl, found, _ := r.queryExternal(dns.Fqdn(d), dns.TypeA, 0)
 			mu.Lock()
 			if found && len(ips) > 0 {
 				cachedCount++
@@ -1117,7 +1132,7 @@ func (r *Resolver) prefetchLoop() {
 			r.cache.MarkFetching(candidate.Key, true)
 
 			// Do the refresh
-			ips, _, ttl, found := r.queryExternal(name, qtype, 0)
+			ips, _, ttl, found, _ := r.queryExternal(name, qtype, 0)
 
 			r.cache.MarkFetching(candidate.Key, false)
 
