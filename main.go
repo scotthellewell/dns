@@ -1122,6 +1122,11 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 		// Check if exists
 		existing, _ := store.GetZone(zone.Name)
 		if existing != nil {
+			// Serials only move forward. Taking the higher one makes every node
+			// converge on the same serial whatever order updates arrive in.
+			if existing.Serial > zone.Serial {
+				zone.Serial = existing.Serial
+			}
 			// Check if anything has actually changed
 			if !entityHasChanged(existing, &zone) {
 				log.Printf("[sync] Zone %s unchanged, skipping update", zone.Name)
@@ -1360,6 +1365,17 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 		}
 		log.Printf("[sync] Creating synced geofeed entry %s (%s → %s, %s)", geoEntry.ID, geoEntry.Prefix, geoEntry.Country, geoEntry.City)
 		return store.CreateGeoEntry(&geoEntry)
+
+	case sync.EntityZoneSerial:
+		var zs storage.ZoneSerial
+		if err := json.Unmarshal(data, &zs); err != nil {
+			return err
+		}
+		err := store.RaiseZoneSerial(zs.Zone, zs.Serial)
+		if err == storage.ErrNotFound {
+			return nil // Zone deleted since; nothing to raise
+		}
+		return err
 
 	case sync.EntityRedirect:
 		var rule storage.RedirectRule

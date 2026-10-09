@@ -120,7 +120,7 @@ func (s *Store) CreateRecord(record *Record) error {
 		}
 
 		// Increment zone serial
-		zone.Serial++
+		bumpZoneSerial(tx, &zone)
 		zone.UpdatedAt = now
 		zoneData, err = json.Marshal(&zone)
 		if err != nil {
@@ -275,7 +275,7 @@ func (s *Store) UpdateRecord(record *Record) error {
 		if zoneData != nil {
 			var zone Zone
 			if err := json.Unmarshal(zoneData, &zone); err == nil {
-				zone.Serial++
+				bumpZoneSerial(tx, &zone)
 				zone.UpdatedAt = time.Now()
 				zoneData, _ = json.Marshal(&zone)
 				zonesBucket.Put([]byte(zone.Name), zoneData)
@@ -432,7 +432,7 @@ func (s *Store) DeleteRecordByID(recordID string) error {
 		if zoneData != nil {
 			var zone Zone
 			if err := json.Unmarshal(zoneData, &zone); err == nil {
-				zone.Serial++
+				bumpZoneSerial(tx, &zone)
 				zone.UpdatedAt = time.Now()
 				zoneData, _ = json.Marshal(&zone)
 				zonesBucket.Put([]byte(zone.Name), zoneData)
@@ -522,7 +522,7 @@ func (s *Store) DeleteRecordByContentID(contentID string) error {
 		if zoneData != nil {
 			var zone Zone
 			if err := json.Unmarshal(zoneData, &zone); err == nil {
-				zone.Serial++
+				bumpZoneSerial(tx, &zone)
 				zone.UpdatedAt = time.Now()
 				zoneData, _ = json.Marshal(&zone)
 				zonesBucket.Put([]byte(zone.Name), zoneData)
@@ -593,7 +593,7 @@ func (s *Store) DeleteRecord(zoneName, name, recordType, recordID string) error 
 		if zoneData != nil {
 			var zone Zone
 			if err := json.Unmarshal(zoneData, &zone); err == nil {
-				zone.Serial++
+				bumpZoneSerial(tx, &zone)
 				zone.UpdatedAt = time.Now()
 				zoneData, _ = json.Marshal(&zone)
 				zonesBucket.Put([]byte(zone.Name), zoneData)
@@ -646,7 +646,7 @@ func (s *Store) DeleteRecordsByType(zoneName, name, recordType string) error {
 		if zoneData != nil {
 			var zone Zone
 			if err := json.Unmarshal(zoneData, &zone); err == nil {
-				zone.Serial++
+				bumpZoneSerial(tx, &zone)
 				zone.UpdatedAt = time.Now()
 				zoneData, _ = json.Marshal(&zone)
 				zonesBucket.Put([]byte(zone.Name), zoneData)
@@ -770,6 +770,25 @@ func fqdnToRelativeName(fqdn, zoneName string) string {
 	return fqdn
 }
 
+// bumpZoneSerial increments a zone's serial for a local change and broadcasts
+// the new serial once the transaction commits, so every node converges on the
+// serial of the node where the change was made. Changes received from a peer
+// leave the serial alone: the originating node's broadcast carries it.
+//
+// Only the serial is broadcast, not the whole zone, so a stale copy of the
+// zone's settings can't overwrite a concurrent settings change on another node.
+func bumpZoneSerial(tx *bolt.Tx, zone *Zone) {
+	if applyingRemote() {
+		return
+	}
+	zone.Serial++
+	update := &ZoneSerial{Zone: zone.Name, Serial: zone.Serial}
+	tenantID := zone.TenantID
+	tx.OnCommit(func() {
+		recordChange(EntityTypeZoneSerial, update.Zone, tenantID, OpUpdate, update)
+	})
+}
+
 // createPTRForRecord creates a PTR record for an A/AAAA record.
 func (s *Store) createPTRForRecord(tx *bolt.Tx, record *Record, zone *Zone) error {
 	var ip net.IP
@@ -872,7 +891,7 @@ func (s *Store) createPTRForRecord(tx *bolt.Tx, record *Record, zone *Zone) erro
 
 	// Update reverse zone serial
 	zonesBucket := tx.Bucket([]byte("zones"))
-	reverseZone.Serial++
+	bumpZoneSerial(tx, reverseZone)
 	reverseZone.UpdatedAt = time.Now()
 	zoneData, _ := json.Marshal(reverseZone)
 	zonesBucket.Put([]byte(reverseZone.Name), zoneData)
@@ -959,7 +978,7 @@ func (s *Store) deletePTRForRecord(tx *bolt.Tx, record *Record) error {
 	if zoneData != nil {
 		var zone Zone
 		if err := json.Unmarshal(zoneData, &zone); err == nil {
-			zone.Serial++
+			bumpZoneSerial(tx, &zone)
 			zone.UpdatedAt = time.Now()
 			zoneData, _ = json.Marshal(&zone)
 			zonesBucket.Put([]byte(zone.Name), zoneData)
@@ -1168,7 +1187,7 @@ func (s *Store) BulkCreateRecords(records []Record) error {
 			if zoneData != nil {
 				var zone Zone
 				if json.Unmarshal(zoneData, &zone) == nil {
-					zone.Serial++
+					bumpZoneSerial(tx, &zone)
 					zone.UpdatedAt = now
 					data, _ := json.Marshal(&zone)
 					zonesBucket.Put([]byte(zone.Name), data)

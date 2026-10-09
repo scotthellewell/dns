@@ -181,6 +181,7 @@ const (
 	EntityDynamicUpdate      = "dynamic_update"
 	EntityGeofeed            = "geofeed"
 	EntityRedirect           = "redirect"
+	EntityZoneSerial         = "zone_serial" // Raise a zone's serial to at least the given value
 )
 
 // OpLogEntry represents a single operation in the operation log

@@ -534,6 +534,37 @@ func (s *Store) ListZones(tenantID string) ([]*Zone, error) {
 	return zones, err
 }
 
+// ZoneSerial is the sync payload announcing a zone's new serial.
+type ZoneSerial struct {
+	Zone   string `json:"zone"`
+	Serial uint32 `json:"serial"`
+}
+
+// RaiseZoneSerial sets a zone's serial to serial if that is higher than the
+// current one. Used to apply serial updates from cluster peers; serials never
+// move backwards, so nodes converge whatever order updates arrive in.
+func (s *Store) RaiseZoneSerial(zoneName string, serial uint32) error {
+	zoneName = strings.TrimSuffix(strings.ToLower(zoneName), ".")
+	raised := false
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		var zone Zone
+		if err := getJSON(tx, BucketZones, zoneName, &zone); err != nil {
+			return err
+		}
+		if serial <= zone.Serial {
+			return nil
+		}
+		zone.Serial = serial
+		zone.UpdatedAt = time.Now().UTC()
+		raised = true
+		return putJSON(tx, BucketZones, zoneName, &zone)
+	})
+	if raised {
+		s.refreshZoneCache()
+	}
+	return err
+}
+
 // IncrementZoneSerial increments the zone serial number.
 func (s *Store) IncrementZoneSerial(zoneName string) error {
 	zoneName = strings.TrimSuffix(strings.ToLower(zoneName), ".")
@@ -556,11 +587,11 @@ func incrementSerial(current uint32) uint32 {
 	now := time.Now().UTC()
 	today := uint32(now.Year()*1000000 + int(now.Month())*10000 + now.Day()*100)
 
-	if current >= today && current < today+99 {
-		// Same day, increment counter
+	// Start from today's date when it is ahead, but never move backwards: record
+	// changes bump the serial by one, so it can already be past today+99.
+	if current >= today {
 		return current + 1
 	}
-	// New day or overflow, start fresh
 	return today + 1
 }
 

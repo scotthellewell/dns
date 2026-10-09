@@ -32,6 +32,12 @@ func WithSyncHookDisabled(fn func() error) error {
 	return fn()
 }
 
+// applyingRemote reports whether a change received from a cluster peer is
+// currently being applied.
+func applyingRemote() bool {
+	return skipSyncHook.Load()
+}
+
 // recordChange records a change for synchronization if sync is enabled
 func recordChange(entityType, entityID, tenantID, operation string, data interface{}) {
 	if syncHook == nil {
@@ -71,6 +77,7 @@ const (
 	EntityTypeDynamicUpdate      = dnssync.EntityDynamicUpdate
 	EntityTypeGeofeed            = dnssync.EntityGeofeed
 	EntityTypeRedirect           = dnssync.EntityRedirect
+	EntityTypeZoneSerial         = dnssync.EntityZoneSerial
 )
 
 // Operation constants
