@@ -34,6 +34,13 @@ CHR_CONTAINER_DIR="${CHR_CONTAINER_DIR:-disk1/containers}"
 CHR_CONTAINER_NAME="${CHR_CONTAINER_NAME:-dns-server}"
 CHR_VETH="${CHR_VETH:-veth-dns}"
 CHR_MOUNTLIST="${CHR_MOUNTLIST:-dns-data}"
+# Optional SSH jump host for the CHR (e.g. dns@23.148.184.39), for when this
+# machine's route to Paradox arrives from outside the CHR's mgmt-allowed list
+CHR_JUMP="${CHR_JUMP:-}"
+CHR_SSH_OPTS=()
+if [ -n "$CHR_JUMP" ]; then
+    CHR_SSH_OPTS=(-o "ProxyJump=$CHR_JUMP")
+fi
 
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,6 +56,27 @@ NC='\033[0m' # No Color
 log() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+
+# wait_for_ports <ssh-target> <remote ss command>
+# Polls for up to 30s until TCP 53, 443 and 853 are all listening. The server
+# loads zones and keys before binding, so a single early check gives false alarms.
+# Prints the missing ports and returns 1 on timeout.
+wait_for_ports() {
+    local target=$1 cmd=$2 listening missing p
+    for _ in $(seq 1 15); do
+        listening=$(ssh "$target" "$cmd" 2>/dev/null) || true
+        missing=""
+        for p in 53 443 853; do
+            echo "$listening" | grep -qE "[:.]$p[[:space:]]" || missing="$missing $p"
+        done
+        if [ -z "$missing" ]; then
+            return 0
+        fi
+        sleep 2
+    done
+    echo "$missing"
+    return 1
+}
 
 build_backend() {
     log "Building backend for Linux AMD64..."
@@ -121,12 +149,11 @@ deploy_to_server() {
     fi
     
     # Check ports
-    local ports
-    ports=$(ssh "$server" "sudo ss -tlpn | grep -E '443|53|853' | wc -l")
-    if [ "$ports" -ge 3 ]; then
+    local missing
+    if missing=$(wait_for_ports "$server" "ss -Htln"); then
         log "  ✓ All ports listening (53, 443, 853)"
     else
-        warn "  ⚠ Some ports may not be listening. Check: ssh $server 'sudo ss -tlpn | grep -E \"443|53|853\"'"
+        warn "  ⚠ Not listening after 30s:$missing. Check: ssh $server 'sudo ss -tlpn'"
     fi
     
     log "  ✓ $server_name deployment complete"
@@ -212,12 +239,11 @@ deploy_to_lxc() {
     fi
     
     # Check ports (inside container)
-    local ports
-    ports=$(ssh "$pve_server" "pct exec $vmid -- ss -tlpn | grep -E '443|53|853' | wc -l")
-    if [ "$ports" -ge 3 ]; then
+    local missing
+    if missing=$(wait_for_ports "$pve_server" "pct exec $vmid -- ss -Htln"); then
         log "  ✓ All ports listening inside container (53, 443, 853)"
     else
-        warn "  ⚠ Some ports may not be listening. Check: ssh $pve_server 'pct exec $vmid -- ss -tlpn'"
+        warn "  ⚠ Not listening after 30s:$missing. Check: ssh $pve_server 'pct exec $vmid -- ss -tlpn'"
     fi
     
     log "  ✓ $server_name deployment complete"
@@ -246,10 +272,20 @@ build_docker_image() {
     log "  Converting to Docker v1 format (required for MikroTik)..."
     DOCKER_IMAGE_TAR="/tmp/dns-server-chr.tar"
     rm -f "$DOCKER_IMAGE_TAR"  # Remove old file - skopeo can't overwrite
-    skopeo copy docker-daemon:dns-server:chr "docker-archive:$DOCKER_IMAGE_TAR"
+    # skopeo ignores docker contexts (e.g. Colima), so pass the active endpoint
+    local daemon_host
+    daemon_host="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)}"
+    if [ -n "$daemon_host" ]; then
+        skopeo copy --src-daemon-host "$daemon_host" docker-daemon:dns-server:chr "docker-archive:$DOCKER_IMAGE_TAR"
+    else
+        skopeo copy docker-daemon:dns-server:chr "docker-archive:$DOCKER_IMAGE_TAR"
+    fi
     
     log "  Docker image built: $DOCKER_IMAGE_TAR"
 }
+
+chr_ssh() { ssh ${CHR_SSH_OPTS[@]+"${CHR_SSH_OPTS[@]}"} "$@"; }
+chr_scp() { scp ${CHR_SSH_OPTS[@]+"${CHR_SSH_OPTS[@]}"} "$@"; }
 
 # Deploy to MikroTik CHR container
 deploy_to_chr() {
@@ -275,17 +311,17 @@ deploy_to_chr() {
     # Get current container number - check by name OR by root-dir (in case name differs)
     log "  Checking for existing container..."
     local container_num
-    container_num=$(ssh "$chr_server" "/container/print where name=\"$CHR_CONTAINER_NAME\"" 2>/dev/null | grep -oE "^[0-9]+" | head -1 || echo "")
+    container_num=$(chr_ssh "$chr_server" "/container/print where name=\"$CHR_CONTAINER_NAME\"" 2>/dev/null | grep -oE "^[0-9]+" | head -1 || echo "")
     
     # If not found by name, check by root-dir
     if [ -z "$container_num" ]; then
-        container_num=$(ssh "$chr_server" "/container/print where root-dir=\"/$container_root\"" 2>/dev/null | grep -oE "^[0-9]+" | head -1 || echo "")
+        container_num=$(chr_ssh "$chr_server" "/container/print where root-dir=\"/$container_root\"" 2>/dev/null | grep -oE "^[0-9]+" | head -1 || echo "")
     fi
     
     # Stop existing container
     if [ -n "$container_num" ]; then
         log "  Stopping existing container $container_num..."
-        ssh "$chr_server" "/container/stop $container_num" 2>/dev/null || true
+        chr_ssh "$chr_server" "/container/stop $container_num" 2>/dev/null || true
         sleep 3
         
         # Wait for container to stop
@@ -293,7 +329,7 @@ deploy_to_chr() {
         local waited=0
         while [ $waited -lt $max_wait ]; do
             local status
-            status=$(ssh "$chr_server" "/container/print proplist=status where .id=$container_num" 2>/dev/null | grep -oE "(stopped|running|extracting)" | head -1 || echo "stopped")
+            status=$(chr_ssh "$chr_server" "/container/print proplist=status where .id=$container_num" 2>/dev/null | grep -oE "(stopped|running|extracting)" | head -1 || echo "stopped")
             if [ "$status" = "stopped" ] || [ -z "$status" ]; then
                 break
             fi
@@ -303,25 +339,25 @@ deploy_to_chr() {
         done
         
         log "  Removing old container..."
-        ssh "$chr_server" "/container/remove $container_num" 2>/dev/null || true
+        chr_ssh "$chr_server" "/container/remove $container_num" 2>/dev/null || true
         sleep 2
     fi
     
     # Remove old container files (but keep data!)
     log "  Cleaning old container files (preserving data)..."
-    ssh "$chr_server" "/file/remove \"$container_tar\"" 2>/dev/null || true
+    chr_ssh "$chr_server" "/file/remove \"$container_tar\"" 2>/dev/null || true
     # Note: We do NOT remove $container_root - it may contain the database!
     
     # Upload new image
     log "  Uploading Docker image..."
-    scp "$tar_path" "$chr_server:/$container_tar"
+    chr_scp "$tar_path" "$chr_server:/$container_tar"
     
     # Wait for file to be ready
     sleep 2
     
     # Create new container
     log "  Creating container..."
-    ssh "$chr_server" "/container/add file=$container_tar interface=$CHR_VETH root-dir=$container_root name=$CHR_CONTAINER_NAME"
+    chr_ssh "$chr_server" "/container/add file=$container_tar interface=$CHR_VETH root-dir=$container_root name=$CHR_CONTAINER_NAME"
     
     # Wait for container extraction
     log "  Waiting for container extraction..."
@@ -329,7 +365,7 @@ deploy_to_chr() {
     local waited=0
     while [ $waited -lt $max_wait ]; do
         local status
-        status=$(ssh "$chr_server" "/container/print proplist=status where name=\"$CHR_CONTAINER_NAME\"" 2>/dev/null | grep -oE "(stopped|running|extracting|error)" | head -1 || echo "")
+        status=$(chr_ssh "$chr_server" "/container/print proplist=status where name=\"$CHR_CONTAINER_NAME\"" 2>/dev/null | grep -oE "(stopped|running|extracting|error)" | head -1 || echo "")
         if [ "$status" = "stopped" ]; then
             log "  Container extracted (status: stopped)"
             break
@@ -343,32 +379,38 @@ deploy_to_chr() {
     done
     
     # Get new container number
-    container_num=$(ssh "$chr_server" "/container/print where name=\"$CHR_CONTAINER_NAME\"" 2>/dev/null | grep -oE "^[0-9]+" | head -1)
+    container_num=$(chr_ssh "$chr_server" "/container/print where name=\"$CHR_CONTAINER_NAME\"" 2>/dev/null | grep -oE "^[0-9]+" | head -1)
     if [ -z "$container_num" ]; then
         error "Could not find container after creation. Check: ssh $chr_server '/container/print'"
     fi
     
     # Configure container
     log "  Configuring container $container_num..."
-    ssh "$chr_server" "/container/set $container_num mountlists=$CHR_MOUNTLIST start-on-boot=yes logging=yes"
+    chr_ssh "$chr_server" "/container/set $container_num mountlists=$CHR_MOUNTLIST start-on-boot=yes logging=yes"
     
     # Start container
     log "  Starting container..."
-    ssh "$chr_server" "/container/start $container_num"
+    chr_ssh "$chr_server" "/container/start $container_num"
     
-    # Brief pause for container to initialize
-    sleep 1
-    
-    # Verify container is running
+    # Wait for the container to come up. RouterOS flags: R=running, H=healthy,
+    # C=starting-with-healthcheck, N=starting, S=stopped, E=extracting.
     log "  Verifying deployment..."
-    local status_line
-    # MikroTik uses single letter flags: S=stopped, N=starting, R=running, T=stopping, E=extracting, F=failed
-    status_line=$(ssh "$chr_server" "/container/print brief where name=\"$CHR_CONTAINER_NAME\"" 2>/dev/null | grep -E "^\s*[0-9]" | head -1 || echo "")
-    if echo "$status_line" | grep -q "^[0-9 ]*R"; then
-        log "  ✓ Container is running"
-    else
-        error "  ✗ Container failed to start. Status: $status_line. Check: ssh $chr_server '/container/print detail'"
-    fi
+    local status_line flags
+    for _ in $(seq 1 30); do
+        status_line=$(chr_ssh "$chr_server" "/container/print brief where name=\"$CHR_CONTAINER_NAME\"" 2>/dev/null | grep -E "^\s*[0-9]" | head -1 || echo "")
+        flags=$(echo "$status_line" | awk '{print $2}')
+        case "$flags" in
+            *H*|*R*) break ;;
+            *C*|*N*) sleep 2 ;;
+            *) break ;;
+        esac
+    done
+    case "$flags" in
+        *H*) log "  ✓ Container is healthy" ;;
+        *R*) log "  ✓ Container is running" ;;
+        *C*|*N*) warn "  ⚠ Container still starting after 60s. Status: $status_line" ;;
+        *) error "  ✗ Container failed to start. Status: $status_line. Check: ssh $chr_server '/container/print detail'" ;;
+    esac
     
     # Check health endpoint
     log "  Checking health endpoint..."
@@ -477,6 +519,7 @@ show_usage() {
     echo "  SSH_USER     SSH user for VM deployment (default: $SSH_USER)"
     echo "  PVE_USER     SSH user for Proxmox hosts (default: $PVE_USER)"
     echo "  CHR_USER     SSH user for CHR deployment (default: $CHR_USER)"
+    echo "  CHR_JUMP     SSH jump host for CHR deployment, e.g. dns@$DNS1_IP (default: none)"
 }
 
 # Parse arguments
