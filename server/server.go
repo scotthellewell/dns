@@ -1077,10 +1077,9 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				s.querylog.Log(clientIPStr, r, m, time.Since(startTime))
 			}
 			return
-		} else {
-			// Not authoritative - default to success (let caching handle it)
-			m.Rcode = dns.RcodeSuccess
 		}
+		// Not authoritative: keep the rcode set by recursion (NOERROR, or
+		// SERVFAIL for a DNSSEC validation failure)
 	}
 
 	// Sign response if DNSSEC is requested and we have keys

@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
+	"github.com/scott/dns/config"
 	"github.com/scott/dns/recurse"
 )
 
@@ -100,5 +102,62 @@ func TestAppendRecursiveBogusIsServfail(t *testing.T) {
 	appendRecursive(m, nil, errors.New("timeout"))
 	if m.Rcode != dns.RcodeSuccess {
 		t.Fatalf("rcode = %s, want NOERROR", dns.RcodeToString[m.Rcode])
+	}
+}
+
+// TestBogusRecursiveAnswerIsServfail runs a query end to end through the server
+// against an upstream whose signed answers can't be validated (the upstream
+// can't supply a root DNSKEY RRset signed by the real root anchors).
+func TestBogusRecursiveAnswerIsServfail(t *testing.T) {
+	upstream := &dns.Server{Addr: "127.0.0.1:15354", Net: "udp", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(r)
+		q := r.Question[0]
+		switch q.Qtype {
+		case dns.TypeA, dns.TypeMX:
+			rr, _ := dns.NewRR(q.Name + " 300 IN A 192.0.2.66")
+			if q.Qtype == dns.TypeMX {
+				rr, _ = dns.NewRR(q.Name + " 300 IN MX 10 mail." + q.Name)
+			}
+			sig, _ := dns.NewRR(q.Name + " 300 IN RRSIG " + dns.TypeToString[q.Qtype] +
+				" 13 2 300 20361017160117 20161003155013 12345 " + q.Name + " AAAA")
+			m.Answer = []dns.RR{rr, sig}
+		}
+		w.WriteMsg(m)
+	})}
+	go upstream.ListenAndServe()
+	defer upstream.Shutdown()
+
+	rawCfg := config.DefaultConfig()
+	rawCfg.Recursion.Enabled = true
+	rawCfg.Recursion.Mode = "full"
+	rawCfg.Recursion.Upstream = []string{"127.0.0.1:15354"}
+	rawCfg.Recursion.Timeout = 2
+	parsedCfg, err := rawCfg.Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(parsedCfg)
+	front := &dns.Server{Addr: "127.0.0.1:15355", Net: "udp", Handler: dns.HandlerFunc(srv.ServeDNS)}
+	go front.ListenAndServe()
+	defer front.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	client := &dns.Client{Timeout: 5 * time.Second}
+	for _, qtype := range []uint16{dns.TypeA, dns.TypeMX} {
+		for attempt := 0; attempt < 2; attempt++ { // second attempt hits the cache
+			msg := new(dns.Msg)
+			msg.SetQuestion("bogus.example.", qtype)
+			resp, _, err := client.Exchange(msg, "127.0.0.1:15355")
+			if err != nil {
+				t.Fatalf("%s query: %v", dns.TypeToString[qtype], err)
+			}
+			if resp.Rcode != dns.RcodeServerFailure {
+				t.Errorf("%s attempt %d: rcode = %s, want SERVFAIL", dns.TypeToString[qtype], attempt, dns.RcodeToString[resp.Rcode])
+			}
+			if len(resp.Answer) != 0 {
+				t.Errorf("%s attempt %d: bogus answer returned to client", dns.TypeToString[qtype], attempt)
+			}
+		}
 	}
 }
