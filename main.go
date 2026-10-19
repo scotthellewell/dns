@@ -1049,6 +1049,8 @@ func applyDelete(store *storage.Store, entityType, entityID string) error {
 		return store.DeleteGeoEntry(entityID)
 	case sync.EntityRedirect:
 		return store.DeleteRedirect(entityID)
+	case sync.EntityDDNSHost:
+		return store.DeleteDDNSHost(entityID)
 	default:
 		log.Printf("[sync] Unknown entity type for delete: %s", entityType)
 		return nil
@@ -1396,6 +1398,18 @@ func applyCreateOrUpdate(store *storage.Store, entry *sync.OpLogEntry) error {
 		log.Printf("[sync] Syncing redirect %s (%s -> %s, enabled: %v)", rule.ID, rule.MatchDomain, rule.TargetHost, rule.Enabled)
 		return store.CreateRedirect(&rule)
 
+	case sync.EntityDDNSHost:
+		var host storage.DDNSHost
+		if err := json.Unmarshal(data, &host); err != nil {
+			return err
+		}
+		existing, _ := store.GetDDNSHost(host.ID)
+		if existing != nil && !entityHasChanged(existing, &host) {
+			return nil
+		}
+		log.Printf("[sync] Syncing DDNS host %s", host.ID)
+		return store.PutDDNSHost(&host)
+
 	default:
 		log.Printf("[sync] Unknown entity type: %s", entry.EntityType)
 		return nil
@@ -1607,6 +1621,21 @@ func createFullSyncProvider(store *storage.Store) sync.FullSyncProvider {
 					EntityID:   rule.ID,
 					TenantID:   "",
 					Data:       rule,
+				})
+			}
+		}
+
+		// DDNS hosts - a token issued on one server must work on every server.
+		ddnsHosts, err := store.ListDDNSHosts()
+		if err != nil {
+			log.Printf("[sync] Warning: failed to list DDNS hosts: %v", err)
+		} else {
+			for _, host := range ddnsHosts {
+				items = append(items, sync.FullSyncDataItem{
+					EntityType: sync.EntityDDNSHost,
+					EntityID:   host.ID,
+					TenantID:   "",
+					Data:       host,
 				})
 			}
 		}

@@ -29,7 +29,8 @@ var (
 	BucketBlocklistDomains   = []byte("blocklist_domains")
 	BucketBlocklistConfig    = []byte("blocklist_config")
 	BucketBlocklistWhitelist = []byte("blocklist_whitelist")
-	BucketRedirects          = []byte("redirects") // DNS redirect rules
+	BucketRedirects          = []byte("redirects")  // DNS redirect rules
+	BucketDDNSHosts          = []byte("ddns_hosts") // Dynamic DNS hosts and their token hashes
 	BucketConfig             = []byte("config")
 	BucketSettings           = []byte("settings")
 	BucketCertificates       = []byte("certificates")
@@ -61,6 +62,7 @@ var allBuckets = [][]byte{
 	BucketBlocklistConfig,
 	BucketBlocklistWhitelist,
 	BucketRedirects,
+	BucketDDNSHosts,
 	BucketConfig,
 	BucketSettings,
 	BucketCertificates,

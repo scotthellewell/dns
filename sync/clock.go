@@ -181,6 +181,7 @@ const (
 	EntityDynamicUpdate      = "dynamic_update"
 	EntityGeofeed            = "geofeed"
 	EntityRedirect           = "redirect"
+	EntityDDNSHost           = "ddns_host"
 	EntityZoneSerial         = "zone_serial" // Raise a zone's serial to at least the given value
 )
 

@@ -305,6 +305,12 @@ func (h *Handler) RegisterRoutesWithAuth(mux *http.ServeMux, authMgr AuthMiddlew
 	mux.HandleFunc("/api/geofeed", adminWrap(h.handleGeofeed))
 	mux.HandleFunc("/api/geofeed/", adminWrap(h.handleGeofeedEntry))
 	mux.HandleFunc("/geofeed.csv", h.handleGeofeedCSV) // Public endpoint - no auth
+
+	// Dynamic DNS: the update endpoint authenticates with the host's token,
+	// not a session; managing hosts is for server admins.
+	mux.HandleFunc("/api/ddns/update", h.corsMiddleware(h.handleDDNSUpdate))
+	mux.HandleFunc("/api/ddns/hosts", adminWrap(h.handleDDNSHosts))
+	mux.HandleFunc("/api/ddns/hosts/", adminWrap(h.handleDDNSHost))
 }
 
 // CORSMiddleware adds CORS headers - standalone version for use outside Handler

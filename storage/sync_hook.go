@@ -77,6 +77,7 @@ const (
 	EntityTypeDynamicUpdate      = dnssync.EntityDynamicUpdate
 	EntityTypeGeofeed            = dnssync.EntityGeofeed
 	EntityTypeRedirect           = dnssync.EntityRedirect
+	EntityTypeDDNSHost           = dnssync.EntityDDNSHost
 	EntityTypeZoneSerial         = dnssync.EntityZoneSerial
 )
 
