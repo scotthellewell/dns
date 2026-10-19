@@ -247,8 +247,13 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 // RegisterRoutesWithAuth registers all API routes with authentication middleware
 func (h *Handler) RegisterRoutesWithAuth(mux *http.ServeMux, authMgr AuthMiddleware) {
 	// Wrap handlers with auth middleware
+	// Tenant data (zones, records): read-only sessions can't change it.
 	wrap := func(handler http.HandlerFunc) http.HandlerFunc {
-		return h.corsMiddleware(authMgr.MiddlewareFunc(handler))
+		return h.corsMiddleware(authMgr.MiddlewareFunc(requireWrite(handler)))
+	}
+	// Server-wide settings: server admins only.
+	adminWrap := func(handler http.HandlerFunc) http.HandlerFunc {
+		return h.corsMiddleware(authMgr.MiddlewareFunc(requireServerAdmin(handler)))
 	}
 
 	// Status is public (shows basic info even when not authenticated)
@@ -258,7 +263,7 @@ func (h *Handler) RegisterRoutesWithAuth(mux *http.ServeMux, authMgr AuthMiddlew
 	mux.HandleFunc("/metrics", h.handleMetrics)
 
 	// All other routes require authentication
-	mux.HandleFunc("/api/config", wrap(h.handleConfig))
+	mux.HandleFunc("/api/config", adminWrap(h.handleConfig))
 	mux.HandleFunc("/api/zones", wrap(h.handleZones))
 	mux.HandleFunc("/api/zones/import", wrap(h.handleZoneImport))                 // Zone file import
 	mux.HandleFunc("/api/zones/export/", wrap(h.handleZoneExport))                // Zone file export
@@ -269,36 +274,36 @@ func (h *Handler) RegisterRoutesWithAuth(mux *http.ServeMux, authMgr AuthMiddlew
 	mux.HandleFunc("/api/secondary-zones", wrap(h.handleSecondaryZones))
 	mux.HandleFunc("/api/secondary-zones/convert/", wrap(h.handleConvertSecondaryZone)) // Convert to primary
 	mux.HandleFunc("/api/secondary-zones/", wrap(h.handleSecondaryZone))
-	mux.HandleFunc("/api/delegations", wrap(h.handleDelegations))
-	mux.HandleFunc("/api/delegations/", wrap(h.handleDelegation))
-	mux.HandleFunc("/api/dnssec/keys/", wrap(h.handleDNSSECKeys))   // Export/import keys
-	mux.HandleFunc("/api/dnssec/token/", wrap(h.handleDNSSECToken)) // Key token management
-	mux.HandleFunc("/api/transfer", wrap(h.handleTransfer))
-	mux.HandleFunc("/api/dynamic-updates", wrap(h.handleDynamicUpdates))
-	mux.HandleFunc("/api/recursion", wrap(h.handleRecursion))
-	mux.HandleFunc("/api/rrl", wrap(h.handleRRL))
-	mux.HandleFunc("/api/dnssec", wrap(h.handleDNSSEC))
-	mux.HandleFunc("/api/settings", wrap(h.handleSettings))
-	mux.HandleFunc("/api/audit", wrap(h.handleAudit))
+	mux.HandleFunc("/api/delegations", adminWrap(h.handleDelegations))
+	mux.HandleFunc("/api/delegations/", adminWrap(h.handleDelegation))
+	mux.HandleFunc("/api/dnssec/keys/", adminWrap(h.handleDNSSECKeys))   // Export/import keys
+	mux.HandleFunc("/api/dnssec/token/", adminWrap(h.handleDNSSECToken)) // Key token management
+	mux.HandleFunc("/api/transfer", adminWrap(h.handleTransfer))
+	mux.HandleFunc("/api/dynamic-updates", adminWrap(h.handleDynamicUpdates))
+	mux.HandleFunc("/api/recursion", adminWrap(h.handleRecursion))
+	mux.HandleFunc("/api/rrl", adminWrap(h.handleRRL))
+	mux.HandleFunc("/api/dnssec", adminWrap(h.handleDNSSEC))
+	mux.HandleFunc("/api/settings", adminWrap(h.handleSettings))
+	mux.HandleFunc("/api/audit", adminWrap(h.handleAudit))
 
 	// Database maintenance
-	mux.HandleFunc("/api/maintenance", wrap(h.handleMaintenance))
+	mux.HandleFunc("/api/maintenance", adminWrap(h.handleMaintenance))
 
 	// DNS redirects (safe search, etc.)
-	mux.HandleFunc("/api/redirects", wrap(h.handleRedirects))
-	mux.HandleFunc("/api/redirects/", wrap(h.handleRedirect))
+	mux.HandleFunc("/api/redirects", adminWrap(h.handleRedirects))
+	mux.HandleFunc("/api/redirects/", adminWrap(h.handleRedirect))
 
 	// Blocklist management
-	mux.HandleFunc("/api/blocklist", wrap(h.handleBlocklist))
-	mux.HandleFunc("/api/blocklist/sources", wrap(h.handleBlocklistSources))
-	mux.HandleFunc("/api/blocklist/sources/", wrap(h.handleBlocklistSource))
-	mux.HandleFunc("/api/blocklist/whitelist", wrap(h.handleBlocklistWhitelist))
-	mux.HandleFunc("/api/blocklist/test/", wrap(h.handleBlocklistTest))
-	mux.HandleFunc("/api/blocklist/refresh", wrap(h.handleBlocklistRefresh))
+	mux.HandleFunc("/api/blocklist", adminWrap(h.handleBlocklist))
+	mux.HandleFunc("/api/blocklist/sources", adminWrap(h.handleBlocklistSources))
+	mux.HandleFunc("/api/blocklist/sources/", adminWrap(h.handleBlocklistSource))
+	mux.HandleFunc("/api/blocklist/whitelist", adminWrap(h.handleBlocklistWhitelist))
+	mux.HandleFunc("/api/blocklist/test/", adminWrap(h.handleBlocklistTest))
+	mux.HandleFunc("/api/blocklist/refresh", adminWrap(h.handleBlocklistRefresh))
 
 	// Geofeed (RFC 8805)
-	mux.HandleFunc("/api/geofeed", wrap(h.handleGeofeed))
-	mux.HandleFunc("/api/geofeed/", wrap(h.handleGeofeedEntry))
+	mux.HandleFunc("/api/geofeed", adminWrap(h.handleGeofeed))
+	mux.HandleFunc("/api/geofeed/", adminWrap(h.handleGeofeedEntry))
 	mux.HandleFunc("/geofeed.csv", h.handleGeofeedCSV) // Public endpoint - no auth
 }
 
@@ -886,7 +891,7 @@ func (h *Handler) handleRecord(w http.ResponseWriter, r *http.Request) {
 
 	// Use storage backend if available
 	if h.hasStorage() {
-		h.handleRecordStorage(w, r, recordType, recordID)
+		h.handleRecordStorage(w, r, auth.GetSession(r.Context()), recordType, recordID)
 		return
 	}
 

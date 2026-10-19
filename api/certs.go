@@ -62,8 +62,9 @@ func RegisterCertRoutes(mux *http.ServeMux, corsMiddleware func(http.HandlerFunc
 
 // RegisterCertRoutesWithAuth registers certificate routes with auth
 func RegisterCertRoutesWithAuth(mux *http.ServeMux, corsMiddleware func(http.HandlerFunc) http.HandlerFunc, authMiddleware func(http.HandlerFunc) http.HandlerFunc) {
+	// Server-wide settings: server admins only.
 	wrap := func(h http.HandlerFunc) http.HandlerFunc {
-		return corsMiddleware(authMiddleware(h))
+		return corsMiddleware(authMiddleware(requireServerAdmin(h)))
 	}
 	mux.HandleFunc("/api/certs", wrap(handleCerts))
 	mux.HandleFunc("/api/certs/list", wrap(handleCertsList))

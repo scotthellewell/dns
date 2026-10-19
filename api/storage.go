@@ -534,12 +534,9 @@ func (h *Handler) handleRecordsStorage(w http.ResponseWriter, r *http.Request, s
 			return
 		}
 
-		// Check tenant access
-		if session != nil && !session.IsSuperAdmin {
-			if zone.TenantID != session.TenantID && zone.TenantID != "" {
-				h.errorResponse(w, "Access denied", http.StatusForbidden)
-				return
-			}
+		if !canAccessZone(session, zone) {
+			h.errorResponse(w, "Access denied", http.StatusForbidden)
+			return
 		}
 
 		// Build record data based on type
@@ -1675,19 +1672,35 @@ func (h *Handler) handleDelegation(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRecordStorage handles single record API (DELETE/PUT) using storage backend
-func (h *Handler) handleRecordStorage(w http.ResponseWriter, r *http.Request, _ string, recordID string) {
+func (h *Handler) handleRecordStorage(w http.ResponseWriter, r *http.Request, session *auth.Session, recordType string, recordID string) {
 	store := h.getStore()
 	if store == nil {
 		h.errorResponse(w, "Storage not available", http.StatusInternalServerError)
 		return
 	}
 
+	// Only search zones the caller can access, and match the record by ID and
+	// type, never by name (a bare name like "www" exists in many zones).
+	accessibleZones := func() ([]*storage.Zone, error) {
+		all, err := store.ListZones("")
+		if err != nil {
+			return nil, err
+		}
+		var zones []*storage.Zone
+		for _, z := range all {
+			if canAccessZone(session, z) {
+				zones = append(zones, z)
+			}
+		}
+		return zones, nil
+	}
+	matches := func(rec storage.Record) bool {
+		return rec.ID == recordID && (recordType == "" || rec.Type == recordType)
+	}
+
 	switch r.Method {
 	case "DELETE":
-		// In storage mode, we need to find and delete the record by ID
-		// The recordID here might be a composite key or just the record ID
-		// For now, try to delete by iterating zones
-		zones, err := store.ListZones("")
+		zones, err := accessibleZones()
 		if err != nil {
 			h.errorResponse(w, "Failed to list zones: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -1700,7 +1713,7 @@ func (h *Handler) handleRecordStorage(w http.ResponseWriter, r *http.Request, _ 
 				continue
 			}
 			for _, rec := range records {
-				if rec.ID == recordID || rec.Name == recordID {
+				if matches(rec) {
 					if err := store.DeleteRecord(zone.Name, rec.Name, rec.Type, rec.ID); err == nil {
 						deleted = true
 						break
@@ -1733,7 +1746,7 @@ func (h *Handler) handleRecordStorage(w http.ResponseWriter, r *http.Request, _ 
 		}
 
 		// Find and update the record
-		zones, err := store.ListZones("")
+		zones, err := accessibleZones()
 		if err != nil {
 			h.errorResponse(w, "Failed to list zones: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -1746,7 +1759,7 @@ func (h *Handler) handleRecordStorage(w http.ResponseWriter, r *http.Request, _ 
 				continue
 			}
 			for _, rec := range records {
-				if rec.ID == recordID || rec.Name == recordID {
+				if matches(rec) {
 					// Update the record
 					rec.TTL = uint32(req.TTL)
 					// Update data based on record type
@@ -1963,14 +1976,14 @@ func (h *Handler) handleZoneExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if tenant user has access to this zone
-	if !session.IsSuperAdmin && session.TenantID != "" {
+	// Check if the caller has access to this zone
+	if session != nil && !session.IsSuperAdmin {
 		zone, err := store.GetZone(zoneName)
 		if err != nil {
 			http.Error(w, "Zone not found", http.StatusNotFound)
 			return
 		}
-		if zone.TenantID != session.TenantID {
+		if !canAccessZone(session, zone) {
 			http.Error(w, "Access denied to this zone", http.StatusForbidden)
 			return
 		}

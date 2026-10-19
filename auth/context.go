@@ -13,6 +13,12 @@ func withSession(ctx context.Context, session *Session) context.Context {
 	return context.WithValue(ctx, sessionKey, session)
 }
 
+// ContextWithSession returns a copy of ctx carrying the session. Middleware
+// outside this package and tests use it.
+func ContextWithSession(ctx context.Context, session *Session) context.Context {
+	return withSession(ctx, session)
+}
+
 // GetSession retrieves the session from the context
 func GetSession(ctx context.Context) *Session {
 	session, ok := ctx.Value(sessionKey).(*Session)

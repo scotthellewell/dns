@@ -35,8 +35,9 @@ func RegisterPortRoutes(mux *http.ServeMux, corsMiddleware func(http.HandlerFunc
 
 // RegisterPortRoutesWithAuth registers port management routes with auth
 func RegisterPortRoutesWithAuth(mux *http.ServeMux, corsMiddleware func(http.HandlerFunc) http.HandlerFunc, authMiddleware func(http.HandlerFunc) http.HandlerFunc) {
+	// Server-wide settings: server admins only.
 	wrap := func(h http.HandlerFunc) http.HandlerFunc {
-		return corsMiddleware(authMiddleware(h))
+		return corsMiddleware(authMiddleware(requireServerAdmin(h)))
 	}
 	mux.HandleFunc("/api/ports", wrap(handlePorts))
 	mux.HandleFunc("/api/ports/dns", wrap(handlePortsDNS))
