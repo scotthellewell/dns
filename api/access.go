@@ -51,6 +51,12 @@ func requireWrite(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// RequireServerAdmin limits an endpoint to server admins. It must run after
+// the auth middleware, which puts the session in the request context.
+func RequireServerAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return requireServerAdmin(next)
+}
+
 // requireServerAdmin limits an endpoint to server admins.
 func requireServerAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

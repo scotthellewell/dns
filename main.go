@@ -712,8 +712,11 @@ func createWebMux(apiHandler *api.Handler, authMgr *auth.Manager, store *storage
 
 	// Register sync routes if sync manager is available
 	if syncMgr != nil {
-		sync.RegisterRoutes(mux, syncMgr, corsMiddleware)
-		log.Printf("Sync API routes registered")
+		var authMW func(http.HandlerFunc) http.HandlerFunc
+		if authMgr != nil && authMgr.IsEnabled() {
+			authMW = authMgr.MiddlewareFunc
+		}
+		registerSyncRoutes(mux, syncMgr, corsMiddleware, authMW)
 	}
 
 	webDir := "web/dist/dns-admin/browser"
@@ -1643,4 +1646,20 @@ func createFullSyncProvider(store *storage.Store) sync.FullSyncProvider {
 		log.Printf("[sync] Full sync provider collected %d items", len(items))
 		return items, nil
 	}
+}
+
+// registerSyncRoutes registers the sync API. The API hands out the cluster's
+// shared secret and can add peers, purge and force a full sync, so with auth
+// on (authMW non-nil) it is for server admins only. Peers sync over the /sync
+// WebSocket, which authenticates with the shared secret instead.
+func registerSyncRoutes(mux *http.ServeMux, syncMgr *sync.Manager, cors, authMW func(http.HandlerFunc) http.HandlerFunc) {
+	if authMW == nil {
+		sync.RegisterRoutes(mux, syncMgr, cors)
+		log.Printf("Sync API routes registered")
+		return
+	}
+	sync.NewAPIHandler(syncMgr).RegisterRoutesWithAuth(mux, func(h http.HandlerFunc) http.HandlerFunc {
+		return cors(authMW(api.RequireServerAdmin(h)))
+	})
+	log.Printf("Sync API routes registered (server admins only)")
 }
