@@ -2,6 +2,10 @@ module github.com/scott/dns
 
 go 1.24.0
 
+// Keep listeners on plain TCP. Go enables MPTCP on them by default, and
+// CVE-2026-98432 was demonstrated against MPTCP listeners.
+godebug multipathtcp=0
+
 require (
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/go-acme/lego/v4 v4.31.0
